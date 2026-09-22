@@ -1,0 +1,20 @@
+schema_version: 2
+id: refund-policy
+version: 1.4.0
+harbor:
+  dataset: datasets/refund-policy.yaml
+  job: jobs/refund-policy.yaml
+baselines:
+  - { id: orders_seeded, probe: "db:SELECT count(*) FROM orders", equals: 120 }
+clock: { mode: virtual_offset, epoch: "2026-09-16T00:00:00+08:00" }
+observables:
+  - { name: order_status, type: string, source: "db:orders.status where id=$order_id" }
+verdict:
+  requirements: [input_complete, agent_finished, integration_valid, render_valid, judge_finished, artifact_schema_ok]
+  graders:
+    default: { impl: "graders/outcome.py@v7", layer: outcome }
+metrics:
+  - { id: reliability, kind: pass_pow_k, k: 5 }
+driver:
+  require: [acp_stdio, sdk_jsonrpc]
+provenance: { source: authored-internally, license: MIT }
