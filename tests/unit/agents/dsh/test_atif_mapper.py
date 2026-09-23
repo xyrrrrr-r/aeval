@@ -1,206 +1,585 @@
-"""ATIF mapper unit tests (plan §7 row 7): no loss, no fabricated relations.
+"""ATIF mapper unit tests (plan §7 row 7): map the official log, invent nothing.
 
-- system/user/assistant map to ATIF sources;
-- unknown REQUIRED events fail closed (conversion error);
-- unknown ignorable events are preserved verbatim;
-- orphan/duplicate/ambiguous call ids are recorded, never guessed;
-- every output passes harbor's own TrajectoryValidator.
+The mapper speaks the pinned DSH 0.1.7-alpha.1 Session V4 vocabulary, so every
+fixture here is built by ``dsh_log`` (the same envelope the real
+``JsonlSessionPersistence`` returns). Pinned behaviours:
+
+- unknown REQUIRED events fail closed; unknown ignorable ones stay verbatim;
+- surface reconstruction is context, never a second execution;
+- tool relations are only claimed when the log proves them;
+- timestamps, model identity and usage come from the log, not the wall clock;
+- every emitted trajectory passes Harbor's own ``TrajectoryValidator``.
 """
 
 from __future__ import annotations
 
+from datetime import datetime, timedelta, timezone
+
 import pytest
 
 from aeval.agents.dsh.atif_mapper import (
-    DSH_IGNORABLE_EXTRA_KEY,
+    DSH_PRESERVED_EVENT_EXTRA_KEY,
     DSH_EXTRA_KEY,
+    DSH_VERSION,
     MAPPER_VERSION,
+    ConversionIssues,
     DshAtifConversionError,
     build_canonical_transcript,
     convert_dsh_read_to_atif,
     derive_stop_reason,
-    map_known_session_event,
     normalized_interactions_to_atif_steps,
     reduce_dsh_events,
     resolve_tool_call_relations,
 )
 from aeval.agents.dsh.bridge import DshReaderResponse
 from aeval.contracts import EvidenceBundle
+from dsh_log import MODEL, SessionLog, happy_log, seeded_log, session_header, usage
 
 
-def _response(events, header=None, event_state="shared-frozen") -> DshReaderResponse:
+def _response(log: SessionLog, *, header=None, inherited=0, event_state="shared-frozen") -> DshReaderResponse:
     return DshReaderResponse(
         request_id="req-1",
-        header=header or {"sessionId": "s-1", "agent": "dsh", "version": "0.1.7-alpha.1"},
-        inherited_event_count=0,
+        header=header if header is not None else session_header(),
+        inherited_event_count=inherited,
         event_state=event_state,
-        events=events,
+        events=log.events,
     )
 
 
-def test_message_sources_map_to_atif_sources():
-    interactions, extras, issues = reduce_dsh_events({}, [
-        {"type": "message", "source": "system", "text": "sys"},
-        {"type": "message", "source": "user", "text": "q"},
-        {"type": "message", "source": "assistant", "text": "a"},
-    ])
-    assert not issues.any()
-    assert [i.source for i in interactions] == ["system", "user", "agent"]
-    assert [i.message_text for i in interactions] == ["sys", "q", "a"]
+def _dsh(trajectory) -> dict:
+    return trajectory.extra[DSH_EXTRA_KEY]
+
+
+def _reduce(log: SessionLog, *, header=None):
+    return reduce_dsh_events(header or session_header(), log.events)
+
+
+# -- surface-free reduction -------------------------------------------------
+def test_happy_session_reduces_to_append_origin_interactions():
+    interactions, extras, issues = _reduce(happy_log())
+    assert not issues.any(), issues.to_dict()
     assert extras == []
+    assert [(i.source, i.turn, i.step) for i in interactions] == [
+        ("system", 0, 0), ("user", None, None), ("agent", 0, 0), ("agent", 0, 1),
+    ]
+    agent = interactions[2]
+    assert agent.message_text == "I will list the files."
+    assert [c["callId"] for c in agent.tool_calls] == ["call-1"]
+    assert agent.tool_calls[0]["arguments"] == {"cmd": "ls"}
+    assert agent.tool_results[0]["content"] == "answer.txt"
+    assert agent.config == {"provider": "deepseek-official", "model": MODEL}
 
 
 def test_unknown_required_event_fails_closed():
-    with pytest.raises(DshAtifConversionError, match="unknown required"):
-        reduce_dsh_events({}, [
-            {"type": "message", "source": "user", "text": "q"},
-            {"type": "future_event_kind", "ignorable": False},
-        ])
+    log = happy_log()
+    log.raw("audit/nudge", {"turn": 0})
+    with pytest.raises(DshAtifConversionError, match="unknown required SessionEvent"):
+        _reduce(log)
 
 
 def test_unknown_ignorable_event_preserved_verbatim():
-    raw = {"type": "vendor_nudge", "ignorable": True, "payload": {"x": 1}}
-    _, extras, issues = reduce_dsh_events({}, [
-        {"type": "message", "source": "user", "text": "q"},
-        raw,
-    ])
-    assert not issues.any()
-    assert len(extras) == 1
-    assert extras[0]["eventIndex"] == 1
-    assert extras[0]["type"] == "vendor_nudge"
-    assert extras[0]["raw"] == raw  # byte-identical preservation
+    log = happy_log()
+    raw = {"vendor": "opaque", "nested": [1, 2]}
+    event = log.raw("audit/nudge", raw, ignorable=True)
+    _, extras, issues = _reduce(log)
+    assert not issues.any(), issues.to_dict()
+    assert extras == [
+        {"eventIndex": event["seq"], "type": "audit/nudge", "class": "ignorable", "raw": event}
+    ]
+    assert extras[0]["raw"]["data"] == raw
 
 
-def test_tool_call_without_callid_records_issue_never_guesses():
-    interactions, _, issues = reduce_dsh_events({}, [
-        {"type": "message", "source": "user", "text": "q"},
-        {"type": "tool_call", "name": "search"},  # no callId
-    ])
-    assert issues.ambiguous_relations
-    assert interactions[-1].tool_calls[0]["callId"].startswith("__unidentified_")
+def test_official_log_only_events_are_retained_without_failing_closed():
+    # A real session writes these; refusing them would make it unconvertible.
+    log = happy_log()
+    title = log.raw("session/title", {"title": "list files"})
+    log.raw("todo/write", {"todos": [{"content": "answer", "status": "complete"}]})
+    log.raw("compaction/start", {"compactionId": "c-1", "turn": 0})
+    trajectory = convert_dsh_read_to_atif(_response(log))
+    preserved = trajectory.extra[DSH_PRESERVED_EVENT_EXTRA_KEY]
+    assert [p["class"] for p in preserved] == ["log-only"] * 3
+    assert preserved[0] == {
+        "eventIndex": title["seq"], "type": "session/title", "class": "log-only", "raw": title}
+    assert [s.source for s in trajectory.steps] == ["system", "user", "agent", "agent"]
 
 
-def test_tool_result_without_callid_is_orphan():
-    _, _, issues = reduce_dsh_events({}, [
-        {"type": "tool_result", "content": "r"},  # no callId
-    ])
-    assert any("__orphan" in o or "without callId" in o for o in issues.orphan_tool_results)
+def test_log_only_events_are_enough_to_make_usage_partial():
+    summary = _usage_status(_with_log_only())
+    assert summary["status"] == "partial"
+    assert summary["totalTokens"] is None
 
 
-def test_duplicate_call_ids_recorded():
-    interactions, _, issues = reduce_dsh_events({}, [
-        {"type": "message", "source": "user", "text": "q"},
-        {"type": "tool_call", "callId": "c1", "name": "a"},
-        {"type": "tool_call", "callId": "c1", "name": "b"},
-    ])
+def _with_log_only():
+    log = happy_log()
+    log.raw("llm/retry", {"turn": 0, "step": 1})
+    return log
+
+
+def test_ignorable_event_does_not_claim_to_be_settled_usage():
+    log = happy_log()
+    log.raw("audit/nudge", {}, ignorable=True)
+    trajectory = convert_dsh_read_to_atif(_response(log))
+    assert trajectory.extra[DSH_PRESERVED_EVENT_EXTRA_KEY][0]["type"] == "audit/nudge"
+    assert _dsh(trajectory)["usage"]["status"] == "partial"
+
+
+def test_noncontiguous_sequence_rejected():
+    log = happy_log()
+    log.events[4]["seq"] = 9
+    with pytest.raises(DshAtifConversionError, match="noncontiguous seq"):
+        _reduce(log)
+
+
+def test_header_storage_version_is_pinned():
+    with pytest.raises(DshAtifConversionError, match="storage version"):
+        _reduce(happy_log(), header=session_header(version=3))
+
+
+def test_lifecycle_events_carry_their_turn_and_step():
+    log = happy_log()
+    del log.events[4]["data"]["step"]  # step/start without step
+    with pytest.raises(DshAtifConversionError, match="step is required"):
+        _reduce(log)
+
+
+# -- tool relations ---------------------------------------------------------
+def _calls_and_results(*events_pairs):
+    log = SessionLog()
+    log.request_header()
+    log.turn_start(0)
+    log.step_start(0, 0)
+    for call_id, name in events_pairs:
+        log.tool_call(0, 0, call_id, name)
+        log.tool_result(0, 0, call_id)
+    log.step_end(0, 0)
+    log.turn_end(0, "completed")
+    return log
+
+
+def test_unique_earlier_call_in_same_step_proves_the_relation():
+    interactions, _, issues = _reduce(_calls_and_results(("c1", "bash")))
     resolve_tool_call_relations(interactions, issues)
-    assert issues.duplicate_call_ids == ["duplicate tool_call callId 'c1'"]
-
-
-def test_result_referencing_unknown_callid_is_orphan():
-    interactions, _, issues = reduce_dsh_events({}, [
-        {"type": "tool_call", "callId": "c1", "name": "a"},
-        {"type": "tool_result", "callId": "cX", "content": "r"},
-    ])
-    resolve_tool_call_relations(interactions, issues)
-    assert any("cX" in o for o in issues.orphan_tool_results)
-
-
-def test_matched_call_relation_is_clean():
-    interactions, _, issues = reduce_dsh_events({}, [
-        {"type": "message", "source": "user", "text": "q"},
-        {"type": "tool_call", "callId": "c1", "name": "search", "arguments": {"q": "x"}},
-        {"type": "tool_result", "callId": "c1", "content": "found"},
-    ])
-    resolve_tool_call_relations(interactions, issues)
-    assert not issues.any()
-
-
-def test_tool_calls_force_agent_source_step():
-    interactions, _, _ = reduce_dsh_events({}, [
-        {"type": "message", "source": "user", "text": "q"},
-        {"type": "tool_call", "callId": "c1", "name": "search"},
-        {"type": "tool_result", "callId": "c1", "content": "r"},
-        {"type": "message", "source": "assistant", "text": "done"},
-    ])
+    assert not issues.any(), issues.to_dict()
     steps = normalized_interactions_to_atif_steps(interactions)
-    # the assistant reply continues the agent interaction that carries
-    # the tool round-trip — one agent step, fully correlated
-    assert [s.source for s in steps] == ["user", "agent"]
-    tool_step = steps[1]
-    assert tool_step.tool_calls[0].tool_call_id == "c1"
-    assert tool_step.observation.results[0].source_call_id == "c1"
-    assert tool_step.message == "done"
+    agent = [s for s in steps if s.source == "agent"][0]
+    assert agent.tool_calls[0].tool_call_id == "c1"
+    assert agent.observation.results[0].source_call_id == "c1"
 
 
-def test_empty_session_yields_placeholder_system_step():
-    steps = normalized_interactions_to_atif_steps([])
-    assert len(steps) == 1
-    assert steps[0].source == "system"
+def test_duplicate_call_ids_are_never_matched():
+    log = SessionLog()
+    log.request_header()
+    log.step_start(0, 0)
+    log.tool_call(0, 0, "c1", "alpha")
+    log.tool_call(0, 0, "c1", "beta")
+    log.tool_result(0, 0, "c1")
+    interactions, _, issues = _reduce(log)
+    resolve_tool_call_relations(interactions, issues)
+    assert issues.duplicate_call_ids == [
+        "duplicate tool/call callId 'c1' in (0, 0)"
+    ]
+    assert issues.ambiguous_relations
+    assert not issues.orphan_tool_results
+    steps = normalized_interactions_to_atif_steps(interactions)
+    assert steps[-1].observation.results[0].source_call_id is None
+    assert steps[-1].observation.results[0].extra["dsh"]["relation"] == "unresolved"
 
 
-def test_full_conversion_passes_harbor_validator_and_records_provenance():
-    response = _response([
-        {"type": "message", "source": "user", "text": "refund?"},
-        {"type": "tool_call", "callId": "c1", "name": "lookup", "arguments": {"id": 1}},
-        {"type": "tool_result", "callId": "c1", "content": "order found"},
-        {"type": "message", "source": "assistant", "text": "refunded"},
-        {"type": "turn", "end": {"reason": {"kind": "end_turn"}}},
-    ])
-    trajectory = convert_dsh_read_to_atif(response)
+def test_result_without_earlier_call_is_orphan():
+    log = SessionLog()
+    log.request_header()
+    log.step_start(0, 0)
+    log.tool_result(0, 0, "ghost")
+    interactions, _, issues = _reduce(log)
+    resolve_tool_call_relations(interactions, issues)
+    assert any("ghost" in o for o in issues.orphan_tool_results)
+    assert not issues.ambiguous_relations
+
+
+def test_call_and_result_in_different_steps_do_not_prove_a_relation():
+    log = SessionLog()
+    log.request_header()
+    log.step_start(0, 0)
+    log.tool_call(0, 0, "c1", "bash")
+    log.step_end(0, 0)
+    log.step_start(0, 1)
+    log.tool_result(0, 1, "c1")
+    interactions, _, issues = _reduce(log)
+    resolve_tool_call_relations(interactions, issues)
+    assert any("c1" in o for o in issues.orphan_tool_results)
+
+
+def test_result_source_call_id_must_agree_with_the_message():
+    log = _calls_and_results(("c1", "bash"))
+    result = [e for e in log.events if e["type"] == "tool/result"][0]
+    result["data"]["message"]["source"]["callId"] = "other"
+    interactions, _, issues = _reduce(log)
+    resolve_tool_call_relations(interactions, issues)
+    assert any("ambiguous tool result" in o for o in issues.ambiguous_relations)
+
+
+def test_malformed_tool_arguments_are_kept_raw_and_flagged():
+    log = SessionLog()
+    log.request_header()
+    log.step_start(0, 0)
+    log.tool_call(0, 0, "c1", "bash", "{not json")
+    log.tool_call(0, 0, "c2", "bash", '["a list"]')
+    interactions, _, issues = _reduce(log)
+    assert len(issues.malformed_arguments) == 2
+    steps = normalized_interactions_to_atif_steps(interactions)
+    calls = steps[-1].tool_calls
+    assert [c.arguments for c in calls] == [{}, {}]
+    assert [c.extra["dsh"]["rawArguments"] for c in calls] == ["{not json", '["a list"]']
+    assert [c.extra["dsh"]["argumentsDecoded"] for c in calls] == [False, False]
+
+
+def test_assistant_tool_call_blocks_are_not_double_counted_as_executions():
+    log = SessionLog()
+    log.request_header()
+    log.step_start(0, 0)
+    log.assistant_message(
+        0, 0, blocks=[
+            {"type": "text", "text": "listing"},
+            {"type": "tool-call", "id": "c1", "name": "bash", "arguments": '{"cmd":"ls"}'},
+        ],
+        usage_report=usage(),
+    )
+    log.tool_call(0, 0, "c1", "bash", {"cmd": "ls"})
+    log.tool_result(0, 0, "c1", "done")
+    interactions, _, issues = _reduce(log)
+    resolve_tool_call_relations(interactions, issues)
+    assert not issues.any(), issues.to_dict()
+    agent = [i for i in interactions if i.source == "agent"][0]
+    assert agent.message_text == "listing"
+    assert len(agent.tool_calls) == 1
+
+
+def test_two_assistant_messages_in_one_step_are_flagged_not_merged_silently():
+    log = SessionLog()
+    log.request_header()
+    log.step_start(0, 0)
+    log.assistant_message(0, 0, "first")
+    log.assistant_message(0, 0, "second")
+    interactions, _, issues = _reduce(log)
+    assert any("multiple assistant messages" in o for o in issues.unmapped_events)
+
+
+def test_reasoning_and_structured_blocks_render_separately():
+    log = SessionLog()
+    log.request_header()
+    log.step_start(0, 0)
+    log.assistant_message(
+        0, 0, blocks=[
+            {"type": "reasoning", "text": "thinking"},
+            {"type": "text", "text": "answer"},
+            {"type": "file", "handle": "att-1", "mimeType": "image/png"},
+        ],
+        usage_report=usage(),
+    )
+    steps = normalized_interactions_to_atif_steps(_reduce(log)[0])
+    agent = steps[-1]
+    assert agent.reasoning_content == "thinking"
+    # An attachment handle is neither a filename nor a URL: keep it visible as JSON.
+    assert '"handle":"att-1"' in agent.message
+
+
+# -- surface reconstruction -------------------------------------------------
+def _with_replacement():
+    log = SessionLog()
+    log.request_header()
+    log.system_message(0, 0)
+    log.turn_start(0)
+    log.user_message()
+    log.step_start(0, 0)
+    log.tool_call(0, 0, "c1", "bash")
+    original = log.tool_result(0, 0, "c1", "transient failure")
+    log.tool_result(
+        0, 0, "c1", "final content",
+        surface_op={"op": "replace", "startSeq": original["seq"], "endSeq": original["seq"]},
+        source_seqs=[original["seq"]],
+        message_id=original["data"]["message"]["id"],
+    )
+    log.step_end(0, 0)
+    log.turn_end(0, "completed")
+    return log
+
+
+def _surface_replacement(log: SessionLog) -> dict:
+    return next(e for e in log.events if isinstance(e.get("surfaceOp"), dict))
+
+
+def test_surface_replacement_is_not_a_second_execution():
+    log = _with_replacement()
+    trajectory = convert_dsh_read_to_atif(_response(log))
+    agent = [s for s in trajectory.steps if s.source == "agent"][0]
+    assert agent.observation.results[0].content == "transient failure"
+    assert len(agent.observation.results) == 1
+    assert not _dsh(trajectory)["conversionIssues"]["ambiguousRelations"]
+    surface = _dsh(trajectory)["surface"]
+    assert surface["replacements"] == [
+        {"seq": 7, "start": 6, "end": 6, "shadowedSeqs": [6]}
+    ]
+    tool_nodes = [m for m in surface["messages"] if m["message"]["role"] == "tool"]
+    assert tool_nodes[0]["seq"] == 7
+    assert tool_nodes[0]["message"]["content"][0]["text"] == "final content"
+
+
+def test_replacement_must_cite_every_shadowed_node():
+    log = SessionLog()
+    log.request_header()
+    log.system_message(0, 0)
+    log.turn_start(0)
+    first = log.user_message("q1")
+    second = log.user_message("q2")
+    second["surfaceOp"] = {"op": "replace", "startSeq": first["seq"], "endSeq": first["seq"]}
+    second["sourceEventSeqs"] = [1]  # the system node, not the user node being shadowed
+    with pytest.raises(DshAtifConversionError, match="cite every shadowed"):
+        convert_dsh_read_to_atif(_response(log))
+
+
+def test_tool_result_replacement_may_change_only_content():
+    log = _with_replacement()
+    _surface_replacement(log)["data"]["message"]["toolCallId"] = "other"
+    with pytest.raises(DshAtifConversionError, match="change only content"):
+        convert_dsh_read_to_atif(_response(log))
+
+
+def test_assistant_messages_cannot_cite_source_events():
+    log = happy_log()
+    log.events[-1]["sourceEventSeqs"] = [0]  # turn/end is not surface-eligible
+    with pytest.raises(DshAtifConversionError, match="not surface-eligible"):
+        convert_dsh_read_to_atif(_response(log))
+
+
+def test_developer_tool_addition_must_resolve_a_published_schema():
+    log = SessionLog()
+    log.request_header(tools=[{"name": "bash", "description": "Run a command", "parameters": {"type": "object"}}])
+    log.developer_message(0, 0, [{"type": "tool-addition", "toolName": "bash"}], header_seq=0)
+    interactions, _, issues = _reduce(log)
+    assert not issues.any(), issues.to_dict()
+    assert "bash" in interactions[0].message_text
+
+    broken = SessionLog()
+    broken.request_header(tools=[{"name": "bash", "description": "Run", "parameters": {}}])
+    broken.developer_message(0, 0, [{"type": "tool-addition", "toolName": "missing"}], header_seq=0)
+    with pytest.raises(DshAtifConversionError, match="resolve exactly one tool schema"):
+        _reduce(broken)
+
+
+# -- inheritance ------------------------------------------------------------
+def test_inherited_prefix_is_context_not_a_live_execution():
+    log = seeded_log()
+    trajectory = convert_dsh_read_to_atif(
+        _response(log, header=session_header(seeded=True), inherited=log.inherited)
+    )
+    copied = [s.extra["dsh"]["eventSeqs"] for s in trajectory.steps if s.is_copied_context]
+    assert copied and max(max(seqs) for seqs in copied) < log.inherited
+    live = [s for s in trajectory.steps if not s.is_copied_context]
+    assert [s.message for s in live] == ["live question", "live answer"]
+    assert [o["inherited"] for o in _dsh(trajectory)["observedModels"]] == [True, False]
+
+
+def test_seeded_header_requires_the_marker_at_inheritedEventCount():
+    log = seeded_log()
+    with pytest.raises(DshAtifConversionError, match="requires tagged marker"):
+        convert_dsh_read_to_atif(_response(log, header=session_header(seeded=True), inherited=0))
+
+
+def test_unseeded_session_cannot_inherit_or_claim_a_marker():
+    log = happy_log()
+    with pytest.raises(DshAtifConversionError, match="unseeded session cannot inherit"):
+        convert_dsh_read_to_atif(_response(log, inherited=3))
+
+    marker = SessionLog()
+    marker.request_header()
+    marker.end_seed()
+    with pytest.raises(DshAtifConversionError, match="unseeded session cannot carry inherited marker"):
+        convert_dsh_read_to_atif(_response(marker))
+
+
+# -- conversion envelope ----------------------------------------------------
+def test_conversion_emits_valid_atif_with_provenance():
+    trajectory = convert_dsh_read_to_atif(_response(happy_log()))
     assert trajectory.agent.name == "dsh"
-    assert trajectory.agent.version == "0.1.7-alpha.1"
-    dsh_extra = trajectory.extra[DSH_EXTRA_KEY]
-    assert dsh_extra["mapperVersion"] == MAPPER_VERSION
-    assert dsh_extra["eventState"] == "shared-frozen"
-    assert dsh_extra["conversionIssues"]["orphanToolResults"] == []
-    assert DSH_IGNORABLE_EXTRA_KEY not in trajectory.extra
+    assert trajectory.agent.version == DSH_VERSION
+    assert trajectory.agent.model_name == MODEL
+    assert trajectory.session_id == "session-under-test"
+    extra = _dsh(trajectory)
+    assert extra["mapperVersion"] == MAPPER_VERSION
+    assert extra["eventState"] == "shared-frozen"
+    assert extra["conversionIssues"] == {k: [] for k in (
+        "orphanToolResults", "duplicateCallIds", "ambiguousRelations",
+        "unmappedEvents", "malformedArguments", "invalidUsage")}
+    assert [s.step_id for s in trajectory.steps] == [1, 2, 3, 4]
+    assert DSH_PRESERVED_EVENT_EXTRA_KEY not in trajectory.extra
 
 
-def test_conversion_carries_ignorable_events_and_issues():
-    response = _response([
-        {"type": "message", "source": "user", "text": "q"},
-        {"type": "vendor_nudge", "ignorable": True},
-        {"type": "tool_result", "callId": "ghost", "content": "orphan"},
-    ])
-    trajectory = convert_dsh_read_to_atif(response)
-    ignorable = trajectory.extra[DSH_IGNORABLE_EXTRA_KEY]
-    assert ignorable[0]["type"] == "vendor_nudge"
-    issues = trajectory.extra[DSH_EXTRA_KEY]["conversionIssues"]
-    assert any("ghost" in o for o in issues["orphanToolResults"])
+def test_step_timestamps_come_from_event_time():
+    log = happy_log()
+    trajectory = convert_dsh_read_to_atif(_response(log))
+    expected = datetime(1970, 1, 1, tzinfo=timezone.utc) + timedelta(
+        milliseconds=log.events[1]["time"]
+    )
+    assert trajectory.steps[0].timestamp == expected.isoformat(timespec="milliseconds")
 
 
+def test_impossible_usage_report_is_flagged_and_yields_no_metrics():
+    log = SessionLog()
+    log.request_header()
+    log.step_start(0, 0)
+    log.assistant_message(
+        0, 0, "a",
+        usage_report={"inputTokens": 10, "outputTokens": 20, "reasoningTokens": 21},
+    )
+    interactions, _, issues = _reduce(log)
+    assert issues.invalid_usage == ["event[2]: invalid assistant usage"]
+    steps = normalized_interactions_to_atif_steps(interactions)
+    assert steps[-1].metrics is None
+
+
+def test_all_request_headers_are_observed_in_order():
+    log = happy_log()
+    log.request_header(reason="change", model="some-other-model")
+    log.turn_start(1)
+    log.assistant_message(1, 0, "again", usage_report=usage())
+    trajectory = convert_dsh_read_to_atif(_response(log))
+    observed = _dsh(trajectory)["observedModels"]
+    assert [(o["seq"], o["reason"], o["config"]["model"]) for o in observed] == [
+        (0, "initial", MODEL), (13, "change", "some-other-model")
+    ]
+    # The agent's identity reports the last route, claims read every snapshot.
+    assert trajectory.agent.model_name == "some-other-model"
+
+
+def test_empty_session_yields_one_synthetic_step():
+    log = SessionLog()
+    log.request_header()
+    trajectory = convert_dsh_read_to_atif(_response(log))
+    assert len(trajectory.steps) == 1
+    assert trajectory.steps[0].source == "system"
+    assert trajectory.steps[0].extra["dsh"]["synthetic"] is True
+
+
+def test_unknown_event_state_is_rejected():
+    with pytest.raises(DshAtifConversionError, match="invalid eventState"):
+        convert_dsh_read_to_atif(_response(happy_log(), event_state="whatever"))
+
+
+# -- usage completeness -----------------------------------------------------
+def _usage_status(log, **kwargs):
+    return _dsh(convert_dsh_read_to_atif(_response(log, **kwargs)))["usage"]
+
+
+def test_exact_usage_requires_settled_steps_and_reported_totals():
+    summary = _usage_status(happy_log())
+    assert summary["status"] == "ok"
+    # (100+5+0+20) + (140+5+0+12)
+    assert summary["totalTokens"] == 282
+    assert summary["promptTokens"] == 250
+    assert summary["outputTokens"] == 32
+    assert summary["cachedTokens"] == 10
+    assert summary["eventSeqs"] == [5, 10]
+
+
+def test_retry_attempts_make_usage_partial():
+    log = happy_log()
+    log.assistant_attempt(0, 1)
+    summary = _usage_status(log)
+    assert summary["status"] == "partial"
+    assert summary["totalTokens"] is None
+    assert summary["reportedTotalTokensSubtotal"] == 282
+
+
+def test_unsettled_step_makes_usage_partial():
+    log = happy_log()
+    log.step_start(0, 2)
+    log.assistant_message(0, 2, "cut short", usage_report=usage())
+    log.turn_end(0, "interrupted")
+    summary = _usage_status(log)
+    assert summary["status"] == "partial"
+
+
+def test_missing_cache_buckets_are_unknown_not_zero():
+    log = SessionLog()
+    log.request_header()
+    log.step_start(0, 0)
+    log.assistant_message(0, 0, "a", usage_report={"inputTokens": 10, "outputTokens": 5})
+    log.step_end(0, 0)
+    log.turn_end(0, "completed")
+    summary = _usage_status(log)
+    assert summary["status"] == "partial"
+    assert summary["promptTokens"] is None
+    assert summary["outputTokens"] == 5
+
+
+def test_completeness_follows_usage_status_not_evidence_presence():
+    exact = convert_dsh_read_to_atif(_response(happy_log()))
+    attempted = happy_log()
+    attempted.assistant_attempt(0, 1)
+    partial = convert_dsh_read_to_atif(_response(attempted))
+
+    assert build_canonical_transcript(
+        exact, None, "agent_claimed_done"
+    ).completeness.status_of("token_usage") == "ok"
+    assert build_canonical_transcript(
+        exact, EvidenceBundle(trial_id="t1", stop_reason="agent_claimed_done"), "agent_claimed_done"
+    ).completeness.status_of("token_usage") == "ok"
+
+    degraded = build_canonical_transcript(partial, None, "agent_claimed_done")
+    assert degraded.completeness.status_of("token_usage") == "partial"
+    assert degraded.completeness.worst_status == "partial"
+    assert degraded.completeness.status_of("events") == "ok"
+
+
+# -- stop reason ------------------------------------------------------------
 @pytest.mark.parametrize(
-    "turn_event, expected",
+    "kind, expected",
     [
-        ({"type": "turn", "end": {"reason": {"kind": "end_turn"}}}, "agent_claimed_done"),
-        ({"type": "turn", "end": {"kind": "end_turn"}}, "agent_claimed_done"),
-        ({"type": "turn", "end": {"reason": {"kind": "max_tokens"}}}, "budget_exhausted"),
-        ({"type": "turn", "end": {"reason": {"kind": "timeout"}}}, "timeout_killed"),
+        ("completed", "agent_claimed_done"),
+        ("max-tokens", "budget_exhausted"),
+        ("aborted", "infra_error"),
+        ("blocked", "infra_error"),
+        ("error", "infra_error"),
+        ("interrupted", "infra_error"),
+        ("forked", "infra_error"),
+        ("undreamed-of-reason", "infra_error"),
     ],
 )
-def test_stop_reason_from_turn_end_reason_kind(turn_event, expected):
-    assert derive_stop_reason([turn_event]) == expected
+def test_stop_reason_from_official_turn_end_kind(kind, expected):
+    log = SessionLog()
+    log.turn_start(0)
+    log.turn_end(0, kind)
+    assert derive_stop_reason(log.events) == expected
 
 
-def test_stop_reason_defaults_to_infra_error_never_success():
+def test_stop_reason_never_defaults_to_success():
     assert derive_stop_reason([]) == "infra_error"
-    assert derive_stop_reason([
-        {"type": "message", "source": "user", "text": "q"},
-        {"type": "turn"},  # no recognizable end reason
-    ]) == "infra_error"
+    log = happy_log()
+    assert derive_stop_reason(log.events) == "agent_claimed_done"
+    # An unfinished trailing turn outranks the earlier completion.
+    log.turn_start(1)
+    log.step_start(1, 0)
+    log.assistant_message(1, 0, "still going")
+    assert derive_stop_reason(log.events) == "infra_error"
 
 
-def test_build_canonical_transcript_completeness_tracks_evidence():
-    response = _response([{"type": "message", "source": "user", "text": "q"}])
-    trajectory = convert_dsh_read_to_atif(response)
+def test_turn_end_without_a_matching_start_proves_nothing():
+    log = SessionLog()
+    log.turn_end(0, "completed")
+    assert derive_stop_reason(log.events) == "infra_error"
 
-    with_evidence = build_canonical_transcript(
-        trajectory,
-        EvidenceBundle(trial_id="t1", stop_reason="agent_exit_0"),
-        "agent_exit_0",
-    )
-    assert with_evidence.completeness.status_of("token_usage") == "ok"
 
-    without = build_canonical_transcript(trajectory, None, "agent_exit_0")
-    assert without.completeness.status_of("token_usage") == "partial"
+def test_inherited_closers_do_not_claim_the_live_run_finished():
+    log = seeded_log()
+    assert derive_stop_reason(log.events, log.inherited) == "agent_claimed_done"
+    # Keep the inherited prefix, including its own "completed" turn/end.
+    log.events = log.events[:log.inherited + 4]
+    assert log.events[-1]["type"] == "user/message"
+    assert derive_stop_reason(log.events, log.inherited) == "infra_error"
+
+
+def test_issues_dataclass_reports_any_and_dict_forms():
+    issues = ConversionIssues(malformed_arguments=["x"])
+    assert issues.any()
+    assert issues.to_dict()["malformedArguments"] == ["x"]
+    assert not issues.to_dict()["orphanToolResults"]

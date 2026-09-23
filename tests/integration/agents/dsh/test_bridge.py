@@ -28,10 +28,10 @@ RID = "req-1"
 
 def _ok_envelope(**result_overrides) -> bytes:
     result = {
-        "header": {"sessionId": "s-1", "agent": "dsh"},
-        "inheritedEventCount": 2,
+        "header": {"version": 4, "id": "s-1", "createdAt": 1_730_000_000_000, "isSeeded": False},
+        "inheritedEventCount": 0,
         "eventState": "shared-frozen",
-        "events": [{"type": "message", "source": "user", "text": "hi"}],
+        "events": [{"type": "turn/start", "seq": 0, "time": 1_730_000_001_000, "data": {"turn": 0}}],
     }
     result.update(result_overrides)
     return json.dumps({
@@ -55,9 +55,10 @@ def test_success_envelope_parses_with_all_fields():
     response = parse_dsh_reader_envelope(_ok_envelope(), RID)
     assert response.request_id == RID
     assert response.event_state == "shared-frozen"
-    assert response.inherited_event_count == 2
-    assert response.events[0]["type"] == "message"
-    assert response.header == {"sessionId": "s-1", "agent": "dsh"}
+    assert response.inherited_event_count == 0
+    assert response.events[0]["type"] == "turn/start"
+    assert response.header == {
+        "version": 4, "id": "s-1", "createdAt": 1_730_000_000_000, "isSeeded": False}
 
 
 def test_error_envelope_maps_to_typed_failure():
@@ -114,15 +115,16 @@ def test_read_via_stub_bridge_roundtrip(tmp_path):
             protocolVersion: 1,
             requestId: req.requestId,
             ok: true,
-            result: { header: {sessionId: req.sessionId},
+            result: { header: {version: 4, id: req.sessionId, createdAt: 1730000000000, isSeeded: false},
                       inheritedEventCount: 0,
                       eventState: 'shared-frozen',
-                      events: [{type: 'message', source: 'user', text: 'hello'}] },
+                      events: [{type: 'turn/start', seq: 0, time: 1730000001000, data: {turn: 0}}] },
           }));
         });
     """)
     response = read_dsh_session_via_bridge(request)
-    assert response.events[0]["text"] == "hello"
+    assert response.header["id"] == "s-1"
+    assert response.events[0]["data"] == {"turn": 0}
 
 
 def test_read_via_stub_bridge_structured_failure(tmp_path):

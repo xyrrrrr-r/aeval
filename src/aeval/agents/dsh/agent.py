@@ -1,76 +1,251 @@
-"""DshAgent — Harbor installed agent for DeepSeekHarness preview.
+"""DshAgent — Harbor installed agent for the official DeepSeek Harness CLI.
 
-The adapter is marked experimental: DSH has no stable release; this
-adapter is pinned to the exact 0.1.7-alpha.1 slice (plan §0.1) and
-must never auto-upgrade.
+The run entry is the shipped ``headless`` profile (bundles ``dsh-base`` +
+``dsh-headless``): ``dsh --profile headless --json`` takes the task on
+stdin, announces ``{"type": "session", "sessionId": …}`` as its first
+stdout event, and persists the session under ``$DSH_HOME/sessions``.
 
 Trajectory collection goes EXCLUSIVELY through the official
-SessionPersistence read path (TS bridge); this class never parses
-session files.
+SessionPersistence read path (the compiled ``dsh-eval-control`` session
+reader); this class never parses session files.
 """
 
 from __future__ import annotations
 
-from pathlib import Path
-from typing import Any
+import json
+import os
+import shlex
+import uuid
+from collections.abc import Iterable
+from dataclasses import dataclass
+from pathlib import Path, PurePosixPath
+from typing import Any, ClassVar
 
+from harbor.agents.capabilities import AgentCapabilities
 from harbor.agents.installed.base import BaseInstalledAgent
+from harbor.environments.base import BaseEnvironment
+from harbor.models.agent.context import AgentContext
 
-from aeval.agents.dsh.atif_mapper import MAPPER_VERSION
+from aeval.agents.dsh.atif_mapper import (
+    MAPPER_VERSION,
+    build_canonical_transcript,
+    convert_dsh_read_to_atif,
+    derive_stop_reason,
+)
 from aeval.agents.dsh.bridge import (
-    DshBridgeProtocolError,
-    DshReaderFailure,
     DshReaderRequest,
     read_dsh_session_via_bridge,
 )
+from aeval.contracts import CanonicalTranscript
 from aeval.provenance import OFFICIAL_DSH_TAG
 
-__all__ = ["DshAgent", "DshTrialSessionConfig"]
+__all__ = [
+    "DshAgent",
+    "DshRunError",
+    "DshTrialPaths",
+    "HEADLESS_PROFILE",
+    "host_session_root",
+    "resolve_session_reader",
+    "session_id_from_stream",
+    "session_reader_candidates",
+]
+
+# The shipped one-shot profile, i.e. ``dsh-app-boot``'s PROFILE_TEMPLATES entry
+# ``headless: [dsh-base, dsh-headless]``.
+HEADLESS_PROFILE = "headless"
+
+# ``dsh-base`` mounts session-persistence-jsonl at ``dshHomePath('sessions')``,
+# so the session root is always one ``sessions`` child of the harness home.
+DSH_HOME_ENV = "DSH_HOME"
+DSH_HOME_DIRNAME = "dsh-home"
+SESSIONS_DIRNAME = "sessions"
+
+# The ``--json`` run stream is tee'd here so the durable projection of the run
+# survives in the synced trial logs next to the session it describes.
+RUN_STREAM_FILENAME = "dsh-run.jsonl"
+
+# The upstream API key never enters the sandbox; the reader is host-side.
+SESSION_READER_ENV = "AEVAL_DSH_SESSION_READER"
+SESSION_READER_ROOT_ENV = "AEVAL_DSH_CONTROL_ROOT"
+_ALLOWED_BASE_ENV = "AEVAL_DSH_ALLOWED_BASE"
+
+_DEFAULT_NODE_PACKAGE = "@deepseek-ai/dsh"
 
 
-class DshTrialSessionConfig:
-    """Per-trial isolation inputs for the DSH CLI inside the sandbox."""
+class DshRunError(RuntimeError):
+    """The DSH run or its collection failed → trial is infra_invalid."""
 
-    def __init__(
-        self,
-        *,
-        trial_id: str,
-        session_id: str,
-        cwd: Path,
-        session_root: Path,
-        home: Path,
-    ):
-        self.trial_id = trial_id
-        self.session_id = session_id
-        self.cwd = cwd
-        self.session_root = session_root
-        self.home = home
+
+@dataclass(frozen=True)
+class DshTrialPaths:
+    """One trial's DSH home, in the sandbox view and in the synced host view."""
+
+    environment_logs_dir: PurePosixPath
+    logs_dir: Path
+
+    @property
+    def dsh_home(self) -> PurePosixPath:
+        return self.environment_logs_dir / DSH_HOME_DIRNAME
+
+    @property
+    def container_session_root(self) -> PurePosixPath:
+        return self.dsh_home / SESSIONS_DIRNAME
+
+    @property
+    def container_stream_path(self) -> PurePosixPath:
+        return self.environment_logs_dir / RUN_STREAM_FILENAME
 
     def env(self) -> dict[str, str]:
-        """Per-trial environment: isolated cwd/HOME/session root (T1/T2)."""
+        return {DSH_HOME_ENV: self.dsh_home.as_posix()}
+
+    def as_dict(self) -> dict[str, str]:
         return {
-            "DSH_SESSION_ROOT": str(self.session_root),
-            "HOME": str(self.home),
-            "XDG_CONFIG_HOME": str(self.home / ".config"),
-            "XDG_CACHE_HOME": str(self.home / ".cache"),
-            "XDG_DATA_HOME": str(self.home / ".local" / "share"),
-            "TMPDIR": str(self.home / "tmp"),
+            "dsh_home": self.dsh_home.as_posix(),
+            "session_root": self.container_session_root.as_posix(),
+            "run_stream": self.container_stream_path.as_posix(),
         }
+
+
+def host_session_root(logs_dir: Path) -> Path:
+    """The synced host copy of one trial's official session root."""
+    return logs_dir / DSH_HOME_DIRNAME / SESSIONS_DIRNAME
+
+
+def session_id_from_stream(stdout: str) -> str:
+    """Return the session id the headless runner announced first.
+
+    A fresh headless run mints its own session identity, so the harness
+    cannot know it in advance; ``--session-id`` only adopts an already
+    stored session. Everything before the announcement is launcher noise.
+    """
+    for line in stdout.splitlines():
+        line = line.strip()
+        if not line.startswith("{"):
+            continue
+        try:
+            event = json.loads(line)
+        except ValueError:
+            continue
+        if not isinstance(event, dict) or event.get("type") != "session":
+            continue
+        session_id = event.get("sessionId")
+        if isinstance(session_id, str) and session_id:
+            return session_id
+        raise DshRunError("headless session event carried no sessionId")
+    raise DshRunError("headless run stream carried no opening session event")
+
+
+def build_headless_command(
+    *,
+    patch_files: Iterable[str] = (),
+    stream_path: PurePosixPath,
+    task_env_var: str,
+) -> str:
+    """Render the one-shot command that boots DSH inside the sandbox.
+
+    The task arrives through an environment variable rather than a
+    positional argument so the instruction never lands in the process list
+    or in the shell history captured by the environment logs.
+    """
+    parts = ["dsh", "--profile", HEADLESS_PROFILE, "--json"]
+    for patch in patch_files:
+        parts += ["--patch", shlex.quote(patch)]
+    quoted_stream = shlex.quote(stream_path.as_posix())
+    return (
+        f"mkdir -p {shlex.quote(stream_path.parent.as_posix())} && "
+        f"printf '%s' \"${{{task_env_var}}}\" | "
+        f"{' '.join(parts)} | tee {quoted_stream}"
+    )
+
+
+def session_reader_candidates() -> list[Path]:
+    """Built readers to try when the operator has not named one.
+
+    ``dsh-eval-control`` is a sibling checkout in the development layout and
+    an npm dependency in an installed one; both are probed, in that order.
+    """
+    repo_dir = Path(__file__).parents[4]
+    candidates = [
+        repo_dir.parent / "dsh-eval-control" / "dist" / "session_reader.js"
+    ]
+    root_env = os.environ.get(SESSION_READER_ROOT_ENV)
+    if root_env:
+        candidates.insert(0, Path(root_env) / "dist" / "session_reader.js")
+    candidates.append(
+        repo_dir / "node_modules" / "dsh-eval-control" / "dist" / "session_reader.js"
+    )
+    return candidates
+
+
+def resolve_session_reader(explicit: Path | None = None) -> Path:
+    """Locate the compiled official session reader of ``dsh-eval-control``.
+
+    The reader is the ``aeval-dsh-session-reader`` bin of the frozen
+    TypeScript package. A configured path is authoritative: silently reading
+    a trial's session with some other script would defeat the point of
+    reading it through the official backend at all.
+    """
+    override = explicit or (
+        Path(value) if (value := os.environ.get(SESSION_READER_ENV)) else None
+    )
+    if override is not None:
+        if not override.is_file():
+            raise DshRunError(
+                f"configured DSH session reader not found: {override} "
+                "(build dsh-eval-control or unset "
+                f"{SESSION_READER_ENV})"
+            )
+        return override
+    candidates = session_reader_candidates()
+    for candidate in candidates:
+        if candidate.is_file():
+            return candidate
+    raise DshRunError(
+        "official DSH session reader not found; tried "
+        + ", ".join(str(c) for c in candidates)
+        + f". Build dsh-eval-control and point {SESSION_READER_ENV} at "
+        "dist/session_reader.js."
+    )
 
 
 class DshAgent(BaseInstalledAgent):
     """Installed-agent adapter running the official DSH CLI in-sandbox."""
 
     MAPPER_VERSION = MAPPER_VERSION
-    SUPPORTS_ATIF = False  # native sessions are converted via the bridge
-    SUPPORTS_RESUME = False
-    SUPPORTS_LOAD_NATIVE_TRAJECTORY = False
-    SUPPORTS_LOAD_ATIF_TRAJECTORY = False
-    SUPPORTS_CONFIG = False
 
-    @property
-    def name(self) -> str:  # type: ignore[override]
+    capabilities = AgentCapabilities(
+        atif=False,  # ATIF comes from the official session read, not from the CLI
+        resume=False,
+        load_native_trajectory=False,
+        load_atif_trajectory=False,
+        handoff=False,
+        native_config=False,
+        windows=False,  # verified only on Linux task containers
+    )
+
+    _CLI_PACKAGE: ClassVar[str] = _DEFAULT_NODE_PACKAGE
+
+    def __init__(
+        self,
+        *args: Any,
+        session_reader: Path | str | None = None,
+        patch_files: Iterable[Path | str] = (),
+        run_timeout_sec: int | None = None,
+        **kwargs: Any,
+    ):
+        self._session_reader = Path(session_reader) if session_reader else None
+        self._patch_files = [str(p) for p in patch_files]
+        self._run_timeout_sec = run_timeout_sec
+        self._session_id: str | None = None
+        self._transcript: CanonicalTranscript | None = None
+        super().__init__(*args, **kwargs)
+
+    @staticmethod
+    def name() -> str:
         return "dsh"
+
+    def version(self) -> str | None:
+        return self._version or self._locked_version()
 
     @property
     def experimental(self) -> bool:
@@ -80,82 +255,144 @@ class DshAgent(BaseInstalledAgent):
     def official_tag(self) -> str:
         return OFFICIAL_DSH_TAG
 
-    async def install(self, environment: Any) -> None:
-        """Install the pinned DSH CLI into the sandbox.
+    @property
+    def session_id(self) -> str | None:
+        """The session the last run created, as announced by its own stream."""
+        return self._session_id
 
-        The install is driven by the release lock (npm slice + Node
-        version); any drift from the lock aborts the trial as
-        infra_invalid rather than silently testing a different agent.
-        """
+    def paths(self) -> DshTrialPaths:
+        return DshTrialPaths(
+            environment_logs_dir=self.environment_logs_dir,
+            logs_dir=self.logs_dir,
+        )
+
+    @staticmethod
+    def _locked_version() -> str:
         from aeval.provenance import build_official_dsh_lock
 
         lock = build_official_dsh_lock()
         if lock.official_tag != OFFICIAL_DSH_TAG:
-            raise RuntimeError(
+            raise DshRunError(
                 f"DSH release lock drifted: expected {OFFICIAL_DSH_TAG}, "
                 f"got {lock.official_tag}"
             )
+        for package in lock.packages:
+            if package.name == _DEFAULT_NODE_PACKAGE:
+                return package.version
+        raise DshRunError(f"DSH release lock does not pin {_DEFAULT_NODE_PACKAGE}")
 
-    async def prepare_trial_session(self, trial_id: str) -> DshTrialSessionConfig:
-        """Fresh, isolated session inputs for one trial."""
-        import tempfile
-        import uuid
+    def get_version_command(self) -> str:
+        return "dsh --version"
 
-        base = Path(tempfile.mkdtemp(prefix=f"aeval-dsh-{trial_id}-"))
-        return DshTrialSessionConfig(
-            trial_id=trial_id,
-            session_id=str(uuid.uuid4()),
-            cwd=base / "cwd",
-            session_root=base / "sessions",
-            home=base / "home",
-        )
+    def parse_version(self, stdout: str) -> str:
+        return stdout.strip()
 
-    def collect_native_trajectory(self, trial: Any, session_dir: Path) -> Path:
-        """Locate the synced native session dir for the trial.
+    async def install(self, environment: BaseEnvironment) -> None:
+        """Install the pinned DSH CLI and refuse any drift from the lock.
 
-        Harbor syncs ``remote_session_logs_dir`` before verification;
-        this only resolves the path — reading is the bridge's job.
+        The slice is installed verbatim from the registry; a version that
+        differs from the lock aborts the trial as infra_invalid instead of
+        silently grading a different agent.
         """
-        if not session_dir.is_dir():
-            raise DshReaderFailure(
-                "SESSION_NOT_FOUND",
-                f"synced DSH session directory missing: {session_dir}",
-            )
-        return session_dir
-
-    def convert_trajectory(self, logs_dir: Path) -> Any:
-        """Convert a downloaded native session dir to ATIF via the bridge.
-
-        Overrides the BaseInstalledAgent hook so ATIF previews work the
-        same way as collection: official reader only, no JSONL parsing.
-        """
-        import os
-
-        allowed_base = Path(
-            os.environ.get("AEVAL_DSH_ALLOWED_BASE", str(logs_dir.parent))
+        locked = self._locked_version()
+        await self.exec_as_root(
+            environment,
+            command=(
+                "npm install --global --no-audit --no-fund "
+                f"{shlex.quote(f'{self._CLI_PACKAGE}@{locked}')}"
+            ),
         )
-        sessions = [
-            p for p in logs_dir.iterdir() if p.is_file() and p.suffix in (".jsonl", ".zst")
-        ] if logs_dir.is_dir() else []
-        if not sessions:
-            raise DshReaderFailure(
-                "SESSION_NOT_FOUND",
-                f"no native session file found under {logs_dir}",
+        result = await self.exec_as_agent(environment, command=self.get_version_command())
+        installed = self.parse_version(result.stdout or "")
+        if installed != locked:
+            raise DshRunError(
+                f"DSH CLI version drift: lock says {locked}, environment reports "
+                f"{installed or 'nothing'}"
             )
-        session_id = sessions[0].name
+        self._version = locked
+
+    async def run(
+        self, instruction: str, environment: BaseEnvironment, context: AgentContext
+    ) -> None:
+        paths = self.paths()
+        self._session_id = None
+        self._transcript = None
+        # A per-invocation variable name keeps the instruction out of the
+        # command string that the environment echoes into its own logs.
+        task_var = f"AEVAL_DSH_TASK_{uuid.uuid4().hex}"
+        command = build_headless_command(
+            patch_files=self._patches_in_environment(),
+            stream_path=paths.container_stream_path,
+            task_env_var=task_var,
+        )
+        result = await self.exec_as_agent(
+            environment,
+            command=command,
+            env={**paths.env(), task_var: instruction},
+            cwd=self._workspace_dir(),
+            timeout_sec=self._run_timeout_sec,
+        )
+        self._session_id = session_id_from_stream(result.stdout or "")
+        context.metadata = {
+            **(context.metadata or {}),
+            "dsh_session_id": self._session_id,
+            "dsh_run_stream": paths.container_stream_path.as_posix(),
+            "dsh_home": paths.dsh_home.as_posix(),
+        }
+
+    def _patches_in_environment(self) -> list[str]:
+        return list(self._patch_files)
+
+    def _workspace_dir(self) -> str | None:
+        return None
+
+    def read_trial_session(self) -> CanonicalTranscript:
+        """Rebuild the canonical transcript from the synced official session.
+
+        Reads through the official persistence backend only, once, and caches
+        the result so grading and reporting cannot disagree about the same
+        trial. Missing sync or missing session fails closed.
+        """
+        if self._transcript is not None:
+            return self._transcript
+        if self._session_id is None:
+            raise DshRunError(
+                "no session id recorded for this trial; run() must complete first"
+            )
+        paths = self.paths()
+        source_root = host_session_root(paths.logs_dir)
+        if not source_root.is_dir():
+            raise DshRunError(
+                f"synced DSH session root missing: {source_root} "
+                "(check that the trial synced its agent logs)"
+            )
+        allowed_base_env = os.environ.get(_ALLOWED_BASE_ENV)
         response = read_dsh_session_via_bridge(
             DshReaderRequest(
-                session_id=session_id,
-                bridge_path=Path(
-                    os.environ.get(
-                        "AEVAL_DSH_BRIDGE",
-                        str(Path(__file__).parents[3] / "tools" / "dsh-session-reader" / "dist" / "main.js"),
-                    )
+                session_id=self._session_id,
+                bridge_path=resolve_session_reader(self._session_reader),
+                allowed_base=(
+                    Path(allowed_base_env) if allowed_base_env else paths.logs_dir
                 ),
-                allowed_base=allowed_base,
-                source_root=logs_dir,
+                source_root=source_root,
             )
         )
-        from aeval.agents.dsh.atif_mapper import convert_dsh_read_to_atif
+        self._transcript = build_canonical_transcript(
+            convert_dsh_read_to_atif(response),
+            evidence=None,
+            stop_reason=derive_stop_reason(response.events, response.inherited_event_count),
+        )
+        return self._transcript
 
-        return convert_dsh_read_to_atif(response)
+    def populate_context_post_run(self, context: AgentContext) -> None:
+        """Backfill Harbor's usage totals from the official session read.
+
+        Numbers come from the durable session, never from the run stream, so
+        a claim the agent cannot support cannot inflate the recorded cost.
+        """
+        metrics = self.read_trial_session().atif.final_metrics
+        if metrics is None or metrics.total_prompt_tokens is None:
+            return
+        context.n_input_tokens = metrics.total_prompt_tokens
+        context.n_output_tokens = metrics.total_completion_tokens
+        context.n_cache_tokens = metrics.total_cached_tokens

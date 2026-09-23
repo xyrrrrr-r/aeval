@@ -112,7 +112,7 @@ def parse_dsh_reader_envelope(stdout: bytes, expected_request_id: str) -> DshRea
     if not isinstance(envelope, dict):
         raise DshBridgeProtocolError("bridge envelope must be a JSON object")
 
-    if envelope.get("protocolVersion") != BRIDGE_PROTOCOL_VERSION:
+    if type(envelope.get("protocolVersion")) is not int or envelope["protocolVersion"] != BRIDGE_PROTOCOL_VERSION:
         raise DshBridgeProtocolError(
             f"bridge protocolVersion: expected {BRIDGE_PROTOCOL_VERSION}, "
             f"got {envelope.get('protocolVersion')!r}"
@@ -123,7 +123,9 @@ def parse_dsh_reader_envelope(stdout: bytes, expected_request_id: str) -> DshRea
             f"got {envelope.get('requestId')!r}"
         )
 
-    if not envelope.get("ok"):
+    if type(envelope.get("ok")) is not bool:
+        raise DshBridgeProtocolError("bridge ok must be a boolean")
+    if not envelope["ok"]:
         error = envelope.get("error")
         if not isinstance(error, dict):
             raise DshBridgeProtocolError(

@@ -42,7 +42,7 @@ __all__ = [
     "RequirementStatus",
     "AEVAL_EXTRA_KEY",
     "DSH_EXTRA_KEY",
-    "DSH_IGNORABLE_EXTRA_KEY",
+    "DSH_PRESERVED_EVENT_EXTRA_KEY",
     "RequirementBitmap",
     "FieldCompleteness",
     "CompletenessRecord",
@@ -114,7 +114,7 @@ REQUIREMENT_FIELDS: tuple[str, ...] = (
 
 AEVAL_EXTRA_KEY = "aeval"
 DSH_EXTRA_KEY = "dsh"
-DSH_IGNORABLE_EXTRA_KEY = "dsh_ignorable_events"
+DSH_PRESERVED_EVENT_EXTRA_KEY = "dsh_preserved_events"
 
 
 def canonical_json(value: Any) -> bytes:
