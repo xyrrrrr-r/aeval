@@ -7,7 +7,7 @@ missing mandatory sections and bad provenance all raise SuiteError.
 
 from __future__ import annotations
 
-from pathlib import Path
+from pathlib import Path, PurePosixPath, PureWindowsPath
 from typing import Sequence
 
 from aeval.suite_models import (
@@ -90,43 +90,89 @@ def load_suite(path: Path) -> ResolvedSuite:
 def resolve_harbor_inputs(suite: ResolvedSuite) -> HarborInputs:
     """Resolve and verify the Harbor files the overlay points at.
 
-    The overlay references Harbor-native declarations by relative path;
-    they must exist and be parseable YAML, and their digests are
-    recorded so run identity covers them.
+    They must be portable relative paths to TOML, JSON or YAML mappings.
+    Resolve symlinks before checking containment; record digests so run
+    identity covers the referenced declarations.
     """
     from hashlib import sha256
+    import json
+    import tomllib
 
-    def _digest(p: Path) -> str:
-        return sha256(p.read_bytes()).hexdigest()
+    import yaml
 
-    def _parse(p: Path) -> dict:
-        import yaml
+    root = Path(suite.suite_dir).resolve()
 
-        text = p.read_text(encoding="utf-8")
-        data = yaml.safe_load(text)
-        if not isinstance(data, dict):
-            raise SuiteError(f"Harbor file must be a mapping: {p}")
-        return data
-
-    inputs = suite.overlay.harbor
-    base = Path(suite.suite_dir)
-    dataset_path = (base / inputs.dataset).resolve()
-    job_path = (base / inputs.job).resolve()
-    root = base.resolve()
-    for resolved in (dataset_path, job_path):
-        if not str(resolved).startswith(str(root)):
+    def _resolve(reference: str) -> Path:
+        posix = PurePosixPath(reference)
+        windows = PureWindowsPath(reference)
+        if ".." in posix.parts or ".." in windows.parts:
             raise SuiteError(
-                f"Harbor reference escapes the suite directory: {resolved}"
+                f"Harbor reference escapes the suite directory "
+                f"(traversal is forbidden): {reference!r}"
             )
+        if (
+            not posix.parts
+            or posix.is_absolute()
+            or windows.drive
+            or windows.root
+            or any(c in '<>:"\\|?*' or ord(c) < 32 for c in reference)
+            or any(
+                part.endswith((".", " ")) or PureWindowsPath(part).is_reserved()
+                for part in posix.parts
+            )
+        ):
+            raise SuiteError(
+                f"Harbor reference must be a portable relative path "
+                f"using forward slashes: {reference!r}"
+            )
+        try:
+            resolved = (root / reference).resolve()
+            resolved.relative_to(root)
+        except ValueError as exc:
+            raise SuiteError(
+                f"Harbor reference escapes the suite directory: {reference!r}"
+            ) from exc
+        except (OSError, RuntimeError) as exc:
+            raise SuiteError(f"Cannot resolve Harbor reference {reference!r}: {exc}") from exc
         if not resolved.is_file():
             raise SuiteError(f"Harbor file not found: {resolved}")
-    dataset = _parse(dataset_path)
-    job = _parse(job_path)
+        return resolved
+
+    def _parse_and_digest(path: Path) -> str:
+        try:
+            raw = path.read_bytes()
+            text = raw.decode("utf-8")
+            suffix = path.suffix.lower()
+            if suffix == ".toml":
+                data = tomllib.loads(text)
+            elif suffix == ".json":
+                data = json.loads(text)
+            elif suffix in (".yaml", ".yml"):
+                data = yaml.safe_load(text)
+            else:
+                raise SuiteError(f"Unsupported Harbor file format: {path}")
+        except (OSError, UnicodeError, ValueError, yaml.YAMLError) as exc:
+            raise SuiteError(f"Invalid Harbor file {path}: {exc}") from exc
+        if not isinstance(data, dict):
+            raise SuiteError(f"Harbor file must be a mapping: {path}")
+        return sha256(raw).hexdigest()
+
+    inputs = suite.overlay.harbor
+    dataset_path = _resolve(inputs.dataset)
+    job_path = _resolve(inputs.job)
+    dataset_digest = _parse_and_digest(dataset_path)
+    job_digest = _parse_and_digest(job_path)
+    for name, expected, actual in (
+        ("dataset", inputs.dataset_digest, dataset_digest),
+        ("job", inputs.job_digest, job_digest),
+    ):
+        if expected is not None and expected != actual:
+            raise SuiteError(f"Harbor {name} digest mismatch: expected {expected}, actual {actual}")
     return HarborInputs(
         dataset=inputs.dataset,
         job=inputs.job,
-        dataset_digest=_digest(dataset_path),
-        job_digest=_digest(job_path),
+        dataset_digest=dataset_digest,
+        job_digest=job_digest,
     )
 
 
@@ -138,15 +184,14 @@ def overlay_digest(suite_yaml: Path) -> str:
 
 
 def assert_unique_suite_identity(suites: Sequence[ResolvedSuite]) -> None:
-    """Same (id, version) with different digests → hard error.
+    """Reject duplicate suite ids, including different versions or content.
 
-    Two suites with the same id and version but different content are
-    the classic self-deception: a score comparison that silently
-    compares different tasks. Never pick one — refuse.
+    Selection by id must never silently choose one of several suites.
+    Version and digest still participate in each suite's run identity.
     """
-    seen: dict[tuple[str, str], tuple[str, ResolvedSuite]] = {}
+    seen: dict[str, tuple[str, ResolvedSuite]] = {}
     for suite in suites:
-        key = (suite.id, suite.version)
+        key = suite.id
         if key in seen:
             prev_digest, prev = seen[key]
             if prev_digest != suite.suite_yaml_digest:
@@ -184,7 +229,10 @@ def render_suite_explanation(suite: ResolvedSuite) -> str:
         "## Baselines (from suite.yaml overlay)",
     ]
     for b in o.baselines:
-        lines.append(f"- {b.id}: probe={b.probe!r} equals={b.equals!r}")
+        if b.assert_expr is not None:
+            lines.append(f"- {b.id}: assert={b.assert_expr!r}")
+        else:
+            lines.append(f"- {b.id}: probe={b.probe!r} equals={b.equals!r}")
     lines.append("")
     lines.append("## Observables (from suite.yaml overlay)")
     for obs in o.observables:

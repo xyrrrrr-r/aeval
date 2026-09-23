@@ -625,6 +625,7 @@ class RunManifest(BaseModel):
     argv_hash: str = ""
     env_hash: str = ""
     config_hash: str = ""
+    config_file_sha256: str | None = None
     budget_enforcement_point: str = "none"
     artifact_digest: str | None = None
     exclusions: ExclusionSummary | None = None

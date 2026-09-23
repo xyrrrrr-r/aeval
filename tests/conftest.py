@@ -36,6 +36,37 @@ def runtime_lock() -> RuntimeLock:
     return build_runtime_lock()
 
 
+@pytest.fixture()
+def native_suite_dir(tmp_path) -> Path:
+    import yaml
+
+    root = tmp_path / "native-suite"
+    task = root / "tasks" / "example"
+    (task / "environment").mkdir(parents=True)
+    (task / "tests").mkdir()
+    (root / "graders").mkdir()
+    (root / "datasets").mkdir()
+    data = yaml.safe_load((FIXTURES / "suites/demo/suite.yaml").read_text(encoding="utf-8"))
+    data.update(id="native-example", version="1.0.0")
+    data["harbor"] = {"dataset": "datasets/local.yaml", "job": "job.yaml"}
+    data["clock"] = {"mode": "real"}
+    data["driver"] = {"require": []}
+    data["baselines"] = [{"id": "ready", "probe": "file:/workspace/ready", "equals": True}]
+    data["observables"] = [{"name": "result", "type": "string", "source": "file:/workspace/result"}]
+    (root / "suite.yaml").write_text(yaml.safe_dump(data), encoding="utf-8")
+    (root / "datasets/local.yaml").write_text("path: tasks\n", encoding="utf-8")
+    (root / "job.yaml").write_text(
+        "job_name: synthetic\nn_attempts: 2\nn_concurrent_trials: 1\nagents: [{name: nop}]\n",
+        encoding="utf-8",
+    )
+    (root / "graders/outcome.py").write_text('VERSION = "v7"\n', encoding="utf-8")
+    (task / "task.toml").write_text('version = "1.0"\n', encoding="utf-8")
+    (task / "instruction.md").write_text("Synthetic authored fixture: write hello to /workspace/result.\n", encoding="utf-8")
+    (task / "environment/Dockerfile").write_text("FROM scratch\n", encoding="utf-8")
+    (task / "tests/test.sh").write_text("#!/bin/sh\nexit 1\n", encoding="utf-8")
+    return root
+
+
 def write_artifact(root: Path, name: str, content: bytes) -> ArtifactRef:
     path = root / name
     path.write_bytes(content)

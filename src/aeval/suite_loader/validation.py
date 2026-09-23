@@ -12,17 +12,17 @@ Rules:
 
 from __future__ import annotations
 
+from copy import deepcopy
 from pathlib import Path
 from typing import Any
 
-import yaml
+from harbor.models.job.config import JobConfig
+from pydantic import ValidationError
 
 from aeval.suite_models import (
-    HARBOR_OWNED_TASK_KEYS,
     ProvenanceInfo,
     ResolvedSuite,
     SuiteError,
-    load_suite_yaml,
 )
 
 from aeval.contracts import REQUIREMENT_FIELDS
@@ -85,19 +85,18 @@ def validate_thin_overlay(
 
 def _harbor_task_images(task_data: dict[str, Any]) -> dict[str, str]:
     images: dict[str, str] = {}
-    docker_image = task_data.get("docker_image")
-    if isinstance(docker_image, str):
-        images["task"] = docker_image
     env = task_data.get("environment")
     if isinstance(env, dict):
-        img = env.get("image")
+        img = env.get("docker_image")
         if isinstance(img, str):
-            images.setdefault("environment", img)
+            images["environment"] = img
     verifier = task_data.get("verifier")
     if isinstance(verifier, dict):
-        img = verifier.get("image")
-        if isinstance(img, str):
-            images.setdefault("verifier", img)
+        verifier_env = verifier.get("environment")
+        if isinstance(verifier_env, dict):
+            img = verifier_env.get("docker_image")
+            if isinstance(img, str):
+                images["verifier"] = img
     return images
 
 
@@ -129,26 +128,25 @@ def validate_task_provenance(task_data: dict[str, Any], source: Path | str = "")
 
 
 def validate_harbor_job_shape(job_data: dict[str, Any], source: Path | str = "") -> None:
-    """Minimal shape check on the referenced Harbor JobConfig.
+    """Validate a native JobConfig with explicit positive trial counts.
 
-    We do not re-validate Harbor's own schema (Harbor does that); we
-    only assert the two facts aeval's denominator discipline needs:
-    attempts (k) and concurrent trials are declared.
+    Harbor defaults must not hide undeclared denominator or isolation
+    policy, and unknown fields must not silently discard a user's intent.
     """
     where = f" ({source})" if source else ""
-    n_attempts = job_data.get("n_attempts") or (
-        job_data.get("job", {}) or {}
-    ).get("n_attempts")
-    n_concurrent = job_data.get("n_concurrent_trials") or (
-        job_data.get("job", {}) or {}
-    ).get("n_concurrent_trials")
-    if n_attempts is None:
-        raise SuiteError(
-            f"Harbor job{where} does not declare n_attempts (our k) — "
-            "pass@k cannot be computed without it"
-        )
-    if n_concurrent is None:
-        raise SuiteError(
-            f"Harbor job{where} does not declare n_concurrent_trials — "
-            "trial isolation policy is undeclared"
-        )
+    if not isinstance(job_data, dict):
+        raise SuiteError(f"Harbor job{where} must be a mapping")
+    unknown = set(job_data) - set(JobConfig.model_fields)
+    if unknown:
+        raise SuiteError(f"Harbor job{where} contains unknown job keys: {sorted(unknown, key=str)}")
+    for field in ("n_attempts", "n_concurrent_trials"):
+        if field not in job_data:
+            raise SuiteError(f"Harbor job{where} does not declare {field}")
+        value = job_data[field]
+        if type(value) is not int or value <= 0:
+            raise SuiteError(f"Harbor job{where}: {field} must be a positive integer")
+    try:
+        # Native migrations may mutate nested dictionaries; keep validation read-only.
+        JobConfig.model_validate(deepcopy(job_data), extra="forbid")
+    except (ValidationError, TypeError) as exc:
+        raise SuiteError(f"Harbor job{where}: invalid JobConfig: {exc}") from exc

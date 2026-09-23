@@ -59,66 +59,86 @@ def run_cmd(
         validate_manifest_references,
         write_intent_manifest,
     )
+    from hashlib import sha256
+    from importlib.metadata import version
+
     from aeval.contracts import OverlayIdentity, VersionsBundle
     from aeval.provenance import LockMismatchError, build_runtime_lock, lock_report
-    from aeval.suite_loader.validation import (
-        validate_harbor_job_shape,
-        validate_task_provenance,
-        validate_thin_overlay,
-    )
+    from aeval.suite_loader.composition import compose_harbor_job, suite_path, suite_source_commit
     from aeval.suite_models import SuiteError
-    import yaml
 
     try:
+        suite, run_dir = suite.resolve(), run_dir.resolve()
+        if run_dir.exists():
+            raise SuiteError("Run directories are never reused; choose a new --run-dir")
+        if run_dir.is_relative_to(suite):
+            raise SuiteError("Run output must be outside the source suite directory")
         resolved = load_suite(suite)
-        assert_unique_suite_identity([resolved])
-        harbor_inputs = resolved.overlay.harbor
-        dataset_path = (suite / harbor_inputs.dataset).resolve()
-        job_path = (suite / harbor_inputs.job).resolve()
-        dataset = yaml.safe_load(dataset_path.read_text(encoding="utf-8"))
-        job = yaml.safe_load(job_path.read_text(encoding="utf-8"))
-        validate_thin_overlay(resolved, dataset or {}, job or {})
-        validate_harbor_job_shape(job or {}, job_path)
-        for task in (dataset or {}).get("tasks", []):
-            validate_task_provenance(task, task.get("id", "?"))
+        job = compose_harbor_job(resolved)
+        source_commit = suite_source_commit(suite)
+        job.jobs_dir = run_dir / "harbor"
+        if len(Path(job.job_name).parts) != 1 or job.job_name in ("", ".", ".."):
+            raise SuiteError("Harbor job_name must be a single directory name")
+        suite_path(run_dir, job.job_name)
+        job_path = run_dir / "harbor-job.json"
+        config_json = job.model_dump_json(indent=2, exclude_none=True)
+        evaluation_config = job.model_dump(mode="json", exclude={"job_name", "jobs_dir"})
+        for field in ("include_exceptions", "exclude_exceptions"):
+            if evaluation_config["retry"][field] is not None:
+                evaluation_config["retry"][field].sort()
+        config_hash = sha256(
+            json.dumps(evaluation_config, sort_keys=True, ensure_ascii=False).encode("utf-8")
+        ).hexdigest()
+        lock_ref = f"harbor/{job.job_name}/lock.json"
         lock = build_runtime_lock()
         manifest = RunManifest(
             run_id=f"run-{run_dir.name}",
             runtime_lock=lock,
             runtime_lock_digest=lock.digest(),
-            lock_ref=harbor_inputs.job_digest,
+            lock_ref=lock_ref,
+            config_hash=config_hash,
+            config_file_sha256=sha256(config_json.encode("utf-8")).hexdigest(),
             overlay=OverlayIdentity(
                 suite_id=resolved.id,
                 suite_version=resolved.version,
                 overlay_digest=resolved.suite_yaml_digest,
-                source_commit="8e9af83ab7623359c2d37a1936d4b400f8447d60",
-                source_url="https://atomgit.com/open_kunpeng_agentic_infra/aeval",
+                source_commit=source_commit,
             ),
-            versions=VersionsBundle(aeval_version="0.1.0"),
+            versions=VersionsBundle(
+                aeval_version=version("aeval"),
+                converter_version=resolved.overlay.provenance.converter_version,
+            ),
         )
         validate_manifest_references(manifest)
+        run_dir.mkdir(parents=True)
         write_intent_manifest(manifest, run_dir)
-    except (
-        SuiteError,
-        LockMismatchError,
-        ManifestTamperError,
-        FileNotFoundError,
-        ValueError,
-    ) as exc:
+        job_path.write_bytes(config_json.encode("utf-8"))
+        lock_path = run_dir / "runtime_lock.json"
+        lock_path.write_text(lock.model_dump_json(indent=2), encoding="utf-8")
+    except (SuiteError, LockMismatchError, ManifestTamperError, ValueError) as exc:
         _die(str(exc), EXIT_VALIDATION_ERROR)
+    except OSError as exc:
+        _die(str(exc), EXIT_SYSTEM_ERROR)
 
     env = dict(os.environ)
     env.update(
         {
-            "AEVAL_SUITE_DIR": str(suite.resolve()),
-            "AEVAL_RUN_DIR": str(run_dir.resolve()),
+            "AEVAL_SUITE_DIR": str(suite),
+            "AEVAL_RUN_DIR": str(run_dir),
             "AEVAL_STORE_PATH": str(store.resolve()),
             "AEVAL_RUN_ID": manifest.run_id,
+            "AEVAL_RUNTIME_LOCK": str(lock_path),
         }
     )
     typer.echo(lock_report(lock))
-    typer.echo(f"delegating to Harbor: {harbor_cli} jobs run {job_path}")
-    result = subprocess.run([harbor_cli, "jobs", "run", str(job_path)], env=env)
+    typer.echo(f"delegating to Harbor: {harbor_cli} run --config {job_path}")
+    try:
+        result = subprocess.run(
+            [harbor_cli, "run", "--config", str(job_path), "--plugin", "aeval.hooks:AevalPlugin"],
+            env=env,
+        )
+    except OSError as exc:
+        _die(f"Cannot start Harbor: {exc}", EXIT_SYSTEM_ERROR)
     raise typer.Exit(result.returncode)
 
 
@@ -126,16 +146,20 @@ def run_cmd(
 def probe_cmd(
     suite: Annotated[Path, typer.Option()],
 ) -> None:
-    """Zero-cost suite validation: load, thin-overlay check, digest report."""
+    """Validate native declarations without running agents or fetching datasets."""
+    from aeval.suite_loader.composition import compose_harbor_job
     from aeval.suite_models import SuiteError
 
     try:
         resolved = load_suite(suite)
+        job = compose_harbor_job(resolved)
         typer.echo(
             f"suite {resolved.id} v{resolved.version} "
-            f"overlay-digest={resolved.suite_yaml_digest[:12]}"
+            f"overlay-digest={resolved.suite_yaml_digest[:12]} "
+            f"task-references={len(job.tasks)} remote-datasets={len(job.datasets)}"
         )
-    except SuiteError as exc:
+        typer.echo("Configuration validated; remote task content and runtime capabilities are not probed.")
+    except (SuiteError, ValueError, OSError) as exc:
         _die(str(exc), EXIT_VALIDATION_ERROR)
 
 
@@ -147,11 +171,45 @@ def list_cmd(
     from aeval.suite_models import SuiteError
 
     try:
-        for suite_dir in discover_suites([suites_dir]):
-            resolved = load_suite(suite_dir)
-            typer.echo(f"{resolved.id}\t{resolved.version}\t{suite_dir}")
-    except SuiteError as exc:
+        suites = [load_suite(path) for path in discover_suites([suites_dir])]
+        assert_unique_suite_identity(suites)
+        for resolved in suites:
+            typer.echo(f"{resolved.id}\t{resolved.version}\t{resolved.suite_dir}")
+    except (SuiteError, ValueError, OSError) as exc:
         _die(str(exc), EXIT_VALIDATION_ERROR)
+
+
+@app.command("import")
+def import_cmd(
+    src: Annotated[Path, typer.Option(help="Complete native suite directory containing suite.yaml")],
+    out: Annotated[Path, typer.Option(help="New output suite directory; never overwritten")],
+    version: Annotated[str, typer.Option(help="New suite version")],
+    format: Annotated[str, typer.Option(help="Verified format: harbor-task")] = "harbor-task",
+) -> None:
+    from aeval.suite_loader.transfer import import_suite
+    from aeval.suite_models import SuiteError
+
+    try:
+        result = import_suite(src, out, version=version, format=format)
+    except (SuiteError, ValueError, OSError) as exc:
+        _die(str(exc), EXIT_VALIDATION_ERROR)
+    typer.echo(f"Imported native suite: {result}; run probe, then commit its source before run.")
+
+
+@app.command("export")
+def export_cmd(
+    suite: Annotated[Path, typer.Option(help="Native suite directory")],
+    out: Annotated[Path, typer.Option(help="New output suite directory; never overwritten")],
+    format: Annotated[str, typer.Option(help="Verified format: harbor-task")] = "harbor-task",
+) -> None:
+    from aeval.suite_loader.transfer import export_suite
+    from aeval.suite_models import SuiteError
+
+    try:
+        result = export_suite(suite, out, format=format)
+    except (SuiteError, ValueError, OSError) as exc:
+        _die(str(exc), EXIT_VALIDATION_ERROR)
+    typer.echo(f"Exported native suite and overlay: {result}")
 
 
 @app.command("report")
@@ -232,11 +290,16 @@ def explain_cmd(
     suite: Annotated[Path, typer.Argument()],
 ) -> None:
     """Render the read-only composed view (artifact, never input)."""
+    from aeval.suite_loader.composition import compose_harbor_job
     from aeval.suite_models import SuiteError
 
     try:
-        typer.echo(render_suite_explanation(load_suite(suite)))
-    except SuiteError as exc:
+        resolved = load_suite(suite)
+        job = compose_harbor_job(resolved)
+        typer.echo(render_suite_explanation(resolved))
+        typer.echo("\n## Native Harbor job (local paths resolved against the suite root)")
+        typer.echo(job.model_dump_json(indent=2, exclude_none=True))
+    except (SuiteError, ValueError, OSError) as exc:
         _die(str(exc), EXIT_VALIDATION_ERROR)
 
 

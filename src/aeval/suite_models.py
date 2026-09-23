@@ -10,10 +10,11 @@ error, not a merge.
 from __future__ import annotations
 
 from hashlib import sha256
-from typing import Any, Literal
+import re
+from typing import Any, Literal, Self
 
 import yaml
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 __all__ = [
     "SuiteError",
@@ -66,7 +67,11 @@ class SuiteError(RuntimeError):
     """Any suite-level validation failure. Always fail-loud, never merge."""
 
 
-class ImagePinAction(BaseModel):
+class _SuiteModel(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+
+class ImagePinAction(_SuiteModel):
     """The single allowed overlap with Harbor-owned facts: narrowing.
 
     Either pin a mutable tag to a digest, or force a rebuild published
@@ -81,68 +86,98 @@ class ImagePinAction(BaseModel):
     @field_validator("pin")
     @classmethod
     def _pin_is_digest(cls, v: str | None) -> str | None:
-        if v is not None and "@sha256:" not in v:
-            raise SuiteError(f"image.pin must be digest-pinned: {v!r}")
+        if v is not None and re.fullmatch(r"[^@\s]+@sha256:[0-9a-fA-F]{64}", v) is None:
+            raise SuiteError(f"image.pin must be digest-pinned with a full sha256: {v!r}")
         return v
 
+    @model_validator(mode="after")
+    def _one_action(self) -> Self:
+        if (self.pin is not None) == self.rebuild:
+            raise SuiteError("image must set exactly one of pin or rebuild=true")
+        return self
 
-class BaselineAssertion(BaseModel):
+
+class BaselineAssertion(_SuiteModel):
+    model_config = ConfigDict(populate_by_name=True)
+
     id: str
-    probe: str | None = None
+    probe: str | None = Field(default=None, min_length=1)
     equals: Any = None
-    assert_expr: str | None = None
+    assert_expr: str | None = Field(default=None, alias="assert", min_length=1)
+
+    @model_validator(mode="after")
+    def _one_assertion(self) -> Self:
+        if (self.probe is not None) == (self.assert_expr is not None):
+            raise SuiteError(
+                f"baseline {self.id!r} must set exactly one of probe or assert"
+            )
+        return self
 
 
-class ClockSpec(BaseModel):
+class ClockSpec(_SuiteModel):
     mode: Literal["virtual_offset", "real"]
     epoch: str | None = None
 
 
-class ObservableSpec(BaseModel):
+class ObservableSpec(_SuiteModel):
     name: str
     type: Literal["string", "number", "boolean", "json"]
     source: str  # db:/file:/screenshot:/dom:
 
 
-class RubricDeclaration(BaseModel):
+class RubricDeclaration(_SuiteModel):
     rubric: str
     veto: bool = False
 
 
-class GraderDeclaration(BaseModel):
+class GraderDeclaration(_SuiteModel):
     impl: str
     layer: Literal["outcome", "trajectory", "both"] = "outcome"
     veto: bool = False
     version: str | None = None
 
 
-class VerdictSpec(BaseModel):
+class VerdictSpec(_SuiteModel):
     requirements: list[str] = Field(min_length=1)
-    graders: dict[str, GraderDeclaration] | list[GraderDeclaration] = Field(
-        default_factory=dict
-    )
+    graders: (
+        dict[str, GraderDeclaration | list[GraderDeclaration]] | list[GraderDeclaration]
+    ) = Field(default_factory=dict)
+
+    @field_validator("graders")
+    @classmethod
+    def _extra_graders_list(cls, graders):
+        if isinstance(graders, dict):
+            for key, grader in graders.items():
+                if isinstance(grader, list) and key != "extra":
+                    raise SuiteError(
+                        f"verdict.graders.{key} must be a grader declaration; "
+                        "only extra accepts a list"
+                    )
+        return graders
 
     def resolved_graders(self) -> list[GraderDeclaration]:
         if isinstance(self.graders, dict):
-            out = [self.graders["default"]] if "default" in self.graders else []
-            for key, g in self.graders.items():
-                if key != "default":
-                    out.append(g)
+            out: list[GraderDeclaration] = []
+            keys = ["default"] if "default" in self.graders else []
+            keys.extend(key for key in self.graders if key != "default")
+            for key in keys:
+                grader = self.graders[key]
+                out.extend(grader if isinstance(grader, list) else [grader])
             return out
         return list(self.graders)
 
 
-class MetricDeclaration(BaseModel):
+class MetricDeclaration(_SuiteModel):
     id: str
     kind: Literal["pass_pow_k", "cost_normalized", "exclusion_rate"]
     k: int | None = None
 
 
-class DriverSpec(BaseModel):
+class DriverSpec(_SuiteModel):
     require: list[str] = Field(default_factory=list)
 
 
-class ProvenanceInfo(BaseModel):
+class ProvenanceInfo(_SuiteModel):
     source: str
     source_url: str | None = None
     original_id: str | None = None
@@ -152,20 +187,22 @@ class ProvenanceInfo(BaseModel):
     data_imported: bool = False
     rewritten_by_us: bool = False
 
-    @field_validator("license")
+    @field_validator("license", mode="before")
     @classmethod
-    def _license_gate(cls, v: str, info) -> str:
-        if v in ("NONE_DECLARED", "UNKNOWN"):
-            data = info.data or {}
-            if data.get("data_imported"):
-                raise SuiteError(
-                    "provenance with license NONE_DECLARED/UNKNOWN must set "
-                    "data_imported=false — format skeleton only, no data"
-                )
-        return v
+    def _normalize_license(cls, v: Any) -> Any:
+        return "CC0" if v == "CC0-1.0" else v
+
+    @model_validator(mode="after")
+    def _license_gate(self) -> Self:
+        if self.license in ("NONE_DECLARED", "UNKNOWN") and self.data_imported:
+            raise SuiteError(
+                "provenance with license NONE_DECLARED/UNKNOWN must set "
+                "data_imported=false — format skeleton only, no data"
+            )
+        return self
 
 
-class HarborInputs(BaseModel):
+class HarborInputs(_SuiteModel):
     """Resolved references to Harbor-native declarations (not copies)."""
 
     dataset: str
@@ -174,7 +211,7 @@ class HarborInputs(BaseModel):
     job_digest: str | None = None
 
 
-class SuiteOverlay(BaseModel):
+class SuiteOverlay(_SuiteModel):
     schema_version: int
     id: str
     version: str
@@ -198,7 +235,7 @@ class SuiteOverlay(BaseModel):
         return v
 
 
-class ResolvedSuite(BaseModel):
+class ResolvedSuite(_SuiteModel):
     model_config = {"arbitrary_types_allowed": True}
 
     overlay: SuiteOverlay
@@ -218,8 +255,11 @@ class ResolvedSuite(BaseModel):
 
 
 def load_suite_yaml(path) -> dict[str, Any]:
-    text = path.read_text(encoding="utf-8")
-    data = yaml.safe_load(text)
+    try:
+        text = path.read_text(encoding="utf-8")
+        data = yaml.safe_load(text)
+    except (OSError, UnicodeError, yaml.YAMLError) as exc:
+        raise SuiteError(f"Cannot read suite manifest {path}: {exc}") from exc
     if not isinstance(data, dict):
         raise SuiteError(f"suite manifest must be a mapping: {path}")
     return data
