@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import shlex
 import uuid
 from collections.abc import Iterable
@@ -64,6 +65,10 @@ SESSIONS_DIRNAME = "sessions"
 # survives in the synced trial logs next to the session it describes.
 RUN_STREAM_FILENAME = "dsh-run.jsonl"
 
+# ``dsh`` announces its own ids as ``session-<uuid>``; a pinned trial id has to
+# survive both a shell argument and the on-disk session directory name.
+_SESSION_ID_PATTERN = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}")
+
 # The upstream API key never enters the sandbox; the reader is host-side.
 SESSION_READER_ENV = "AEVAL_DSH_SESSION_READER"
 SESSION_READER_ROOT_ENV = "AEVAL_DSH_CONTROL_ROOT"
@@ -111,12 +116,29 @@ def host_session_root(logs_dir: Path) -> Path:
     return logs_dir / DSH_HOME_DIRNAME / SESSIONS_DIRNAME
 
 
+def checked_session_id(value: str) -> str:
+    """Return a usable trial session id, or fail before the sandbox is touched.
+
+    The id is both a shell argument and the on-disk session directory name
+    the official reader resolves, so anything looser than a bare identifier
+    is rejected here rather than at collection time.
+    """
+    if not _SESSION_ID_PATTERN.fullmatch(value):
+        raise DshRunError(
+            f"invalid DSH trial session id: {value!r}; expected 1-128 "
+            "characters of [A-Za-z0-9._-] starting with a letter or digit"
+        )
+    return value
+
+
 def session_id_from_stream(stdout: str) -> str:
     """Return the session id the headless runner announced first.
 
     A fresh headless run mints its own session identity, so the harness
-    cannot know it in advance; ``--session-id`` only adopts an already
-    stored session. Everything before the announcement is launcher noise.
+    cannot know it in advance; ``--session-id`` instead adopts a session
+    that already exists in the store, which is how a trial with a control
+    plugin pins its own identity. Everything before the announcement is
+    launcher noise.
     """
     for line in stdout.splitlines():
         line = line.strip()
@@ -138,6 +160,7 @@ def session_id_from_stream(stdout: str) -> str:
 def build_headless_command(
     *,
     patch_files: Iterable[str] = (),
+    session_id: str | None = None,
     stream_path: PurePosixPath,
     task_env_var: str,
 ) -> str:
@@ -146,10 +169,20 @@ def build_headless_command(
     The task arrives through an environment variable rather than a
     positional argument so the instruction never lands in the process list
     or in the shell history captured by the environment logs.
+
+    Overlay patches go before ``--json``: the launcher parses only its own
+    flags and forwards everything from the first unrecognised token on to
+    the booted profile verbatim, so a later ``--patch`` would reach the
+    headless command program as an unknown option. ``--session-id`` is that
+    program's own flag, so it follows ``--json``; it adopts a session that
+    already exists in the store rather than minting one.
     """
-    parts = ["dsh", "--profile", HEADLESS_PROFILE, "--json"]
+    parts = ["dsh", "--profile", HEADLESS_PROFILE]
     for patch in patch_files:
         parts += ["--patch", shlex.quote(patch)]
+    parts.append("--json")
+    if session_id is not None:
+        parts += ["--session-id", shlex.quote(session_id)]
     quoted_stream = shlex.quote(stream_path.as_posix())
     return (
         f"mkdir -p {shlex.quote(stream_path.parent.as_posix())} && "
@@ -230,11 +263,15 @@ class DshAgent(BaseInstalledAgent):
         *args: Any,
         session_reader: Path | str | None = None,
         patch_files: Iterable[Path | str] = (),
+        session_id: str | None = None,
         run_timeout_sec: int | None = None,
         **kwargs: Any,
     ):
         self._session_reader = Path(session_reader) if session_reader else None
         self._patch_files = [str(p) for p in patch_files]
+        self._pinned_session_id = (
+            checked_session_id(session_id) if session_id is not None else None
+        )
         self._run_timeout_sec = run_timeout_sec
         self._session_id: str | None = None
         self._transcript: CanonicalTranscript | None = None
@@ -257,7 +294,11 @@ class DshAgent(BaseInstalledAgent):
 
     @property
     def session_id(self) -> str | None:
-        """The session the last run created, as announced by its own stream."""
+        """The session the last run drove, as its own stream announced it.
+
+        With a pinned trial identity this is the id the run was told to
+        adopt, attested by the runner announcing it back.
+        """
         return self._session_id
 
     def paths(self) -> DshTrialPaths:
@@ -322,6 +363,7 @@ class DshAgent(BaseInstalledAgent):
         task_var = f"AEVAL_DSH_TASK_{uuid.uuid4().hex}"
         command = build_headless_command(
             patch_files=self._patches_in_environment(),
+            session_id=self._pinned_session_id,
             stream_path=paths.container_stream_path,
             task_env_var=task_var,
         )
@@ -332,7 +374,16 @@ class DshAgent(BaseInstalledAgent):
             cwd=self._workspace_dir(),
             timeout_sec=self._run_timeout_sec,
         )
-        self._session_id = session_id_from_stream(result.stdout or "")
+        announced = session_id_from_stream(result.stdout or "")
+        if (
+            self._pinned_session_id is not None
+            and announced != self._pinned_session_id
+        ):
+            raise DshRunError(
+                "DSH drove a different session than the trial pinned: expected "
+                f"{self._pinned_session_id}, run stream announced {announced}"
+            )
+        self._session_id = announced
         context.metadata = {
             **(context.metadata or {}),
             "dsh_session_id": self._session_id,

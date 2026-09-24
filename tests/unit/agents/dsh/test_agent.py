@@ -31,6 +31,7 @@ from aeval.provenance import OFFICIAL_DSH_TAG
 
 LOCKED_VERSION = OFFICIAL_DSH_TAG.removeprefix("dsh-v")
 SESSION_ID = "0f6f1a2b-3c4d-5e6f-7a8b-9c0d1e2f3a4b"
+PINNED_SESSION_ID = "session-aeval-trial-0001"
 RUN_STREAM = (
     f'{{"type":"session","sessionId":"{SESSION_ID}","cwd":"/home/node/app"}}\n'
     '{"type":"final","text":"done"}\n'
@@ -109,10 +110,12 @@ def test_headless_command_feeds_the_task_on_stdin_not_argv() -> None:
     command = build_headless_command(
         stream_path=PurePosixPath("/logs/agent/dsh-run.jsonl"),
         task_env_var="AEVAL_DSH_TASK_deadbeef",
-        patch_files=["/tmp/my overlay.yml"],
+        patch_files=["/tmp/my overlay.yml", "/tmp/second.yml"],
     )
-    assert "--profile headless --json" in command
-    assert "--patch '/tmp/my overlay.yml'" in command
+    # The launcher owns --profile and --patch and stops recognising flags at
+    # the app's --json, so a patch after it never reaches the loader.
+    assert " | dsh --profile headless --patch '/tmp/my overlay.yml' " \
+        "--patch /tmp/second.yml --json | tee " in command
     assert "printf '%s' \"${AEVAL_DSH_TASK_deadbeef}\"" in command
     assert command.endswith("| tee /logs/agent/dsh-run.jsonl")
 
@@ -187,6 +190,48 @@ async def test_a_second_run_forgets_the_previous_session(tmp_path: Path) -> None
     # identity or its cached transcript.
     assert agent.session_id is None
     assert agent._transcript is None
+
+
+async def test_a_pinned_trial_adopts_the_session_it_named(tmp_path: Path) -> None:
+    agent = make_agent(tmp_path, session_id=PINNED_SESSION_ID)
+    environment = RecordingEnvironment(
+        results={
+            "dsh --profile headless": ExecResult(
+                stdout=RUN_STREAM.replace(SESSION_ID, PINNED_SESSION_ID), return_code=0
+            )
+        }
+    )
+
+    await agent.run("task", environment, AgentContext())  # type: ignore[arg-type]
+
+    call = environment.matching("dsh --profile headless")
+    # --session-id belongs to the headless program, so it follows --json.
+    assert "--json --session-id " + PINNED_SESSION_ID in call["command"]
+    assert agent.session_id == PINNED_SESSION_ID
+
+
+async def test_a_pinned_trial_refuses_to_collect_another_session(tmp_path: Path) -> None:
+    agent = make_agent(tmp_path, session_id=PINNED_SESSION_ID)
+    environment = RecordingEnvironment(
+        results={"dsh --profile headless": ExecResult(stdout=RUN_STREAM, return_code=0)}
+    )
+
+    with pytest.raises(DshRunError, match="different session"):
+        await agent.run("task", environment, AgentContext())  # type: ignore[arg-type]
+    # The run drove a session nobody named; collecting it would grade the
+    # wrong trajectory.
+    assert agent.session_id is None
+
+
+@pytest.mark.parametrize(
+    "candidate",
+    ["", " two words", "../elsewhere", "quote'd", "a;rm -rf /", "a" * 129, "ünicode"],
+)
+def test_a_pinned_session_id_must_survive_the_shell_and_the_disk(
+    tmp_path: Path, candidate: str
+) -> None:
+    with pytest.raises(DshRunError, match="invalid DSH trial session id"):
+        make_agent(tmp_path, session_id=candidate)
 
 
 async def test_install_refuses_any_drift_from_the_frozen_slice(tmp_path: Path) -> None:
