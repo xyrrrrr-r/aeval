@@ -28,7 +28,7 @@ from datetime import datetime, timezone
 from hashlib import sha256
 from typing import Any, Literal
 
-from pydantic import BaseModel, Field, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from harbor.models.trajectories import Trajectory
 
@@ -55,7 +55,12 @@ __all__ = [
     "ObservedModel",
     "BudgetSnapshot",
     "ForkLineage",
+    "RunBinding",
+    "TrialBinding",
+    "TrialPaths",
     "BundleDescriptor",
+    "job_config_hash",
+    "control_config_digest",
     "CollectOutcome",
     "CollectionManifest",
     "EvidenceBundle",
@@ -350,14 +355,103 @@ class ForkLineage(BaseModel):
     fork_step: int | None = None
 
 
+def job_config_hash(config: Any) -> str:
+    import json
+
+    data = config.model_dump(mode="json", exclude={"job_name", "jobs_dir"})
+    for field in ("include_exceptions", "exclude_exceptions"):
+        if data["retry"][field] is not None:
+            data["retry"][field].sort()
+    return sha256(json.dumps(data, sort_keys=True, ensure_ascii=False).encode("utf-8")).hexdigest()
+
+
+def control_config_digest(resolved_config: dict[str, Any]) -> str:
+    """Hash resolved control config, excluding only its self-referential digest."""
+    return _digest({k: v for k, v in resolved_config.items() if k != "configDigest"})
+
+
+def _binding_identifier(value: str) -> str:
+    import re
+
+    if not value or re.search(r"[\s\x00-\x1f\x7f-\x9f]", value):
+        raise ValueError("identity must be non-empty without whitespace or control characters")
+    return value
+
+
+def _binding_digest(value: str) -> str:
+    import re
+
+    if not re.fullmatch(r"[0-9a-f]{64}", value):
+        raise ValueError("digest must be a lowercase hex sha256")
+    return value
+
+
+def _bundle_relative_path(value: str) -> str:
+    import re
+
+    if not value or value.strip() != value or re.search(r"[\x00-\x1f\x7f-\x9f\u2028\u2029]", value):
+        raise ValueError("path must be non-empty without control characters or surrounding whitespace")
+    value = value.replace("\\", "/")
+    if value.startswith("/") or ":" in value:
+        raise ValueError("path must be relative without a drive or stream")
+    parts = value.split("/")
+    for part in parts:
+        if part == "..":
+            raise ValueError("path must not escape its descriptor directory")
+        if part in ("", "."):
+            continue
+        if (part[-1] == "." or part.strip() != part
+                or re.search(r'[<>"|?*]', part)
+                or re.match(r"^(?:con|prn|aux|nul|com[1-9¹²³]|lpt[1-9¹²³])(?:\.|$)", part, re.I)):
+            raise ValueError("unsafe Windows path component")
+    return "/".join(p for p in parts if p not in ("", ".")) or "."
+
+
+class RunBinding(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
+
+    run_id: str
+    job_config_hash: str
+    config_file_sha256: str
+    runtime_lock_digest: str
+
+    _id = field_validator("run_id")(_binding_identifier)
+    _digests = field_validator(
+        "job_config_hash", "config_file_sha256", "runtime_lock_digest"
+    )(_binding_digest)
+
+
+class TrialPaths(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
+
+    sandbox_cwd: str
+    dsh_home: str
+    bundle_path: str
+    session_root: str
+    download_root: str
+
+    _relative = field_validator("session_root", "download_root")(_bundle_relative_path)
+
+    @field_validator("sandbox_cwd", "dsh_home", "bundle_path")
+    @classmethod
+    def _sandbox_path(cls, value: str) -> str:
+        import re
+        from pathlib import PurePosixPath
+
+        if (not value.startswith("/") or value.startswith("//") or "\\" in value
+                or ":" in value or ".." in value.split("/") or value.strip() != value
+                or re.search(r"[\x00-\x1f\x7f-\x9f\u2028\u2029]", value)):
+            raise ValueError("sandbox path must be an absolute POSIX path without traversal")
+        return str(PurePosixPath(value))
+
+
 class BundleDescriptor(BaseModel):
-    """File contract emitted by the host-side runner (dsh-eval-control).
+    """Untrusted wire identity; acceptance requires comparison with the owner's binding."""
 
-    Python consumes this only as untrusted input: it must never carry an
-    absolute session root or a path that escapes the declared root.
-    """
+    model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
 
-    schema_version: int = 1
+    schema_version: Literal[2] = 2
+    run: RunBinding
     trial_id: str
     session_id: str
     session_root: str
@@ -365,29 +459,29 @@ class BundleDescriptor(BaseModel):
     config_digest: str
     lineage: ForkLineage | None = None
 
-    @field_validator("schema_version")
-    @classmethod
-    def _known_schema(cls, v: int) -> int:
-        if v != 1:
-            raise ValueError(
-                f"bundle descriptor schema_version {v!r} is unknown — this "
-                "aeval only consumes schema 1 descriptors from the host runner"
-            )
-        return v
+    _ids = field_validator("trial_id", "session_id")(_binding_identifier)
+    _digest = field_validator("config_digest")(_binding_digest)
+    _relative_root = field_validator("session_root")(_bundle_relative_path)
 
-    @field_validator("session_root")
-    @classmethod
-    def _relative_root(cls, v: str) -> str:
-        import ntpath
-        import posixpath
 
-        for p in (ntpath, posixpath):
-            if p.isabs(v):
-                raise ValueError(f"session_root must be relative: {v!r}")
-        parts = v.replace("\\", "/").split("/")
-        if ".." in parts:
-            raise ValueError(f"session_root must not escape: {v!r}")
-        return v
+class TrialBinding(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
+
+    run: RunBinding
+    trial_id: str
+    session_id: str
+    config_digest: str
+    paths: TrialPaths
+
+    _ids = field_validator("trial_id", "session_id")(_binding_identifier)
+    _digest = field_validator("config_digest")(_binding_digest)
+
+    def verify_descriptor(self, descriptor: BundleDescriptor) -> None:
+        for field in ("run", "trial_id", "session_id", "config_digest"):
+            if getattr(self, field) != getattr(descriptor, field):
+                raise ValueError(f"descriptor {field} differs from trusted trial binding")
+        if descriptor.session_root != self.paths.session_root:
+            raise ValueError("descriptor session_root differs from trusted trial binding")
 
 
 class CollectOutcome(BaseModel):

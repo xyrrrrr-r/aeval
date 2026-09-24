@@ -223,7 +223,13 @@ def test_bundle_descriptor_rejected_on_escape(tmp_path, runtime_lock, demo_suite
     (trial_dir / "bundle_descriptor.json").write_text(
         json.dumps(
             {
-                "schema_version": 1,
+                "schema_version": 2,
+                "run": {
+                    "run_id": "run-test",
+                    "job_config_hash": "a" * 64,
+                    "config_file_sha256": "b" * 64,
+                    "runtime_lock_digest": "c" * 64,
+                },
                 "trial_id": "trial-1",
                 "session_id": "s",
                 "session_root": "../../escape",

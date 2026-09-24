@@ -284,7 +284,7 @@ async def gate_verification(event: Any, context: Any) -> None:
             + "; ".join(state.infra_invalid_reasons)
         )
 
-    trial_dir = _locate_trial_dir(event, context)
+    trial_dir = state.trial_dir or _locate_trial_dir(event, context)
     plan = build_required_collect_plan(context.suite)
     try:
         bundle = verify_evidence_bundle(trial_dir, context.runtime_lock, plan)
@@ -334,10 +334,14 @@ async def finalize_trial_record(event: Any, context: Any) -> None:
     trial_id = str(getattr(event, "trial_id", ""))
     state = context.trial_state(trial_id)
     try:
-        trial_dir = _locate_trial_dir(event, context)
+        trial_dir = state.trial_dir or _locate_trial_dir(event, context)
         summary_path = trial_dir / "aeval_audit.json"
         summary = {
             "trial_id": trial_id,
+            "session_id": state.session_id,
+            "phase": state.phase,
+            "exception": state.exception,
+            "binding": state.binding.model_dump() if state.binding else None,
             "baseline_ok": state.baseline_ok,
             "baseline_failures": state.baseline_failures,
             "evidence_ok": state.evidence_ok,
@@ -349,4 +353,6 @@ async def finalize_trial_record(event: Any, context: Any) -> None:
             json.dumps(summary, indent=2, ensure_ascii=False), encoding="utf-8"
         )
     except Exception as exc:  # audit write failure must not break the trial
-        state.evidence_issues.append(f"audit finalize failed: {exc}")
+        reason = f"audit finalize failed: {exc}"
+        state.evidence_issues.append(reason)
+        state.mark_infra_invalid(reason)

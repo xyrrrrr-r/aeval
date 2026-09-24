@@ -39,10 +39,12 @@ def test_aeval_plugin_satisfies_the_runtime_protocol():
     assert isinstance(AevalPlugin(), JobPlugin)
 
 
-def test_job_exposes_the_four_trial_hook_registrations():
+def test_job_exposes_the_owned_trial_hook_registrations():
     from harbor.job import Job
 
     for name in (
+        "on_trial_started",
+        "on_trial_cancelled",
         "on_environment_started",
         "on_agent_ended",
         "on_verification_started",

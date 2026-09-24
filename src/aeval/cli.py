@@ -82,13 +82,9 @@ def run_cmd(
         suite_path(run_dir, job.job_name)
         job_path = run_dir / "harbor-job.json"
         config_json = job.model_dump_json(indent=2, exclude_none=True)
-        evaluation_config = job.model_dump(mode="json", exclude={"job_name", "jobs_dir"})
-        for field in ("include_exceptions", "exclude_exceptions"):
-            if evaluation_config["retry"][field] is not None:
-                evaluation_config["retry"][field].sort()
-        config_hash = sha256(
-            json.dumps(evaluation_config, sort_keys=True, ensure_ascii=False).encode("utf-8")
-        ).hexdigest()
+        from aeval.contracts import job_config_hash
+
+        config_hash = job_config_hash(job)
         lock_ref = f"harbor/{job.job_name}/lock.json"
         lock = build_runtime_lock()
         manifest = RunManifest(
