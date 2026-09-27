@@ -36,6 +36,10 @@ EXIT_OK = 0
 EXIT_PARAM_ERROR = 2
 EXIT_VALIDATION_ERROR = 3
 EXIT_SYSTEM_ERROR = 4
+# Harbor exited 0 but the aeval chain is not complete (missing summary,
+# unobserved/unclassified trials, seal or recompute refused). The
+# Harbor exit code alone never means the evaluation completed (P0-8).
+EXIT_E2E_INCOMPLETE = 5
 
 
 def _die(message: str, code: int) -> int:
@@ -49,6 +53,12 @@ def run_cmd(
     run_dir: Annotated[Path, typer.Option(help="Output run directory")],
     store: Annotated[Path, typer.Option(help="SQLite store path")],
     harbor_cli: Annotated[str, typer.Option(help="Harbor entrypoint to delegate to")] = "harbor",
+    sandbox_image: Annotated[
+        str | None, typer.Option(help="Digest-pinned sandbox image (ref@sha256:...) recorded in the runtime lock")
+    ] = None,
+    sandbox_platform: Annotated[
+        str | None, typer.Option(help="Platform of the pinned sandbox image (e.g. arm64)")
+    ] = None,
 ) -> None:
     """Validate + synthesize a Harbor job and DELEGATE the run to Harbor."""
     import os
@@ -86,7 +96,32 @@ def run_cmd(
 
         config_hash = job_config_hash(job)
         lock_ref = f"harbor/{job.job_name}/lock.json"
-        lock = build_runtime_lock()
+        images = None
+        if sandbox_image is not None:
+            # The E2E lock must pin the sandbox image: observed-identity
+            # binding (P0-2) compares the live sandbox against exactly
+            # this entry. Both options are required together, and the
+            # reference must be digest-pinned.
+            from aeval.contracts import ImageIdentity
+
+            if sandbox_platform is None:
+                raise SuiteError(
+                    "--sandbox-image requires --sandbox-platform (the observed "
+                    "identity binds the architecture too)"
+                )
+            digest_sep = "@sha256:"
+            if digest_sep not in sandbox_image:
+                raise SuiteError(
+                    f"--sandbox-image must be digest-pinned (ref@sha256:...): {sandbox_image!r}"
+                )
+            images = {
+                "sandbox": ImageIdentity(
+                    reference=sandbox_image,
+                    digest=sandbox_image.split(digest_sep, 1)[1],
+                    platform=sandbox_platform,
+                ),
+            }
+        lock = build_runtime_lock(images=images)
         manifest = RunManifest(
             run_id=f"run-{run_dir.name}",
             runtime_lock=lock,
@@ -126,6 +161,21 @@ def run_cmd(
             "AEVAL_RUNTIME_LOCK": str(lock_path),
         }
     )
+    # Record the trusted intent copy in the store BEFORE any trial can
+    # exist: the seal-time intent check compares against this record.
+    from aeval.store.sqlite import StoreConflictError, TrialStore
+
+    try:
+        intent_store = TrialStore(store)
+        try:
+            intent_store.create_run(manifest)
+        finally:
+            intent_store.close()
+    except StoreConflictError as exc:
+        _die(str(exc), EXIT_VALIDATION_ERROR)
+    except OSError as exc:
+        _die(str(exc), EXIT_SYSTEM_ERROR)
+
     typer.echo(lock_report(lock))
     typer.echo(f"delegating to Harbor: {harbor_cli} run --config {job_path}")
     try:
@@ -135,7 +185,25 @@ def run_cmd(
         )
     except OSError as exc:
         _die(f"Cannot start Harbor: {exc}", EXIT_SYSTEM_ERROR)
-    raise typer.Exit(result.returncode)
+    if result.returncode != 0:
+        # Harbor itself failed: no seal attempt, the run stays unsealed
+        # and the failure code propagates unchanged.
+        raise typer.Exit(result.returncode)
+
+    # Harbor exited 0 — that only means the process exited. The aeval
+    # chain is complete only if finalization proves it (P0-8).
+    from aeval.bundle.finalize import FinalizeError, finalize_run
+
+    try:
+        report = finalize_run(run_dir, store)
+    except FinalizeError as exc:
+        typer.secho(f"run incomplete: {exc}", fg=typer.colors.RED, err=True)
+        raise typer.Exit(EXIT_E2E_INCOMPLETE) from exc
+    typer.echo(
+        f"run {report.run_id} sealed: {report.recorded_trials} trial(s) recorded, "
+        f"{report.attested_files} file(s) attested, recompute passed"
+    )
+    raise typer.Exit(EXIT_OK)
 
 
 @app.command("probe")
@@ -223,18 +291,30 @@ def report_cmd(
     db = TrialStore(store)
     try:
         trials = db.list_trials(run_ids)
+        manifests = []
+        for run_id in run_ids:
+            try:
+                manifests.append(db.load_run_manifest(run_id))
+            except KeyError as exc:
+                _die(f"{exc} — cannot report or compare unrecorded runs",
+                     EXIT_VALIDATION_ERROR)
     finally:
         db.close()
-    manifests = None
-    if compare and len(run_ids) >= 2:
-        from aeval.bundle.manifest import verify_seal
-
-        try:
-            for run_id in run_ids[:2]:
-                pass  # manifests live in run dirs; store holds the JSON
-        except ManifestTamperError as exc:
-            _die(str(exc), EXIT_VALIDATION_ERROR)
-    summary = aggregate_run(run_ids, trials, k=k)
+    summary = aggregate_run(run_ids, trials, k=k, manifests=manifests)
+    if compare:
+        if len(run_ids) < 2:
+            _die("--compare needs at least two run ids", EXIT_PARAM_ERROR)
+        comparability = summary.comparability
+        if comparability is None:
+            _die("comparability unavailable: manifest records incomplete", EXIT_VALIDATION_ERROR)
+        if not comparability.comparable:
+            typer.secho(
+                "runs are NOT comparable — scores must not be averaged or trended together:",
+                fg=typer.colors.RED, err=True,
+            )
+            typer.echo(f"first difference: {comparability.first_difference()}")
+            raise typer.Exit(EXIT_VALIDATION_ERROR)
+        typer.echo("runs are comparable across every locked dimension")
     typer.echo(render_static_report(summary))
 
 

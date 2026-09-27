@@ -1,0 +1,5 @@
+job_name: e2e-hello
+n_attempts: 5
+n_concurrent_trials: 1
+agents:
+  - name: nop

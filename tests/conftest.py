@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+from collections.abc import Mapping, Sequence
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -60,7 +61,12 @@ def native_suite_dir(tmp_path) -> Path:
         encoding="utf-8",
     )
     (root / "graders/outcome.py").write_text('VERSION = "v7"\n', encoding="utf-8")
-    (task / "task.toml").write_text('version = "1.0"\n', encoding="utf-8")
+    (task / "task.toml").write_text(
+        'version = "1.0"\n'
+        "[[verifier.collect]]\n"
+        'command = "aeval-collect runtime_dump mock_call_log dsh_session canonical_transcript"\n',
+        encoding="utf-8",
+    )
     (task / "instruction.md").write_text("Synthetic authored fixture: write hello to /workspace/result.\n", encoding="utf-8")
     (task / "environment/Dockerfile").write_text("FROM scratch\n", encoding="utf-8")
     (task / "tests/test.sh").write_text("#!/bin/sh\nexit 1\n", encoding="utf-8")
@@ -69,6 +75,7 @@ def native_suite_dir(tmp_path) -> Path:
 
 def write_artifact(root: Path, name: str, content: bytes) -> ArtifactRef:
     path = root / name
+    path.parent.mkdir(parents=True, exist_ok=True)
     path.write_bytes(content)
     return ArtifactRef(
         media_type="application/octet-stream",
@@ -82,33 +89,45 @@ def build_complete_trial_dir(
     root: Path,
     *,
     trial_id: str = "trial-1",
-    required: tuple[str, ...] = (
-        "runtime_dump",
-        "mock_call_log",
-        "dsh_session",
-        "collection_manifest",
-    ),
+    plan: Sequence[str] | None = None,
+    runtime_lock: RuntimeLock | None = None,
     tamper: str | None = None,
     omit: str | None = None,
+    descriptor: bool = True,
+    session_root: str = "sessions",
+    manifest_overrides: Mapping[str, object] | None = None,
 ) -> tuple[Path, CollectionManifest]:
     """Create a trial dir whose evidence bundle verifies cleanly.
 
-    ``tamper`` rewrites a file after hashing; ``omit`` drops one
-    required output. Both produce gate failures for negative tests.
+    Files land at their FIXED paths (P0-6); the manifest is bound to
+    the runtime lock and every outcome records a successful execution.
+    ``tamper`` rewrites one output after hashing; ``omit`` drops one
+    logical output entirely; ``descriptor=False`` skips the bundle
+    descriptor. All produce gate failures for negative tests.
     """
+    if runtime_lock is None:
+        raise TypeError("runtime_lock is required since P0-6 (manifest binding)")
+    from aeval.hooks.evidence import output_path_for
+
+    if plan is None:
+        plan = (
+            "runtime_dump", "mock_call_log", "dsh_session", "canonical_transcript",
+        )
     root.mkdir(parents=True, exist_ok=True)
     manifest = CollectionManifest(
         schema_version=1,
         trial_id=trial_id,
         outcomes=[],
         artifacts=[],
+        runtime_lock_digest=runtime_lock.digest(),
     )
     now = datetime.now(timezone.utc)
-    for name in required:
+    for name in plan:
         if name == omit:
             continue
-        content = json.dumps({name: "payload"}).encode()
-        ref = write_artifact(root, name, content)
+        rel = output_path_for(name)
+        content = json.dumps({"name": name, "payload": 1}).encode()
+        ref = write_artifact(root, rel, content)
         manifest.outcomes.append(
             CollectOutcome(
                 name=name,
@@ -116,18 +135,38 @@ def build_complete_trial_dir(
                 exit_code=0,
                 started_at=now,
                 finished_at=now,
-                output_path=name,
+                output_path=rel,
                 sha256=ref.sha256,
                 atomic=True,
             )
         )
         manifest.artifacts.append(ref)
-    if tamper is not None:
-        (root / tamper).write_bytes(b"tampered")
+    if manifest_overrides:
+        for key, value in manifest_overrides.items():
+            setattr(manifest, key, value)
     (root / "collection_manifest.json").write_text(
         manifest.model_dump_json(), encoding="utf-8"
     )
-    # the manifest file itself is also an artifact of the collection
-    if "collection_manifest" in required and omit != "collection_manifest":
-        pass
+    if descriptor:
+        (root / "bundle_descriptor.json").write_text(
+            json.dumps(
+                {
+                    "schema_version": 2,
+                    "run": {
+                        "run_id": "run-test",
+                        "job_config_hash": "a" * 64,
+                        "config_file_sha256": "b" * 64,
+                        "runtime_lock_digest": runtime_lock.digest(),
+                    },
+                    "trial_id": trial_id,
+                    "session_id": "s-1",
+                    "session_root": session_root,
+                    "stop_reason": "agent_exit_0",
+                    "config_digest": "d" * 64,
+                }
+            ),
+            encoding="utf-8",
+        )
+    if tamper is not None:
+        (root / output_path_for(tamper)).write_bytes(b"tampered")
     return root, manifest

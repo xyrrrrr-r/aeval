@@ -11,6 +11,12 @@ from typing import Any
 from aeval.bundle.manifest import _atomic_write_json
 from aeval.contracts import RunBinding, RunManifest, RuntimeLock, job_config_hash
 from aeval.hooks.baseline_arrival import on_environment_started
+from aeval.hooks.broker_lifecycle import (
+    BrokerSpecError,
+    parse_broker_spec,
+    start_trial_broker,
+    stop_trial_broker,
+)
 from aeval.hooks.context import EvaluationContext, LifecycleError
 from aeval.hooks.evidence import (
     EvidenceIntegrityError, finalize_trial_record, gate_verification,
@@ -67,16 +73,29 @@ def create_run_context(job: Any) -> EvaluationContext:
     trials_dir = Path(job.job_dir).resolve()
     if trials_dir == root or not trials_dir.is_relative_to(root):
         raise HookRegistrationError("Harbor job directory must be inside the run directory")
-    return EvaluationContext(
+    context = EvaluationContext(
         run_id=run_id, runtime_lock=lock, suite=suite, run_dir=root,
         store_path=Path(store_path), run_binding=binding, job_id=str(job.id),
         trials_dir=trials_dir,
     )
+    # P0-4: controlled model routing is opt-in via the operator's broker
+    # spec; a BROKEN spec fails registration rather than silently
+    # running trials with uncontrolled model access.
+    context.broker_spec = parse_broker_spec()
+    return context
 
 
 def register_trial_hooks(job: Any, context: EvaluationContext) -> None:
     async def _trial_started(event: Any) -> None:
-        context.start_trial(event)
+        state = context.start_trial(event)
+        if context.broker_spec is None:
+            return
+        try:
+            start_trial_broker(context.broker_spec, context, state)
+        except Exception as exc:
+            # fail-closed: the model phase must not run without the
+            # controlled routing the operator asked for
+            state.mark_infra_invalid(f"model broker startup failed: {exc}")
 
     async def _environment_started(event: Any) -> None:
         state = context.state_for_event(event)
@@ -86,6 +105,20 @@ def register_trial_hooks(job: Any, context: EvaluationContext) -> None:
             await on_environment_started(event, context)
         except Exception as exc:
             state.mark_infra_invalid(f"environment_started audit failed: {exc}")
+
+    async def _agent_started(event: Any) -> None:
+        state = context.state_for_event(event)
+        if state.terminal:
+            return
+        if state.infra_invalid_reasons:
+            # P0-2: the model phase started on a tainted trial. The
+            # real hard block is the owner refusing to hand out a model
+            # token (P0-4); this record makes the violation visible in
+            # the run summary no matter what.
+            issue = "agent started despite recorded infra failures"
+            if issue not in state.evidence_issues:
+                state.evidence_issues.append(issue)
+            state.mark_infra_invalid(issue)
 
     async def _agent_ended(event: Any) -> None:
         state = context.state_for_event(event)
@@ -117,6 +150,7 @@ def register_trial_hooks(job: Any, context: EvaluationContext) -> None:
         state = context.state_for_event(event)
         exception = event.result.exception_info
         cancelled = cancelled or (exception is not None and exception.exception_type == "CancelledError")
+        stop_trial_broker(state)
         if state.finish(exception, cancelled=cancelled):
             await finalize_trial_record(event, context)
 
@@ -129,6 +163,7 @@ def register_trial_hooks(job: Any, context: EvaluationContext) -> None:
     try:
         job.on_trial_started(_trial_started)
         job.on_environment_started(_environment_started)
+        job.on_agent_started(_agent_started)
         job.on_agent_ended(_agent_ended)
         job.on_verification_started(_verification_started)
         job.on_trial_ended(_trial_ended)
@@ -165,6 +200,7 @@ class AevalPlugin:
                     cancelled=result.exception_info.exception_type == "CancelledError",
                 )
         for state in context.trials.values():
+            stop_trial_broker(state)
             if not state.terminal:
                 state.mark_infra_invalid("job ended without a terminal trial event")
                 state.phase = "failed"

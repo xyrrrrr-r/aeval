@@ -1,0 +1,18 @@
+schema_version = "1.4"
+
+[environment]
+# Pinned by digest (mutable tags forbidden). This is the multi-arch
+# manifest digest of ubuntu:24.04; on the arm64 e2b backend it resolves
+# to the arm64 image (platform recorded in the runtime lock).
+docker_image = "ubuntu@sha256:11dc1ccb427f0464a2369e645454c272bb0baece7357c892ba69d313b3a332cf"
+network_mode = "no-network"
+
+[[verifier.collect]]
+# P0-6: the fixed evidence outputs must be produced by a declared
+# collect command; observables are probed via the environment API and
+# are not collect outputs.
+command = "aeval-collect runtime_dump mock_call_log dsh_session canonical_transcript"
+
+[metadata.provenance]
+source = "authored-internally"
+license = "MIT"

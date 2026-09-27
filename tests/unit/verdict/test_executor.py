@@ -25,14 +25,20 @@ from aeval.verdict.base import (
     decide_final_verdict,
     validate_grade_result,
 )
-from aeval.verdict.executor import execute_exec_grader, execute_pure_grader, grade_trial
+from aeval.verdict.executor import (
+    ExecIsolationUnavailableError,
+    GraderIdentityError,
+    execute_exec_grader,
+    execute_pure_grader,
+    grade_trial,
+)
 from aeval.verdict.requirements import cannot_judge_for_missing_fields, recompute_coverage
 
 
-def _result(status="pass", value=1.0, veto=False, grader_id="g", **kw) -> GradeResult:
+def _result(status="pass", value=1.0, veto=False, grader_id="g", grader_version="v1", **kw) -> GradeResult:
     return GradeResult(
         grader_id=grader_id,
-        grader_version="v1",
+        grader_version=grader_version,
         layer="outcome",
         veto=veto,
         score=Score(value=value) if value is not None else
@@ -210,7 +216,7 @@ async def test_grade_trial_skips_grader_with_missing_evidence():
 
 
 async def test_grade_trial_executes_when_evidence_present():
-    spy = _SpyGrader(result=_result(status="pass", value=1.0))
+    spy = _SpyGrader(result=_result(status="pass", value=1.0, grader_id="spy"))
     record = _record(transcript_extra={
         "aeval": {"completeness": {
             "fields": [{"field": "token_usage", "status": "ok"}],
@@ -232,19 +238,95 @@ def test_grade_trial_crashing_grader_never_scores():
         asyncio.run(grade_trial(record, [ResolvedGrader(grader=spy)]))
 
 
-def test_exec_grader_rejects_pure_declaration():
-    spy = _SpyGrader(result=_result(status="pass", value=1.0))
-    with pytest.raises(ValueError, match="not an exec grader"):
+# --- P0-7: score/status consistency and identity contracts -----------------
+
+
+def test_validate_rejects_pass_on_invalid_score():
+    """P0-7 defect: pass + score.valid=False must never validate."""
+    bad = _result(status="pass", value=None)  # valid=False, no value
+    with pytest.raises(ValueError, match="pass verdict on an invalid score"):
+        validate_grade_result(bad)
+
+
+def test_validate_rejects_pass_on_invalid_score_via_model_construct():
+    """The validator's own defense line, past the pydantic shape checks."""
+    bad = GradeResult.model_construct(
+        grader_id="g", grader_version="v1", layer="outcome", veto=False,
+        score=Score.model_construct(value=None, valid=False, invalid_reasons=["x"]),
+        status="pass", reasons=[], coverage=None,
+    )
+    with pytest.raises(ValueError, match="pass verdict on an invalid score"):
+        validate_grade_result(bad)
+
+
+def test_decide_final_verdict_rejects_pass_with_invalid_score():
+    """The folding path validates every result — a lying pass cannot reach a verdict."""
+    bad = _result(status="pass", value=None)
+    with pytest.raises(ValueError, match="pass verdict on an invalid score"):
+        decide_final_verdict([bad])
+
+
+def test_validate_allows_fail_with_invalid_score():
+    """A fail may carry an invalid score: failure does not rest on the score."""
+    result = _result(status="fail", value=None)
+    assert validate_grade_result(result) is result
+
+
+def test_exec_graders_refused_without_isolation():
+    """P0-7: exec graders never run in-process; the refusal is explicit."""
+    spy = _SpyGrader(result=_result(status="fail", value=0.0, grader_id="spy"))
+    with pytest.raises(ExecIsolationUnavailableError, match="no isolated execution"):
+        asyncio.run(execute_exec_grader(
+            ResolvedGrader(grader=spy, execution="exec"), _record()))
+    assert spy.calls == 0
+
+
+def test_exec_refusal_also_covers_pure_declaration_misuse():
+    spy = _SpyGrader(result=_result(status="pass", value=1.0, grader_id="spy"))
+    with pytest.raises(ExecIsolationUnavailableError):
         asyncio.run(execute_exec_grader(
             ResolvedGrader(grader=spy, execution="pure"), _record()))
 
 
-def test_exec_grader_runs_and_validates():
-    spy = _SpyGrader(result=_result(status="fail", value=0.0))
-    result = asyncio.run(execute_exec_grader(
-        ResolvedGrader(grader=spy, execution="exec"), _record()))
-    assert spy.calls == 1
-    assert result.status == "fail"
+async def test_grade_trial_rejects_wrong_result_identity():
+    """A result attributed to another grader identity is infra, not a verdict."""
+    spy = _SpyGrader(result=_result(status="pass", value=1.0, grader_id="someone-else"))
+    record = _record(transcript_extra={
+        "aeval": {"completeness": {"fields": [{"field": "token_usage", "status": "ok"}]}},
+    })
+    with pytest.raises(GraderIdentityError, match="attributed to someone-else"):
+        await grade_trial(record, [ResolvedGrader(grader=spy)])
+
+
+async def test_grade_trial_rejects_wrong_result_version():
+    spy = _SpyGrader(result=_result(status="pass", value=1.0, grader_id="spy", grader_version="v9"))
+    record = _record(transcript_extra={
+        "aeval": {"completeness": {"fields": [{"field": "token_usage", "status": "ok"}]}},
+    })
+    with pytest.raises(GraderIdentityError, match="attributed to spy@v9"):
+        await grade_trial(record, [ResolvedGrader(grader=spy)])
+
+
+async def test_grade_trial_rejects_veto_flip():
+    """The result's veto must match the suite's declared veto."""
+    spy = _SpyGrader(result=_result(status="fail", value=0.0, grader_id="spy", veto=False))
+    record = _record(transcript_extra={
+        "aeval": {"completeness": {"fields": [{"field": "token_usage", "status": "ok"}]}},
+    })
+    with pytest.raises(GraderIdentityError, match="declared veto=True"):
+        await grade_trial(record, [ResolvedGrader(grader=spy, veto=True)])
+
+
+async def test_grade_trial_generated_cannot_judge_carries_declared_veto():
+    """A short-circuited cannot_judge inherits the declared veto flag."""
+    spy = _SpyGrader(result=_result(status="pass", value=1.0, grader_id="spy"))
+    record = _record()  # fields unavailable
+    results = await grade_trial(
+        record, [ResolvedGrader(grader=spy, veto=True, requires_fields=["token_usage"])],
+    )
+    assert spy.calls == 0
+    assert results[0].status == "cannot_judge"
+    assert results[0].veto is True
 
 
 def test_pure_grader_validates_output():

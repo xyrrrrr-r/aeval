@@ -37,6 +37,25 @@ class ExecEnvironmentError(RuntimeError):
     """An exec grader tried to exceed its read-only, network-off box."""
 
 
+class GraderIdentityError(RuntimeError):
+    """A grader returned a result attributed to another identity.
+
+    The result's grader id/version or its veto flag does not match the
+    resolved, loaded declaration. A lying grader is an infrastructure
+    fault: the trial becomes infra_invalid, never a borrowed verdict.
+    """
+
+
+class ExecIsolationUnavailableError(ExecEnvironmentError):
+    """Exec graders need an isolated execution environment; none exists.
+
+    P0-7 explicitly refuses to run exec graders in-process: the name
+    and comments do not create a filesystem/network sandbox, and the
+    orchestration process holds host credentials. Until a real isolated
+    executor is implemented and wired, exec graders fail closed.
+    """
+
+
 def build_grader_input(record: TrialRecord) -> GraderInput:
     return GraderInput(record=record)
 
@@ -59,20 +78,33 @@ async def execute_exec_grader(
 ) -> GradeResult:
     """Run an exec grader under the separate-verifier contract.
 
-    The whitelist here is the Python-side mirror of the sandbox policy:
-    the grader function receives ONLY the sealed record. Any attempt to
-    touch the filesystem beyond declared artifacts or any network use
-    is rejected with ExecEnvironmentError (and in the Harbor verifier
-    environment the sandbox enforces the same policy natively).
+    There is no isolated execution environment in this codebase yet:
+    calling this raises :class:`ExecIsolationUnavailableError` instead
+    of silently grading in-process. Suites must declare pure graders
+    for the first closed loop (HARBOR_DSH_E2E_LINUX.md §11.3).
     """
-    if grader.execution != "exec":
-        raise ValueError(f"grader {grader.grader.id} is not an exec grader")
-    input_ = build_grader_input(record)
-    # Exec graders are invoked with the input only; the environment
-    # (network off, read-only artifacts) is provided by Harbor's
-    # separate verifier sandbox.
-    result = await grader.grader.grade(input_.record)
-    return validate_grade_result(result)
+    raise ExecIsolationUnavailableError(
+        f"exec grader {grader.grader.id}@{grader.grader.version} refused: no "
+        "isolated execution environment is implemented; declare the grader "
+        "as pure"
+    )
+
+
+def _check_returned_identity(resolved: ResolvedGrader, result: GradeResult) -> None:
+    """The result must be attributed to the grader that produced it."""
+    if (
+        result.grader_id != resolved.grader.id
+        or result.grader_version != resolved.grader.version
+    ):
+        raise GraderIdentityError(
+            f"grader {resolved.grader.id}@{resolved.grader.version} returned a "
+            f"result attributed to {result.grader_id}@{result.grader_version}"
+        )
+    if result.veto != resolved.veto:
+        raise GraderIdentityError(
+            f"grader {resolved.grader.id}@{resolved.grader.version} returned "
+            f"veto={result.veto} but the suite declared veto={resolved.veto}"
+        )
 
 
 async def grade_trial(
@@ -84,6 +116,8 @@ async def grade_trial(
     Required-field checks run first: a grader whose evidence is
     missing gets a cannot_judge result without ever executing — a
     crashed grader and an unjudgeable grader must never be confused.
+    Every returned result is re-attributed to its grader's verified
+    identity; mismatches raise :class:`GraderIdentityError`.
     """
     results: list[GradeResult] = []
     for resolved in graders:
@@ -93,14 +127,17 @@ async def grade_trial(
             resolved.grader.id,
             getattr(resolved.grader, "version", "unknown"),
             resolved.grader.layer,
+            veto=resolved.veto,
         )
         if missing is not None:
             results.append(missing)
             continue
         if resolved.execution == "pure":
-            results.append(await execute_pure_grader(resolved.grader, record))
+            result = await execute_pure_grader(resolved.grader, record)
         else:
-            results.append(await execute_exec_grader(resolved, record))
+            result = await execute_exec_grader(resolved, record)
+        _check_returned_identity(resolved, result)
+        results.append(result)
     return results
 
 

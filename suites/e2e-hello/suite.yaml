@@ -1,0 +1,30 @@
+schema_version: 2
+id: e2e-hello
+version: 0.1.0
+harbor:
+  dataset: datasets/local.yaml
+  job: jobs/e2e-hello.yaml
+baselines:
+  # The baseline proves the seeded copy arrived: the environment image
+  # ships /workspace/ready containing "true" (see environment/Dockerfile).
+  # The probe goes through the SUITE-DECLARED observable (P0-2: probes
+  # resolve suite specs; raw file:/db: probes fail closed).
+  - id: workspace_ready
+    probe: "observable:ready"
+    equals: "true"
+clock:
+  mode: real
+observables:
+  # file: sources only — P0-2 made db:/screenshot:/dom: probes explicitly
+  # unsupported (fail closed); the e2e chain reads files out-of-band.
+  - { name: ready, type: string, source: "file:/workspace/ready" }
+  - { name: result, type: string, source: "file:/workspace/result" }
+verdict:
+  requirements: [input_complete, agent_finished, integration_valid, render_valid, judge_finished, artifact_schema_ok]
+  graders:
+    default: { impl: "graders/hello_outcome.py@v1", layer: outcome }
+metrics:
+  - { id: reliability, kind: pass_pow_k, k: 5 }
+driver:
+  require: [acp_stdio, sdk_jsonrpc]
+provenance: { source: authored-internally, license: MIT }

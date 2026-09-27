@@ -66,12 +66,23 @@ class GraderInput(BaseModel):
 def validate_grade_result(result: GradeResult) -> GradeResult:
     """Reject score shapes that would corrupt the denominator.
 
+    - a ``pass`` must rest on a valid score: ``status='pass'`` with
+      ``score.valid=False`` claims success from evidence the grader
+      itself declared unjudgeable — rejected outright;
     - invalid score (valid=False) must have at least one reason and
       must not carry a value (a number next to "invalid" invites
       accidental aggregation);
     - status cannot_judge must not carry a valid value;
     - reasons must be non-empty strings.
+
+    A ``fail`` may carry an invalid score: the failure verdict does not
+    rest on the score, and it can never inflate the denominator.
     """
+    if result.status == "pass" and result.score.valid is False:
+        raise ValueError(
+            f"grader {result.grader_id}: pass verdict on an invalid score — "
+            "unjudgeable evidence cannot yield pass"
+        )
     if result.score.valid is False:
         if not result.score.invalid_reasons:
             raise ValueError(

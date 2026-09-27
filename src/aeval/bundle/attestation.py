@@ -115,13 +115,53 @@ class RecomputeReport(dict):
     """What recompute verified and what it refused to run."""
 
 
-def recompute_bundle(bundle_dir: Path, *, verify_signature: bool = True) -> RecomputeReport:
-    """Independently verify a sealed bundle (plan §6).
+def _entry_failures(bundle_dir: Path, entry: dict[str, Any]) -> list[str]:
+    """Validate one attestation entry against the bundle on disk."""
+    problems: list[str] = []
+    rel = entry.get("path")
+    if not isinstance(rel, str) or not rel:
+        return [f"attestation entry without a path: {entry!r}"]
+    if rel == "attestation.json":
+        return [f"attestation must not attest itself: {rel}"]
+    candidate = bundle_dir / rel
+    # Containment by resolved components, never string prefixes: a
+    # symlinked or ``..``-laden path cannot escape the bundle unnoticed.
+    resolved_root = bundle_dir.resolve()
+    try:
+        resolved = candidate.resolve()
+    except OSError as exc:
+        return [f"cannot resolve {rel!r}: {exc}"]
+    if not resolved.is_relative_to(resolved_root):
+        return [f"path escapes the bundle: {rel}"]
+    if not resolved.is_file():
+        return [f"missing: {rel}"]
+    try:
+        content = resolved.read_bytes()
+    except OSError as exc:
+        return [f"unreadable: {rel}: {exc}"]
+    actual = hashlib.sha256(content).hexdigest()
+    if actual != entry.get("sha256"):
+        problems.append(f"hash mismatch: {rel}")
+    if entry.get("size") != resolved.stat().st_size:
+        problems.append(
+            f"size mismatch: {rel} (attested {entry.get('size')}, "
+            f"actual {resolved.stat().st_size})"
+        )
+    return problems
 
-    Steps: seal integrity → attestation digests → artifact hashes →
-    grade-result shape. Recompute NEVER re-runs agents or collectors;
-    graders marked re-runnable re-execute in-process over the sealed
-    record only.
+
+def recompute_bundle(bundle_dir: Path, *, verify_signature: bool = True) -> RecomputeReport:
+    """Independently verify a sealed bundle (plan §6, P0-8 strict).
+
+    Steps: seal integrity → attestation presence and completeness →
+    per-entry containment/size/digest → required and manifest-referenced
+    files → unattested-file detection. Recompute NEVER re-runs agents
+    or collectors; it verifies the sealed artifact set.
+
+    Strictness (P0-8): a missing or empty attestation, a deleted
+    manifest entry, a missing required file, an unattested file, a
+    size/digest mismatch, or a path escape each FAIL the recompute —
+    none of them downgrade to a warning.
     """
     bundle_dir = Path(bundle_dir)
     report = RecomputeReport()
@@ -131,27 +171,88 @@ def recompute_bundle(bundle_dir: Path, *, verify_signature: bool = True) -> Reco
         raise ManifestTamperError(f"no run manifest in {bundle_dir}")
     seal = verify_seal(manifest_path)
     report["seal"] = seal
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
 
     attestation_path = bundle_dir / "attestation.json"
-    if attestation_path.is_file():
-        attestation = json.loads(attestation_path.read_text(encoding="utf-8"))
-        mismatches = []
-        for entry in attestation.get("entries", []):
-            p = bundle_dir / entry["path"]
-            if not p.is_file():
-                mismatches.append(f"missing: {entry['path']}")
-                continue
-            actual = hashlib.sha256(p.read_bytes()).hexdigest()
-            if actual != entry["sha256"]:
-                mismatches.append(f"hash mismatch: {entry['path']}")
-        if mismatches:
-            raise ManifestTamperError(
-                "attestation verification failed: " + "; ".join(mismatches[:5])
-            )
-        report["attested_files"] = len(attestation.get("entries", []))
-    else:
-        report["attested_files"] = 0
-        if verify_signature:
-            report["warning"] = "no attestation.json in bundle"
+    if not attestation_path.is_file():
+        raise ManifestTamperError(
+            f"no attestation.json in bundle — integrity is unverifiable "
+            f"(this is a hard failure, not a warning)"
+        )
+    attestation = json.loads(attestation_path.read_text(encoding="utf-8"))
+    entries = attestation.get("entries")
+    if not isinstance(entries, list) or not entries:
+        raise ManifestTamperError("attestation carries no entries")
 
+    attested: dict[str, dict[str, Any]] = {}
+    problems: list[str] = []
+    for entry in entries:
+        if not isinstance(entry, dict):
+            problems.append(f"malformed attestation entry: {entry!r}")
+            continue
+        rel = entry.get("path")
+        if isinstance(rel, str):
+            if rel in attested:
+                problems.append(f"duplicate attested path: {rel}")
+            attested[rel] = entry
+        problems.extend(_entry_failures(bundle_dir, entry))
+
+    # Required files: the manifest itself must be attested, and every
+    # other regular file in the bundle (except the attestation) must be
+    # attested — a deleted file whose entry was also removed from the
+    # attestation is caught by the manifest-referenced checks below, a
+    # swapped-in extra file is caught here.
+    if "run_manifest.json" not in attested:
+        problems.append("run_manifest.json is not attested")
+    for path in sorted(bundle_dir.rglob("*")):
+        if not path.is_file():
+            continue
+        rel = path.relative_to(bundle_dir).as_posix()
+        if rel == "attestation.json":
+            continue
+        if rel not in attested:
+            problems.append(f"unattested file in bundle: {rel}")
+
+    # Manifest-referenced files: the config file digest recorded at
+    # intent time must still match the on-disk config, and the runtime
+    # lock file must still parse to the locked digest. These bindings
+    # are what make "delete a file AND remove its attestation entry"
+    # detectable for everything the manifest references.
+    config_digest = manifest.get("config_file_sha256")
+    if config_digest:
+        config_path = bundle_dir / "harbor-job.json"
+        if not config_path.is_file():
+            problems.append("manifest references harbor-job.json but it is missing")
+        else:
+            actual = hashlib.sha256(config_path.read_bytes()).hexdigest()
+            if actual != config_digest:
+                problems.append("harbor-job.json digest differs from the manifest")
+    elif verify_signature:
+        report["note"] = "manifest carries no config_file_sha256 (pre-P0-8 manifest)"
+
+    lock_digest = manifest.get("runtime_lock_digest")
+    lock_path = bundle_dir / "runtime_lock.json"
+    if lock_digest:
+        if not lock_path.is_file():
+            problems.append("manifest references runtime_lock.json but it is missing")
+        else:
+            from aeval.contracts import RuntimeLock
+
+            try:
+                actual_lock = RuntimeLock.model_validate_json(
+                    lock_path.read_text(encoding="utf-8")
+                )
+            except Exception as exc:
+                problems.append(f"runtime_lock.json is unreadable: {exc}")
+            else:
+                if actual_lock.digest() != lock_digest:
+                    problems.append("runtime_lock.json digest differs from the manifest")
+
+    if problems:
+        raise ManifestTamperError(
+            "bundle verification failed: " + "; ".join(problems[:8])
+            + (f" (+{len(problems) - 8} more)" if len(problems) > 8 else "")
+        )
+    report["attested_files"] = len(entries)
+    report["bundle_dir"] = bundle_dir.name
     return report

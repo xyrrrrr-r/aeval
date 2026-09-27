@@ -1,52 +1,92 @@
-"""Baseline arrival tests: a non-baseline copy must never score."""
+"""Baseline arrival tests: a non-baseline copy must never score.
+
+P0-2: probes go through the REAL environment API (``await env.exec``),
+missing handles/policies are failures (never silent skips), a broker
+``allowlist`` egress is legitimate, and observed identities bind to
+the expected lock fail-closed.
+"""
 
 from __future__ import annotations
 
+from types import SimpleNamespace
+
+import pytest
+
+from aeval.contracts import ImageIdentity, ObservedIdentity
 from aeval.hooks.baseline_arrival import (
     assert_baseline_arrival,
     assert_clock_effective,
     assert_egress_effective,
     assert_isolation_policy,
     on_environment_started,
+    probe_observable,
 )
 from aeval.hooks.context import EvaluationContext
+from aeval.provenance import (
+    BackendNotAvailableError,
+    LockMismatchError,
+    bind_observed_identity,
+    verify_e2b_backend,
+)
 from aeval.suite_models import BaselineAssertion, ClockSpec, ObservableSpec
 
 
-class FakeEnv:
-    def __init__(self, *, inspect_values=None, clock_epoch=None,
-                 approval_policy=None, egress_policy=None):
-        self._inspect = inspect_values or {}
-        self.clock_epoch = clock_epoch
-        self.approval_policy = approval_policy
-        self.egress_policy = egress_policy
+class ExecResult(SimpleNamespace):
+    pass
 
-    def inspect(self, name):
-        return self._inspect.get(name)
+
+class FakeEnv:
+    """Stands in for a Harbor environment handle: the REAL API surface.
+
+    exec() is out-of-band (L3 isolation); network_policy is the live
+    runtime policy property; approval_policy is the DSH-side policy the
+    owner injects.
+    """
+
+    def __init__(self, *, files=None, network_mode="no-network",
+                 allowed_hosts=None, approval_policy="allow",
+                 has_network_policy=True, has_approval_policy=True):
+        self._files = files or {}
+        self.approval_policy = approval_policy if has_approval_policy else None
+        if has_network_policy:
+            self.network_policy = SimpleNamespace(
+                network_mode=network_mode, allowed_hosts=allowed_hosts or [],
+            )
+
+    async def exec(self, command, *args, **kwargs):
+        # the only out-of-band read surface used by probes
+        if command.startswith("cat "):
+            path = command[4:].strip()
+            if path in self._files:
+                return ExecResult(exit_code=0, stdout=self._files[path])
+            return ExecResult(exit_code=1, stdout="", stderr="no such file")
+        return ExecResult(exit_code=127, stdout="", stderr="not found")
+
+
+def _file_observable(name="order_status", type_="string"):
+    return ObservableSpec(name=name, type=type_, source=f"file:/workspace/{name}")
 
 
 async def test_baseline_pass_on_matching_values():
-    env = FakeEnv(inspect_values={"order_status": "refunded"})
+    env = FakeEnv(files={"/workspace/order_status": "refunded"})
     ok, failures = await assert_baseline_arrival(
         env,
-        [
-            BaselineAssertion(
-                id="status", probe="observable:order_status", equals="refunded"
-            )
-        ],
+        [BaselineAssertion(
+            id="status", probe="observable:order_status", equals="refunded",
+        )],
+        [_file_observable()],
     )
     assert ok, failures
 
 
 async def test_baseline_fail_on_seed_mismatch():
-    env = FakeEnv(inspect_values={"order_count": 99})
+    env = FakeEnv(files={"/workspace/order_count": "99"})
     ok, failures = await assert_baseline_arrival(
         env,
-        [
-            BaselineAssertion(
-                id="seeded", probe="observable:order_count", equals=120
-            )
-        ],
+        [BaselineAssertion(
+            id="seeded", probe="observable:order_count", equals=120,
+        )],
+        [_file_observable("order_count", "number")],
     )
     assert not ok
     assert "expected=120" in failures[0] and "actual=99" in failures[0]
@@ -56,8 +96,61 @@ async def test_baseline_fail_on_missing_env_handle():
     ok, failures = await assert_baseline_arrival(
         None,
         [BaselineAssertion(id="x", probe="observable:anything", equals=1)],
+        [_file_observable("anything")],
     )
     assert not ok
+    assert "no environment handle" in failures[0]
+
+
+async def test_baseline_fail_on_undeclared_observable():
+    """A baseline cannot probe an observable the suite never declared."""
+    env = FakeEnv(files={"/workspace/ghost": "x"})
+    ok, failures = await assert_baseline_arrival(
+        env,
+        [BaselineAssertion(id="x", probe="observable:ghost", equals="x")],
+        [_file_observable("order_status")],
+    )
+    assert not ok
+    assert "not declared by the suite" in failures[0]
+
+
+async def test_probe_rejects_db_sources_fail_closed():
+    env = FakeEnv()
+    with pytest.raises(Exception, match="unsupported observable source"):
+        await probe_observable(
+            env,
+            ObservableSpec(name="order", type="string", source="db:orders.status"),
+        )
+
+
+async def test_probe_rejects_env_without_exec():
+    class NoExec:
+        pass
+
+    with pytest.raises(Exception, match="no exec"):
+        await probe_observable(NoExec(), _file_observable())
+
+
+async def test_probe_reports_cat_failure():
+    env = FakeEnv(files={})  # file does not exist
+    with pytest.raises(Exception, match="exited 1"):
+        await probe_observable(env, _file_observable())
+
+
+async def test_probe_parses_by_observable_type():
+    env = FakeEnv(files={
+        "/workspace/blob": '{"k": [1, 2]}',
+        "/workspace/num": "42",
+    })
+    v_json = await probe_observable(env, ObservableSpec(
+        name="blob", type="json", source="file:/workspace/blob"))
+    assert v_json == {"k": [1, 2]}
+    v_num = await probe_observable(env, ObservableSpec(
+        name="num", type="number", source="file:/workspace/num"))
+    assert v_num == 42
+    with pytest.raises(Exception, match="not a number"):
+        await probe_observable(env, ObservableSpec(
+            name="blob", type="number", source="file:/workspace/blob"))
 
 
 async def test_assert_expr_restricted_parser():
@@ -80,52 +173,70 @@ async def test_assert_expr_restricted_parser():
     assert not ok3
 
 
-async def test_clock_effective_detects_missing_and_mismatch():
+async def test_clock_effective_detects_missing_handle():
     issues = await assert_clock_effective(
         None, ClockSpec(mode="virtual_offset", epoch="2026-09-16T00:00:00+08:00")
     )
     assert issues and "missing" in issues[0]
-    issues2 = await assert_clock_effective(
-        FakeEnv(clock_epoch="2026-09-16T00:00:00+08:00"),
-        ClockSpec(mode="virtual_offset", epoch="2026-09-16T00:00:00+08:00"),
-    )
-    assert issues2 == []
-    issues3 = await assert_clock_effective(
-        FakeEnv(clock_epoch="2026-01-01T00:00:00Z"),
-        ClockSpec(mode="virtual_offset", epoch="2026-09-16T00:00:00+08:00"),
-    )
-    assert issues3 and "mismatch" in issues3[0]
-    # real clock mode: nothing to assert
-    assert await assert_clock_effective(FakeEnv(), ClockSpec(mode="real")) == []
+
+
+async def test_isolation_missing_handle_or_policy_is_a_failure():
+    """P0-2: unverifiable isolation must block, not silently pass."""
+    issues = await assert_isolation_policy(None)
+    assert issues and "no environment handle" in issues[0]
+    issues2 = await assert_isolation_policy(FakeEnv(has_approval_policy=False))
+    assert issues2 and "unverifiable" in issues2[0]
 
 
 async def test_isolation_rejects_ask_policy():
     issues = await assert_isolation_policy(FakeEnv(approval_policy="ask"))
     assert issues and "ask" in issues[0]
     assert await assert_isolation_policy(FakeEnv(approval_policy="allow")) == []
-    assert await assert_isolation_policy(FakeEnv()) == []
 
 
-async def test_egress_must_be_none():
-    issues = await assert_egress_effective(FakeEnv(egress_policy="public"))
-    assert issues and "not 'none'" in issues[0]
-    assert await assert_egress_effective(FakeEnv(egress_policy="none")) == []
+async def test_egress_allows_no_network():
+    assert await assert_egress_effective(FakeEnv(network_mode="no-network")) == []
+
+
+async def test_egress_accepts_broker_allowlist():
+    """P0-2 fix: a legitimate broker allowlist must NOT be misrejected
+    as 'egress is not none'."""
+    issues = await assert_egress_effective(
+        FakeEnv(network_mode="allowlist", allowed_hosts=["broker.host"])
+    )
+    assert issues == []
+
+
+async def test_egress_rejects_public():
+    issues = await assert_egress_effective(FakeEnv(network_mode="public"))
+    assert issues and "public" in issues[0]
+
+
+async def test_egress_rejects_empty_allowlist():
+    issues = await assert_egress_effective(
+        FakeEnv(network_mode="allowlist", allowed_hosts=[])
+    )
+    assert issues and "empty" in issues[0]
+
+
+async def test_egress_missing_handle_or_policy_is_a_failure():
+    issues = await assert_egress_effective(None)
+    assert issues and "no environment handle" in issues[0]
+    issues2 = await assert_egress_effective(FakeEnv(has_network_policy=False))
+    assert issues2 and "unverifiable" in issues2[0]
 
 
 async def test_on_environment_started_marks_infra_invalid(tmp_path, demo_suite, runtime_lock):
     class Event:
         trial_id = "trial-7"
-
-        class environment:
-            pass
-
-        env = FakeEnv(inspect_values={"order_count": 99})  # wrong seed
+        environment = FakeEnv(files={"/workspace/order_count": "99"})  # wrong seed
 
     ctx = EvaluationContext(
         run_id="r", runtime_lock=runtime_lock, suite=demo_suite,
         run_dir=tmp_path, store_path=tmp_path / "s.db",
     )
-    # Give the demo suite a baseline we can hit through the env handle.
+    # Give the demo suite a file-backed observable + baseline we can hit.
+    ctx.suite.overlay.observables.append(_file_observable("order_count", "number"))
     ctx.suite.overlay.baselines.append(
         BaselineAssertion(id="orders", probe="observable:order_count", equals=120)
     )
@@ -134,3 +245,95 @@ async def test_on_environment_started_marks_infra_invalid(tmp_path, demo_suite, 
     assert not state.baseline_ok
     assert state.stop_reason == "infra_error"
     assert any("baseline" in r for r in state.infra_invalid_reasons)
+
+
+# --- e2b backend detection + observed identity binding (P0-2) -------
+
+
+def test_verify_e2b_backend_missing_sdk(monkeypatch):
+    import builtins
+
+    real_import = builtins.__import__
+
+    def fake_import(name, *args, **kwargs):
+        if name == "e2b":
+            raise ImportError("no e2b")
+        return real_import(name, *args, **kwargs)
+
+    monkeypatch.setattr(builtins, "__import__", fake_import)
+    with pytest.raises(BackendNotAvailableError, match="not importable"):
+        verify_e2b_backend()
+
+
+def _lock_with_sandbox(runtime_lock):
+    image = ImageIdentity(
+        reference="ubuntu@sha256:" + "a" * 64, digest="a" * 64, platform="arm64",
+    )
+    return runtime_lock.model_copy(update={"images": {"sandbox": image}})
+
+
+def test_bind_observed_identity_happy_path(runtime_lock):
+    lock = _lock_with_sandbox(runtime_lock)
+    observed = ObservedIdentity(
+        backend="e2b",
+        e2b_sdk_version="1.0.0",
+        image_digest="sha256:" + "a" * 64,
+        architecture="arm64",
+        node_version="24.20.0",
+    )
+    bind_observed_identity(observed, lock)  # no raise
+
+
+def test_bind_observed_identity_failures(runtime_lock):
+    lock = _lock_with_sandbox(runtime_lock)
+    base = dict(
+        backend="e2b", e2b_sdk_version="1.0.0",
+        image_digest="sha256:" + "a" * 64,
+        architecture="arm64", node_version="24.20.0",
+    )
+    # wrong backend
+    with pytest.raises(LockMismatchError, match="backend"):
+        bind_observed_identity(ObservedIdentity(**{**base, "backend": "docker"}), lock)
+    # missing SDK version
+    with pytest.raises(LockMismatchError, match="e2b SDK version"):
+        bind_observed_identity(ObservedIdentity(**{**base, "e2b_sdk_version": None}), lock)
+    # unobserved image digest
+    with pytest.raises(LockMismatchError, match="no image digest"):
+        bind_observed_identity(ObservedIdentity(**{**base, "image_digest": None}), lock)
+    # digest mismatch
+    with pytest.raises(LockMismatchError, match="image digest"):
+        bind_observed_identity(
+            ObservedIdentity(**{**base, "image_digest": "sha256:" + "b" * 64}), lock)
+    # architecture mismatch (wrong arch image)
+    with pytest.raises(LockMismatchError, match="architecture"):
+        bind_observed_identity(
+            ObservedIdentity(**{**base, "architecture": "amd64"}), lock)
+    # unobserved architecture
+    with pytest.raises(LockMismatchError, match="no architecture"):
+        bind_observed_identity(ObservedIdentity(**{**base, "architecture": None}), lock)
+    # node version outside matrix
+    with pytest.raises(LockMismatchError, match="outside.*matrix"):
+        bind_observed_identity(
+            ObservedIdentity(**{**base, "node_version": "24.19.0"}), lock)
+    # unobserved node version
+    with pytest.raises(LockMismatchError, match="no Node version"):
+        bind_observed_identity(ObservedIdentity(**{**base, "node_version": None}), lock)
+
+
+def test_bind_observed_identity_requires_locked_sandbox_image(runtime_lock):
+    observed = ObservedIdentity(
+        backend="e2b", e2b_sdk_version="1.0.0",
+        image_digest="sha256:" + "a" * 64, architecture="arm64",
+        node_version="24.20.0",
+    )
+    with pytest.raises(LockMismatchError, match="pins no 'sandbox' image"):
+        bind_observed_identity(observed, runtime_lock)
+
+
+def test_node_matrix_minor_range_matches():
+    from aeval.provenance import _node_in_matrix
+
+    assert _node_in_matrix("22.19.4", ["22.19.x", "24.20.0"])
+    assert _node_in_matrix("v24.20.0", ["22.19.x", "24.20.0"])
+    assert not _node_in_matrix("22.20.0", ["22.19.x", "24.20.0"])
+    assert not _node_in_matrix("24.19.0", ["22.19.x", "24.20.0"])

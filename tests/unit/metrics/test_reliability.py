@@ -49,6 +49,33 @@ def test_valid_trials_exclude_all_four_classes():
     assert [t.trial_id for t in valid] == ["ok-pass"]
 
 
+def test_unfinalized_records_never_enter_the_denominator():
+    """P0-7 defect: verdict=None (never finally classified) must be excluded.
+
+    A record whose grading never completed — crashed pipeline, missing
+    trial, interrupted run — silently counted as a judged sample before.
+    """
+    trials = [
+        _trial("unfinalized", verdict=None),
+        _trial("claimed-done-ungraded", verdict=None, stop="agent_claimed_done"),
+        _trial("ok-pass"),
+    ]
+    valid = valid_trials(trials)
+    assert [t.trial_id for t in valid] == ["ok-pass"]
+    summary = exclusion_summary(trials)
+    assert summary.excluded.get("unfinalized") == 2
+    assert summary.excluded_trial_ids["unfinalized"] == [
+        "unfinalized", "claimed-done-ungraded",
+    ]
+
+
+def test_unfinalized_exclusion_composes_with_other_classes():
+    trials = [_trial("infra-and-unfinalized", stop="infra_error", verdict=None)]
+    summary = exclusion_summary(trials)
+    assert summary.excluded == {"unfinalized": 1, "infra_invalid": 1}
+    assert summary.valid == 0
+
+
 def test_exclusion_classes_deduped_per_trial():
     # one trial qualifying twice for infra_invalid counts once
     trials = [_trial("double", stop="infra_error", verdict="infra_invalid")]

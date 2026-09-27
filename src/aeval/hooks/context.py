@@ -34,6 +34,10 @@ class TrialState:
     event_identity: str | None = None
     binding: TrialBinding | None = None
     exception: dict[str, Any] | None = None
+    # owner-side handle + composed config of the trial's model broker
+    # (hooks/broker_lifecycle.py); runtime state, never serialized.
+    broker: Any = None
+    control_config: dict[str, Any] | None = None
 
     @property
     def terminal(self) -> bool:
@@ -74,6 +78,7 @@ class EvaluationContext:
     job_id: str | None = None
     trials_dir: Path | None = None
     closed: bool = False
+    broker_spec: Any = None
 
     def trial_state(self, trial_id: str) -> TrialState:
         if not trial_id:

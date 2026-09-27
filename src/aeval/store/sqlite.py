@@ -25,6 +25,9 @@ from aeval.contracts import (
 )
 
 __all__ = ["TrialStore", "StoreConflictError"]
+# Atomic unit-of-work note: persist_trial_with_grades is the production
+# write path (P0-7); the single-entity persists remain for migrations
+# and tooling.
 
 
 class StoreConflictError(RuntimeError):
@@ -75,81 +78,150 @@ class TrialStore:
                 f"run {manifest.run_id!r} already exists — run ids are never reused"
             ) from exc
 
+    def load_run_manifest(self, run_id: str) -> RunManifest:
+        """Load the intent manifest as recorded at run creation (trusted)."""
+        row = self._conn.execute(
+            "SELECT manifest_json FROM runs WHERE run_id = ?", (run_id,)
+        ).fetchone()
+        if row is None:
+            raise KeyError(f"run {run_id!r} is not in the store")
+        return RunManifest.model_validate_json(row["manifest_json"])
+
+    def run_intent_digest(self, run_id: str) -> str:
+        """The trusted intent digest of a recorded run (P0-8 seal binding).
+
+        The stored manifest is the copy written at run creation, before
+        any trial existed; comparing its intent digest against the
+        on-disk manifest at seal time detects rewrites.
+        """
+        from aeval.bundle.manifest import intent_digest
+
+        row = self._conn.execute(
+            "SELECT manifest_json FROM runs WHERE run_id = ?", (run_id,)
+        ).fetchone()
+        if row is None:
+            raise KeyError(f"run {run_id!r} is not in the store")
+        return intent_digest(json.loads(row["manifest_json"]))
+
+    def list_trial_ids(self, run_id: str) -> list[str]:
+        rows = self._conn.execute(
+            "SELECT trial_id FROM trials WHERE run_id = ?", (run_id,)
+        ).fetchall()
+        return [r["trial_id"] for r in rows]
+
     # -- trials ---------------------------------------------------------
 
     def persist_trial(self, record: TrialRecord) -> None:
-        c = record.coordinates
         try:
-            self._conn.execute(
-                """INSERT INTO trials (
-                    trial_id, run_id, suite_id, suite_version, task_id,
-                    trial_index, stop_reason, baseline_ok, requirements_json,
-                    observed_model_json, budget_json, adapter_json, claim_json,
-                    artifacts_json, transcript_extra_json, fork_json,
-                    versions_json, verdict, created_at
-                ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
-                (
-                    record.trial_id,
-                    c.run_id,
-                    c.suite_id,
-                    c.suite_version,
-                    c.task_id,
-                    c.trial_index,
-                    record.stop_reason,
-                    1 if record.baseline_ok else 0,
-                    json.dumps(record.requirements.to_dict()),
-                    (
-                        record.observed_model.model_dump_json(exclude_none=True)
-                        if record.observed_model
-                        else None
-                    ),
-                    record.budget.model_dump_json(exclude_none=True) if record.budget else None,
-                    record.adapter.model_dump_json(exclude_none=True) if record.adapter else None,
-                    record.claim.model_dump_json(exclude_none=True) if record.claim else None,
-                    json.dumps(
-                        {k: v.model_dump() for k, v in record.artifacts.items()}
-                    ),
-                    json.dumps(record.transcript_extra) if record.transcript_extra else None,
-                    record.fork.model_dump_json(exclude_none=True) if record.fork else None,
-                    record.versions.model_dump_json(exclude_none=True) if record.versions else None,
-                    record.verdict,
-                    record.created_at.isoformat(),
-                ),
-            )
+            self._conn.execute("BEGIN IMMEDIATE")
+            self._insert_trial(record)
             self._conn.commit()
         except sqlite3.IntegrityError as exc:
+            # A conflict must leave the store exactly as it was — a
+            # half-written prefix that a later commit could flush is a
+            # corrupted record (P0-7).
+            self._conn.rollback()
+            c = record.coordinates
             raise StoreConflictError(
                 f"trial {record.trial_id!r} conflicts with an existing record "
                 f"({c.run_id}/{c.suite_id}/{c.task_id}/{c.trial_index}): {exc}"
             ) from exc
 
     def persist_grades(self, trial_id: str, results: Sequence[GradeResult]) -> None:
+        try:
+            self._conn.execute("BEGIN IMMEDIATE")
+            self._insert_grades(trial_id, results)
+            self._conn.commit()
+        except sqlite3.IntegrityError as exc:
+            # Roll back the whole batch: a mid-batch conflict must not
+            # leave earlier rows behind (P0-7).
+            self._conn.rollback()
+            raise StoreConflictError(
+                f"grade batch for trial {trial_id!r} rolled back — a grade "
+                f"result already exists: {exc}"
+            ) from exc
+
+    def persist_trial_with_grades(
+        self, record: TrialRecord, results: Sequence[GradeResult]
+    ) -> None:
+        """Persist the trial and its grades as ONE atomic transaction.
+
+        Either the full record with every grade lands, or nothing does.
+        A conflict anywhere rolls the whole unit back; no prefix of a
+        trial or of its grade list can survive (P0-7).
+        """
+        try:
+            self._conn.execute("BEGIN IMMEDIATE")
+            self._insert_trial(record)
+            self._insert_grades(record.trial_id, results)
+            self._conn.commit()
+        except sqlite3.IntegrityError as exc:
+            self._conn.rollback()
+            c = record.coordinates
+            raise StoreConflictError(
+                f"trial {record.trial_id!r} + grades rolled back — conflict "
+                f"({c.run_id}/{c.suite_id}/{c.task_id}/{c.trial_index}): {exc}"
+            ) from exc
+
+    def _insert_trial(self, record: TrialRecord) -> None:
+        c = record.coordinates
+        self._conn.execute(
+            """INSERT INTO trials (
+                trial_id, run_id, suite_id, suite_version, task_id,
+                trial_index, stop_reason, baseline_ok, requirements_json,
+                observed_model_json, budget_json, adapter_json, claim_json,
+                artifacts_json, transcript_extra_json, fork_json,
+                versions_json, verdict, created_at
+            ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+            (
+                record.trial_id,
+                c.run_id,
+                c.suite_id,
+                c.suite_version,
+                c.task_id,
+                c.trial_index,
+                record.stop_reason,
+                1 if record.baseline_ok else 0,
+                json.dumps(record.requirements.to_dict()),
+                (
+                    record.observed_model.model_dump_json(exclude_none=True)
+                    if record.observed_model
+                    else None
+                ),
+                record.budget.model_dump_json(exclude_none=True) if record.budget else None,
+                record.adapter.model_dump_json(exclude_none=True) if record.adapter else None,
+                record.claim.model_dump_json(exclude_none=True) if record.claim else None,
+                json.dumps(
+                    {k: v.model_dump() for k, v in record.artifacts.items()}
+                ),
+                json.dumps(record.transcript_extra) if record.transcript_extra else None,
+                record.fork.model_dump_json(exclude_none=True) if record.fork else None,
+                record.versions.model_dump_json(exclude_none=True) if record.versions else None,
+                record.verdict,
+                record.created_at.isoformat(),
+            ),
+        )
+
+    def _insert_grades(self, trial_id: str, results: Sequence[GradeResult]) -> None:
         for r in results:
-            try:
-                self._conn.execute(
-                    """INSERT INTO rubric_results (
-                        trial_id, grader_id, grader_version, layer, veto,
-                        score_json, status, reasons_json, coverage_json, produced_at
-                    ) VALUES (?,?,?,?,?,?,?,?,?,?)""",
-                    (
-                        trial_id,
-                        r.grader_id,
-                        r.grader_version,
-                        r.layer,
-                        1 if r.veto else 0,
-                        r.score.model_dump_json(exclude_none=True),
-                        r.status,
-                        json.dumps(r.reasons),
-                        r.coverage.model_dump_json(exclude_none=True) if r.coverage else None,
-                        r.produced_at.isoformat(),
-                    ),
-                )
-            except sqlite3.IntegrityError as exc:
-                raise StoreConflictError(
-                    f"grade result {trial_id}/{r.grader_id}@{r.grader_version} "
-                    "already exists — regrading must use a new grader version"
-                ) from exc
-        self._conn.commit()
+            self._conn.execute(
+                """INSERT INTO rubric_results (
+                    trial_id, grader_id, grader_version, layer, veto,
+                    score_json, status, reasons_json, coverage_json, produced_at
+                ) VALUES (?,?,?,?,?,?,?,?,?,?)""",
+                (
+                    trial_id,
+                    r.grader_id,
+                    r.grader_version,
+                    r.layer,
+                    1 if r.veto else 0,
+                    r.score.model_dump_json(exclude_none=True),
+                    r.status,
+                    json.dumps(r.reasons),
+                    r.coverage.model_dump_json(exclude_none=True) if r.coverage else None,
+                    r.produced_at.isoformat(),
+                ),
+            )
 
     # -- reads ----------------------------------------------------------
 

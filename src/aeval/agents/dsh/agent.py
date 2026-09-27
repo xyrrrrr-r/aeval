@@ -65,6 +65,10 @@ SESSIONS_DIRNAME = "sessions"
 # survives in the synced trial logs next to the session it describes.
 RUN_STREAM_FILENAME = "dsh-run.jsonl"
 
+# The official backend persists exactly one session record per session
+# directory, with this name (session reader contract, dsh-eval-control).
+SESSION_RECORD_FILENAME = "session.v4.jsonl.zstd"
+
 # ``dsh`` announces its own ids as ``session-<uuid>``; a pinned trial id has to
 # survive both a shell argument and the on-disk session directory name.
 _SESSION_ID_PATTERN = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}")
@@ -384,12 +388,6 @@ class DshAgent(BaseInstalledAgent):
                 f"{self._pinned_session_id}, run stream announced {announced}"
             )
         self._session_id = announced
-        context.metadata = {
-            **(context.metadata or {}),
-            "dsh_session_id": self._session_id,
-            "dsh_run_stream": paths.container_stream_path.as_posix(),
-            "dsh_home": paths.dsh_home.as_posix(),
-        }
 
     def _patches_in_environment(self) -> list[str]:
         return list(self._patch_files)
@@ -417,6 +415,7 @@ class DshAgent(BaseInstalledAgent):
                 f"synced DSH session root missing: {source_root} "
                 "(check that the trial synced its agent logs)"
             )
+        self._verify_download_complete(source_root)
         allowed_base_env = os.environ.get(_ALLOWED_BASE_ENV)
         response = read_dsh_session_via_bridge(
             DshReaderRequest(
@@ -435,12 +434,58 @@ class DshAgent(BaseInstalledAgent):
         )
         return self._transcript
 
+    def _verify_download_complete(self, source_root: Path) -> None:
+        """The synced session must be the official layout, complete (P0-5).
+
+        A partially synced or absent session directory is a download
+        failure: reading through it would silently grade a truncated
+        trajectory. The official backend persists exactly one session
+        record (``session.v4.jsonl.zstd``) per session directory, plus
+        an optional empty POSIX ``session.lock`` lease artifact.
+        """
+        session_dir = source_root / self._session_id
+        if not session_dir.is_dir():
+            raise DshRunError(
+                f"synced session directory missing: {session_dir} "
+                "(agent log download incomplete — refusing to read a "
+                "session that was never synced)"
+            )
+        record = session_dir / SESSION_RECORD_FILENAME
+        if not record.is_file():
+            raise DshRunError(
+                f"session record missing in synced session: {record} "
+                "(agent log download incomplete — the official record "
+                "must land before the session can be read)"
+            )
+        records = [
+            p for p in session_dir.iterdir()
+            if p.is_file() and p.name.startswith("session.v") and p.suffix == ".zstd"
+        ]
+        if len(records) != 1:
+            raise DshRunError(
+                f"session directory holds {len(records)} session records, "
+                f"expected exactly one: {session_dir}"
+            )
+
     def populate_context_post_run(self, context: AgentContext) -> None:
-        """Backfill Harbor's usage totals from the official session read.
+        """Backfill Harbor's usage totals and DSH session pointers.
+
+        Runs only while the AgentContext is still empty (Harbor's
+        ``_populate_agent_context`` skips otherwise) — which is exactly
+        why ``run()`` must NOT write ``context.metadata``: doing so made
+        the context non-empty and silently skipped this backfill
+        (P0-5 fix, the reader callback was never invoked).
 
         Numbers come from the durable session, never from the run stream, so
         a claim the agent cannot support cannot inflate the recorded cost.
         """
+        paths = self.paths()
+        context.metadata = {
+            **(context.metadata or {}),
+            "dsh_session_id": self._session_id,
+            "dsh_run_stream": paths.container_stream_path.as_posix(),
+            "dsh_home": paths.dsh_home.as_posix(),
+        }
         metrics = self.read_trial_session().atif.final_metrics
         if metrics is None or metrics.total_prompt_tokens is None:
             return

@@ -129,12 +129,16 @@ def test_descriptor_and_nested_run_are_frozen():
 
 
 def test_evidence_verifier_accepts_in_trial_descriptor(tmp_path, runtime_lock, demo_suite):
-    trial_dir, manifest = build_complete_trial_dir(tmp_path / "trial-1")
-    session_dir = trial_dir / "sessions" / "s-1"
-    session_dir.mkdir(parents=True)
-    (session_dir / "session.jsonl").write_text("{}\n", encoding="utf-8")
+    from aeval.hooks.evidence import build_required_collect_plan
+
+    trial_dir, manifest = build_complete_trial_dir(
+        tmp_path / "trial-1",
+        plan=build_required_collect_plan(demo_suite),
+        runtime_lock=runtime_lock,
+    )
+    # a descriptor whose session_root owns the session artifact passes
     (trial_dir / "bundle_descriptor.json").write_text(
-        json.dumps(_descriptor()), encoding="utf-8")
+        json.dumps(_descriptor(session_root="sessions")), encoding="utf-8")
     from aeval.hooks.evidence import build_required_collect_plan
     plan = build_required_collect_plan(demo_suite)
     bundle = verify_evidence_bundle(trial_dir, runtime_lock, plan)
@@ -145,7 +149,13 @@ def test_evidence_verifier_accepts_in_trial_descriptor(tmp_path, runtime_lock, d
 def test_evidence_verifier_rejects_descriptor_escaping_trial_dir(
     tmp_path, runtime_lock, demo_suite
 ):
-    trial_dir, _ = build_complete_trial_dir(tmp_path / "trial-1")
+    from aeval.hooks.evidence import build_required_collect_plan
+
+    trial_dir, _ = build_complete_trial_dir(
+        tmp_path / "trial-1",
+        plan=build_required_collect_plan(demo_suite),
+        runtime_lock=runtime_lock,
+    )
     outside = tmp_path / "outside"
     outside.mkdir()
     (outside / "s.jsonl").write_text("{}\n", encoding="utf-8")
@@ -162,7 +172,13 @@ def test_evidence_verifier_rejects_descriptor_escaping_trial_dir(
 def test_evidence_verifier_rejects_invalid_descriptor_json(
     tmp_path, runtime_lock, demo_suite
 ):
-    trial_dir, _ = build_complete_trial_dir(tmp_path / "trial-1")
+    from aeval.hooks.evidence import build_required_collect_plan
+
+    trial_dir, _ = build_complete_trial_dir(
+        tmp_path / "trial-1",
+        plan=build_required_collect_plan(demo_suite),
+        runtime_lock=runtime_lock,
+    )
     (trial_dir / "bundle_descriptor.json").write_text(
         json.dumps(_descriptor(session_root="/abs")), encoding="utf-8")
     from aeval.hooks.evidence import build_required_collect_plan
@@ -171,10 +187,17 @@ def test_evidence_verifier_rejects_invalid_descriptor_json(
         verify_evidence_bundle(trial_dir, runtime_lock, plan)
 
 
-def test_missing_descriptor_records_issue_not_crash(tmp_path, runtime_lock, demo_suite):
-    trial_dir, _ = build_complete_trial_dir(tmp_path / "trial-1")
+def test_missing_descriptor_is_a_hard_failure(tmp_path, runtime_lock, demo_suite):
+    """P0-6: without the descriptor there is no session ownership or
+    stop reason — the evidence is incomplete and the gate fails."""
     from aeval.hooks.evidence import build_required_collect_plan
+
+    trial_dir, _ = build_complete_trial_dir(
+        tmp_path / "trial-1",
+        plan=build_required_collect_plan(demo_suite),
+        runtime_lock=runtime_lock,
+        descriptor=False,
+    )
     plan = build_required_collect_plan(demo_suite)
-    bundle = verify_evidence_bundle(trial_dir, runtime_lock, plan)
-    assert bundle.bundle_descriptor is None
-    assert any("descriptor missing" in i for i in bundle.issues)
+    with pytest.raises(EvidenceIntegrityError, match="bundle descriptor missing"):
+        verify_evidence_bundle(trial_dir, runtime_lock, plan)

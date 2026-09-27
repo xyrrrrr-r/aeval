@@ -100,7 +100,7 @@ def test_same_grader_version_twice_rejected_new_version_ok(store):
     record = _record("run-1")
     store.persist_trial(record)
     store.persist_grades(record.trial_id, [_grade()])
-    with pytest.raises(StoreConflictError, match="new grader version"):
+    with pytest.raises(StoreConflictError, match="rolled back"):
         store.persist_grades(record.trial_id, [_grade()])
     # regrade under a new version is a new row, not a mutation
     store.persist_grades(record.trial_id, [_grade(version="v2", status="fail", value=0.0)])
@@ -108,6 +108,51 @@ def test_same_grader_version_twice_rejected_new_version_ok(store):
     by_version = {g.grader_version: g for g in loaded.grades}
     assert by_version["v1"].status == "pass"
     assert by_version["v2"].status == "fail"
+
+
+def test_grade_batch_conflict_rolls_back_whole_batch(store):
+    """P0-7: a mid-batch conflict must not leave a prefix behind."""
+    record = _record("run-1")
+    store.persist_trial(record)
+    store.persist_grades(record.trial_id, [_grade(grader_id="existing")])
+    # batch of three; the second row collides with the persisted one
+    batch = [_grade(grader_id="new-a"), _grade(grader_id="existing"), _grade(grader_id="new-b")]
+    with pytest.raises(StoreConflictError, match="rolled back"):
+        store.persist_grades(record.trial_id, batch)
+    loaded = store.load_trial(record.trial_id)
+    ids = {g.grader_id for g in loaded.grades}
+    assert "new-a" not in ids and "new-b" not in ids, (
+        "a rolled-back batch leaked rows into the store"
+    )
+    assert ids == {"existing"}
+    # the store stays usable after the rollback: the next commit is clean
+    store.persist_grades(record.trial_id, [_grade(grader_id="new-c")])
+    assert "new-c" in {g.grader_id for g in store.load_trial(record.trial_id).grades}
+
+
+def test_persist_trial_with_grades_is_one_atomic_unit(store):
+    """P0-7: trial + grades land together or not at all."""
+    record = _record("run-1")
+    grades = [_grade(), _grade(grader_id="g2", version="v2")]
+    store.persist_trial_with_grades(record, grades)
+    loaded = store.load_trial(record.trial_id)
+    assert {g.grader_id for g in loaded.grades} == {"g", "g2"}
+
+
+def test_persist_trial_with_grades_coordinate_conflict_rolls_back_all(store):
+    """A conflict inside the unit leaves no half-written trial."""
+    existing = _record("run-1", index=0, trial_id="t-0")
+    store.persist_trial_with_grades(existing, [_grade(grader_id="g")])
+    # same (run, suite, task, index) coordinates under a new trial id
+    twin = _record("run-1", index=0, trial_id="t-twin")
+    with pytest.raises(StoreConflictError, match="rolled back"):
+        store.persist_trial_with_grades(twin, [_grade(grader_id="free")])
+    with pytest.raises(KeyError):
+        store.load_trial("t-twin")
+    # the original record is intact and unchanged
+    loaded = store.load_trial("t-0")
+    assert loaded.trial_id == "t-0"
+    assert {g.grader_id for g in loaded.grades} == {"g"}
 
 
 def test_load_missing_trial_raises_keyerror(store):

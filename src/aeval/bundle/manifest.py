@@ -14,8 +14,10 @@ from aeval.contracts import ExclusionSummary, OverlayIdentity, RuntimeLock, RunM
 __all__ = [
     "ManifestTamperError",
     "write_intent_manifest",
+    "intent_digest",
     "seal_run_manifest",
     "validate_manifest_references",
+    "verify_seal",
 ]
 
 
@@ -41,19 +43,51 @@ def write_intent_manifest(manifest: RunManifest, run_dir: Path) -> Path:
     return path
 
 
-def seal_run_manifest(path: Path, exclusions: ExclusionSummary) -> tuple[Path, str]:
+def intent_digest(data: dict[str, Any]) -> str:
+    """Digest of the intent subset of a manifest mapping.
+
+    Everything except the seal-time fields (``exclusions``, ``sealed``,
+    ``seal_digest``) is intent: it is fixed at run start and must be
+    byte-identical at seal time. The trusted copy of this digest is
+    recorded in the trial store when the run is created, so a manifest
+    rewritten between intent and seal is detectable (P0-8).
+    """
+    intent = {k: v for k, v in data.items() if k not in ("exclusions", "sealed", "seal_digest")}
+    return sha256(
+        json.dumps(intent, sort_keys=True, ensure_ascii=False).encode("utf-8")
+    ).hexdigest()
+
+
+def seal_run_manifest(
+    path: Path,
+    exclusions: ExclusionSummary,
+    *,
+    expected_intent_digest: str | None = None,
+) -> tuple[Path, str]:
     """Seal: append exclusions, write the final digest, freeze the file.
 
     Returns (path, seal_digest). Any later modification of the manifest
     is detectable by comparing the file's content digest against the
     recorded seal.
+
+    With ``expected_intent_digest`` (the digest recorded from the
+    original intent at run-creation time, e.g. from the trial store)
+    the manifest's intent subset is re-derived and compared BEFORE
+    sealing: a manifest rewritten after intent time is refused instead
+    of sealed (P0-8 — the previous implementation computed the intent
+    copy and never checked it).
     """
     path = Path(path)
     data = _read_json(path)
     if data.get("sealed"):
         raise ManifestTamperError(f"manifest already sealed: {path}")
     # Everything except `exclusions` must be untouched from intent time.
-    intent_copy = {k: v for k, v in data.items() if k not in ("exclusions", "sealed")}
+    current_intent_digest = intent_digest(data)
+    if expected_intent_digest is not None and current_intent_digest != expected_intent_digest:
+        raise ManifestTamperError(
+            f"intent manifest was rewritten after run creation: recorded "
+            f"intent digest {expected_intent_digest}, actual {current_intent_digest}"
+        )
     data["exclusions"] = exclusions.model_dump(mode="json", exclude_none=True)
     data["sealed"] = True
     seal_digest = sha256(

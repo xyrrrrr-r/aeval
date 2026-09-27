@@ -1,8 +1,9 @@
 """Reliability and cost metrics (plan §6): denominator discipline first.
 
-valid_trials excludes infra_invalid, baseline failures, claim
-mismatches and cannot_judge — an exclusion rate > 5% flags the whole
-run as untrustworthy (the report says so, it does not hide it).
+valid_trials excludes unfinalized records (verdict=None), infra_invalid,
+baseline failures, claim mismatches and cannot_judge — an exclusion
+rate > 5% flags the whole run as untrustworthy (the report says so, it
+does not hide it).
 """
 
 from __future__ import annotations
@@ -33,6 +34,10 @@ def _excluded_reasons(record: TrialRecord) -> list[str]:
     """
     reasons: list[str] = []
     for reason in (
+        # A record without a final verdict was never finally classified
+        # (grading incomplete, missing trial, crashed pipeline): it must
+        # not silently count as a judged sample (P0-7).
+        "unfinalized" if record.verdict is None else None,
         "infra_invalid" if record.stop_reason == "infra_error" else None,
         "baseline_failed" if not record.baseline_ok else None,
         "claim_mismatch"

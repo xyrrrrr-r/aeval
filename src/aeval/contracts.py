@@ -503,6 +503,10 @@ class CollectionManifest(BaseModel):
     trial_id: str
     outcomes: list[CollectOutcome] = Field(default_factory=list)
     artifacts: list[ArtifactRef] = Field(default_factory=list)
+    # Binding to the runtime lock the collection ran under (P0-6):
+    # an empty digest means the manifest was produced outside the
+    # lock-verified pipeline and the evidence is not trustworthy.
+    runtime_lock_digest: str = ""
 
 
 class EvidenceBundle(BaseModel):
@@ -679,6 +683,28 @@ class DshReleaseLock(BaseModel):
     acp_sdk_version: str | None = None
     lockfile_sha256: str | None = None
     experimental: bool = True
+
+
+class ObservedIdentity(BaseModel):
+    """Identity observed in a LIVE sandbox, bound to the expected lock.
+
+    Distinct from the pre-start approved ``RuntimeLock`` (doc §3.4):
+    these are measured values collected after the template build and
+    sandbox start — e2b SDK presence, image digest, template alias,
+    sandbox architecture, actual Node/npm/plugin content. Every field
+    is optional because an unavailable observation is itself a binding
+    failure (never a silent default); the binding function decides.
+    """
+
+    backend: str
+    e2b_sdk_version: str | None = None
+    template_alias: str | None = None
+    sandbox_id: str | None = None
+    architecture: str | None = None
+    image_digest: str | None = None
+    node_version: str | None = None
+    npm_package_versions: dict[str, str] = Field(default_factory=dict)
+    observed_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
 
 class RuntimeLock(BaseModel):

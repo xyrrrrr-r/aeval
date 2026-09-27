@@ -52,27 +52,93 @@ async def probe_observable(
 ) -> Any:
     """Read one observable through the environment's out-of-band API.
 
-    ``inspect()``/``callLog()`` are a different API surface from the
-    agent's tools (L3 isolation): the agent can never call this.
+    The read uses the REAL environment API — ``await env.exec(...)`` —
+    which is a different surface from the agent's tools (L3 isolation):
+    the agent can never invoke this. There is no ``env.inspect()`` in
+    Harbor (P0-2: that was a fabricated API).
+
+    Supported ``source`` kinds:
+    - ``file:<path>`` — read the file inside the sandbox and parse it
+      according to the observable type;
+    - anything else (``db:...``) is an explicit unsupported probe: it
+      fails closed with a clear message instead of fabricating a value.
     """
     if env_handle is None:
-        raise _BaselineFailure(observable.name, observable.type, None, observable.source)
-    method = getattr(env_handle, "inspect", None)
-    if method is None:
         raise _BaselineFailure(
-            observable.name, observable.type, "<no inspect() on env>", observable.source
+            observable.name, observable.type,
+            "<no environment handle>", observable.source,
         )
-    value = method(observable.name)
-    if isinstance(value, dict) and "error" in value:
-        raise _BaselineFailure(observable.name, observable.type, value["error"], observable.source)
-    return value
+    source = observable.source or ""
+    kind, _, payload = source.partition(":")
+    if kind != "file" or not payload:
+        raise _BaselineFailure(
+            observable.name, observable.type,
+            f"<unsupported observable source: {source!r}>", source,
+        )
+    exec_fn = getattr(env_handle, "exec", None)
+    if not callable(exec_fn):
+        raise _BaselineFailure(
+            observable.name, observable.type,
+            "<environment handle exposes no exec()>", source,
+        )
+    path = payload.strip()
+    result = await exec_fn(f"cat {path}")
+    exit_code = getattr(result, "exit_code", None)
+    if exit_code is None:
+        raise _BaselineFailure(
+            observable.name, observable.type,
+            "<exec returned no exit code>", source,
+        )
+    if exit_code != 0:
+        raise _BaselineFailure(
+            observable.name, observable.type,
+            f"<cat {path} exited {exit_code}>", source,
+        )
+    stdout = getattr(result, "stdout", "")
+    return _parse_observable_value(stdout, observable)
+
+
+def _parse_observable_value(raw: Any, observable: ObservableSpec) -> Any:
+    text = raw.decode() if isinstance(raw, bytes) else str(raw)
+    if observable.type == "string":
+        return text.strip()
+    if observable.type == "number":
+        try:
+            return float(text.strip())
+        except ValueError:
+            raise _BaselineFailure(
+                observable.name, observable.type,
+                f"<not a number: {text.strip()!r}>", observable.source,
+            )
+    if observable.type == "json":
+        import json
+
+        try:
+            return json.loads(text)
+        except ValueError:
+            raise _BaselineFailure(
+                observable.name, observable.type,
+                f"<not valid json: {text.strip()!r}>", observable.source,
+            )
+    raise _BaselineFailure(
+        observable.name, observable.type,
+        f"<unsupported observable type: {observable.type!r}>",
+        observable.source,
+    )
 
 
 async def assert_baseline_arrival(
     env_handle: Any,
     assertions: list[BaselineAssertion],
+    observables: list[ObservableSpec] | None = None,
 ) -> tuple[bool, list[str]]:
-    """Evaluate all baseline assertions; return (ok, failure messages)."""
+    """Evaluate all baseline assertions; return (ok, failure messages).
+
+    ``observable:<name>`` probes resolve to the SUITE-declared
+    ObservableSpec (the real source syntax) before probing, so a
+    baseline can never invent its own probe target.
+    """
+    by_name = {o.name: o for o in (observables or [])}
     failures: list[str] = []
     for assertion in assertions:
         try:
@@ -85,7 +151,7 @@ async def assert_baseline_arrival(
             if assertion.probe is None:
                 failures.append(f"baseline {assertion.id!r}: no probe and no assert")
                 continue
-            actual = await _run_probe(env_handle, assertion.probe)
+            actual = await _run_probe(env_handle, assertion.probe, by_name)
             if _normalize(actual) != _normalize(assertion.equals):
                 raise _BaselineFailure(
                     assertion.id, assertion.equals, actual, assertion.probe
@@ -95,21 +161,29 @@ async def assert_baseline_arrival(
     return (not failures, failures)
 
 
-async def _run_probe(env_handle: Any, probe: str) -> Any:
+async def _run_probe(
+    env_handle: Any, probe: str, observables: dict[str, ObservableSpec] | None = None
+) -> Any:
     """Execute a probe of the form ``kind:payload``.
 
-    Supported kinds: ``observable`` (via env inspect), ``env`` (raw env
-    attribute access for policy assertions in tests), ``noop``.
+    Supported kinds: ``observable`` (resolve the suite-declared spec,
+    then read it out-of-band via the environment API), ``env`` (raw env
+    attribute access for policy assertions in tests), ``noop``. Any
+    other kind — including ``db:`` — fails closed: fabricating a value
+    is never an option.
     """
     kind, _, payload = probe.partition(":")
     kind = kind.strip()
     if kind == "noop":
         return None
     if kind == "observable":
-        return await probe_observable(
-            env_handle,
-            ObservableSpec(name=payload, type="json", source=probe),
-        )
+        spec = (observables or {}).get(payload)
+        if spec is None:
+            raise _BaselineFailure(
+                payload, "<suite-declared observable>",
+                "<observable not declared by the suite>", probe,
+            )
+        return await probe_observable(env_handle, spec)
     if kind == "env":
         if env_handle is None:
             return None
@@ -176,12 +250,19 @@ async def assert_isolation_policy(env_handle: Any) -> list[str]:
 
     An unasserted interactive-approval policy silently changes agent
     behavior mid-trial; we require a declared non-interactive policy.
+
+    P0-2: a missing environment handle or an unobservable policy is an
+    ISSUE, not a silent pass — an unobservable isolation policy cannot
+    be asserted, and an unassertable policy must not default to true.
     """
     if env_handle is None:
-        return []
+        return ["isolation policy unverifiable: no environment handle"]
     policy = getattr(env_handle, "approval_policy", None)
     if policy is None:
-        return []
+        return [
+            "isolation policy unverifiable: the environment exposes no "
+            "approval policy — refuse rather than assume a safe default"
+        ]
     if str(policy).strip().lower() == "ask":
         return [
             "approval policy is 'ask' — interactive approval is not "
@@ -191,20 +272,48 @@ async def assert_isolation_policy(env_handle: Any) -> list[str]:
 
 
 async def assert_egress_effective(env_handle: Any) -> list[str]:
-    """Egress must be actually off inside the copy, not just configured.
+    """Egress must be actually enforced inside the copy, not just configured.
 
-    The assertion is read from the live environment (what the container
-    can reach), not from our own config — the difference is exactly
-    what X2 is about.
+    P0-2: the assertion reads the REAL ``network_policy`` of the live
+    environment (what the container can reach), never a fabricated
+    ``egress_policy`` attribute. Semantics:
+
+    - ``public`` — uncontrolled egress: rejected;
+    - ``no-network`` — fixture semantics: accepted;
+    - ``allowlist`` — the broker/package-source allowlist the doc
+      mandates for the model phase: ACCEPTED (the old check
+      misrejected it as "not none"); an empty host list is rejected as
+      a misdeclared allowlist;
+    - no handle / no observable policy — an ISSUE, never a silent pass.
     """
     if env_handle is None:
+        return ["egress policy unverifiable: no environment handle"]
+    policy = getattr(env_handle, "network_policy", None)
+    if policy is None:
+        return [
+            "egress policy unverifiable: the environment exposes no "
+            "network_policy — refuse rather than assume a safe default"
+        ]
+    mode = getattr(policy, "network_mode", None)
+    mode_str = str(getattr(mode, "value", mode) or "").strip().lower()
+    if mode_str == "public":
+        return [
+            "egress is 'public' inside the copy — uncontrolled network "
+            "access is not assertable; use no-network or an allowlist"
+        ]
+    if mode_str == "allowlist":
+        hosts = getattr(policy, "allowed_hosts", None) or []
+        if not hosts:
+            return [
+                "egress allowlist is empty — declare no-network instead of "
+                "an allowlist that reaches nothing"
+            ]
         return []
-    egress = getattr(env_handle, "egress_policy", None)
-    if egress is None:
+    if mode_str in ("no-network", "no_network", "none", "off", "false"):
         return []
-    if str(egress).strip().lower() not in ("none", "off", "false"):
-        return [f"egress is not 'none' inside the copy: {egress!r}"]
-    return []
+    return [
+        f"egress policy is not recognizable as enforced: {mode_str!r}"
+    ]
 
 
 async def on_environment_started(event: Any, context: EvaluationContext) -> None:
@@ -218,7 +327,9 @@ async def on_environment_started(event: Any, context: EvaluationContext) -> None
 
     env_handle = getattr(event, "environment", None) or getattr(event, "env", None)
 
-    ok, failures = await assert_baseline_arrival(env_handle, suite.baselines)
+    ok, failures = await assert_baseline_arrival(
+        env_handle, suite.baselines, suite.observables
+    )
     if not ok:
         state.baseline_ok = False
         state.baseline_failures.extend(failures)

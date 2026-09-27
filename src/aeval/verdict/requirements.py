@@ -39,12 +39,15 @@ def cannot_judge_for_missing_fields(
     grader_id: str,
     grader_version: str,
     layer: str = "outcome",
+    veto: bool = False,
 ) -> GradeResult | None:
     """Return a cannot_judge result when required fields are degraded.
 
     Returns None when every required field is ``ok`` — the grader may
     proceed. A ``partial`` field is also blocking for strict rubrics:
-    a partially-captured token count can flip cost metrics.
+    a partially-captured token count can flip cost metrics. The result
+    carries the grader's declared veto so a generated outcome cannot
+    dodge the suite's veto contract.
     """
     missing: list[str] = []
     degraded: list[str] = []
@@ -68,6 +71,7 @@ def cannot_judge_for_missing_fields(
         grader_id=grader_id,
         grader_version=grader_version,
         layer=layer,  # type: ignore[arg-type]
+        veto=veto,
         score=Score(value=None, valid=False, invalid_reasons=list(reasons)),
         status="cannot_judge",
         reasons=reasons,

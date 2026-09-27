@@ -68,7 +68,9 @@ def aggregate_run(
     )
     counts: dict[str, int] = {}
     for t in trials:
-        verdict = t.verdict or "cannot_judge"
+        # None is not cannot_judge: an unclassified trial is its own
+        # display class so reports cannot launder missing verdicts.
+        verdict = t.verdict if t.verdict is not None else "unfinalized"
         counts[verdict] = counts.get(verdict, 0) + 1
     summary.verdict_counts = counts
 

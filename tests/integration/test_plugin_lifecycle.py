@@ -396,3 +396,32 @@ async def test_job_end_exception_can_downgrade_a_nominal_end(owned_job):
     state = plugin._context.trials[str(event.trial_id)]
     assert state.phase == "failed"
     assert state.exception["exception_message"] == "fixture failure"
+
+
+async def test_agent_start_on_tainted_trial_is_recorded(owned_job, monkeypatch):
+    """P0-2: the model phase starting despite infra failures must be
+    visible in the trial record — the agent ran on a tainted baseline."""
+    from aeval.hooks.context import TrialState  # noqa: F401
+
+    plugin = AevalPlugin()
+    await plugin.on_job_start(owned_job)
+    context = plugin._context
+    start = event_for(owned_job)
+    await emit(owned_job, start, TrialEvent.START)
+    state = context.trials[str(start.trial_id)]
+    state.mark_infra_invalid("baseline_arrival: seed mismatch")
+
+    agent_start = start.model_copy(update={"event": TrialEvent.AGENT_START})
+    hook = owned_job._trial_queue._hooks[TrialEvent.AGENT_START][-1]
+    await hook(agent_start)
+
+    assert "agent started despite recorded infra failures" in state.evidence_issues
+    assert "agent started despite recorded infra failures" in state.infra_invalid_reasons
+
+    # a clean trial records nothing
+    clean = event_for(owned_job, name="clean")
+    await emit(owned_job, clean, TrialEvent.START)
+    clean_state = context.trials[str(clean.trial_id)]
+    await hook(clean.model_copy(update={"event": TrialEvent.AGENT_START}))
+    assert not clean_state.evidence_issues
+    assert "agent started despite recorded infra failures" not in clean_state.infra_invalid_reasons

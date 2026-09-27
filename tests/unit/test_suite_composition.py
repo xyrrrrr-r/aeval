@@ -49,7 +49,9 @@ def _write_task(root: Path, name: str = "example") -> Path:
     (task / "tests").mkdir()
     (task / "task.toml").write_text(
         'schema_version = "1.4"\n'
-        '[environment]\ndocker_image = "alpine:3.20"\n',
+        '[environment]\ndocker_image = "alpine:3.20"\n'
+        "[[verifier.collect]]\n"
+        'command = "aeval-collect runtime_dump mock_call_log dsh_session canonical_transcript"\n',
         encoding="utf-8",
     )
     (task / "instruction.md").write_text("Return the example result.\n", encoding="utf-8")
@@ -708,3 +710,43 @@ def test_source_commit_requires_a_full_lowercase_hex_hash(tmp_path, monkeypatch,
     _mock_git(monkeypatch, tmp_path, outputs={READ_ONLY_GIT[3]: commit + "\n"})
     with pytest.raises(SuiteError, match="full 40-character Git commit"):
         suite_source_commit(tmp_path)
+
+
+# --- P0-2: unsupported sandbox semantics rejected at suite time ------
+
+
+def test_task_mounts_are_rejected_at_suite_time(native_suite):
+    """e2b sandboxes have no host bind mounts; a task that declares
+    mounts cannot have its evidence collected — refuse at validation."""
+    task = native_suite / "tasks" / "example" / "task.toml"
+    text = task.read_text(encoding="utf-8")
+    task.write_text(
+        text + '\n[[environment.mounts]]\ntype = "bind"\nsource = "/host"\ntarget = "/data"\n',
+        encoding="utf-8",
+    )
+    with pytest.raises(SuiteError, match="mounts"):
+        compose_harbor_job(load_suite(native_suite))
+
+
+@pytest.mark.parametrize("filter_key", ["include_logs", "exclude_logs"])
+def test_job_verifier_log_filters_are_rejected(native_suite, filter_key):
+    """P0-2: job-level verifier log filters can silently drop required
+    evidence logs — rejected at suite validation."""
+    job = native_suite / JOB
+    _write_yaml(job, {
+        "n_attempts": 2, "n_concurrent_trials": 1,
+        "agents": [{"name": "nop"}],
+        "verifier": {filter_key: ["*.log"]},
+    })
+    with pytest.raises(SuiteError, match="include_logs/exclude_logs"):
+        compose_harbor_job(load_suite(native_suite))
+
+
+def test_task_toml_verifier_fields_are_strictly_typed(native_suite):
+    """Task-level TOML admits no unknown verifier keys at all — Harbor's
+    own strict validation rejects them before any aeval logic runs."""
+    task = native_suite / "tasks" / "example" / "task.toml"
+    text = task.read_text(encoding="utf-8")
+    task.write_text(text + '\n[verifier]\ninclude_logs = ["*.log"]\n', encoding="utf-8")
+    with pytest.raises(SuiteError, match="Invalid native Harbor task"):
+        compose_harbor_job(load_suite(native_suite))

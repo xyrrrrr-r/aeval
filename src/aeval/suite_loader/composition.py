@@ -155,7 +155,35 @@ def _validate_local_task(suite: ResolvedSuite, path: Path, job_data: dict[str, A
     if provenance is None:
         provenance = suite.overlay.provenance.model_dump()
     validate_task_provenance({"provenance": provenance}, path)
+    # P0-2: reject unsupported sandbox semantics up front. e2b
+    # sandboxes have no host bind mounts (capabilities.mounted is
+    # False; logs are downloaded, not mounted), and verifier log
+    # filters can silently drop required evidence.
+    environment = data.get("environment") or {}
+    if isinstance(environment, dict) and environment.get("mounts"):
+        raise SuiteError(
+            f"Task {path} declares [environment] mounts — the e2b backend "
+            "has no host bind mounts; mount-based evidence cannot be "
+            "collected, so the task is refused at suite validation"
+        )
+
     validate_thin_overlay(suite, data, job_data)
+    # P0-6: the task must declare [[verifier.collect]] commands for
+    # every required evidence output — at suite time, before any run.
+    from aeval.hooks.evidence import (
+        EvidenceIntegrityError,
+        build_required_collect_plan,
+        validate_collect_declarations,
+    )
+
+    try:
+        validate_collect_declarations(
+            task.config.verifier.collect
+            if getattr(task.config, "verifier", None) is not None else [],
+            build_required_collect_plan(suite),
+        )
+    except EvidenceIntegrityError as exc:
+        raise SuiteError(f"Task {path} fails the evidence collect plan: {exc}") from exc
 
 
 def compose_harbor_job(suite: ResolvedSuite) -> JobConfig:
@@ -177,6 +205,13 @@ def compose_harbor_job(suite: ResolvedSuite) -> JobConfig:
     ):
         raise SuiteError("Harbor job must explicitly select at least one agent")
     job = JobConfig.model_validate(deepcopy(job_data), extra="forbid")
+    # P0-2: verifier log filters can silently drop required evidence
+    # logs — an evaluation job must collect the full verifier log set.
+    if job.verifier.include_logs or job.verifier.exclude_logs:
+        raise SuiteError(
+            "job declares verifier include_logs/exclude_logs — log "
+            "filters can silently drop required evidence logs"
+        )
     if job.install_only or job.verifier.disable:
         raise SuiteError("Evaluation suites cannot disable verification or use install_only")
     if suite.overlay.image:

@@ -164,11 +164,9 @@ async def test_run_boots_headless_once_with_the_isolated_home(tmp_path: Path) ->
     assert len(task_vars) == 1
     assert call["env"][task_vars[0]] == "secret instruction"
     assert agent.session_id == SESSION_ID
-    assert context.metadata == {
-        "dsh_session_id": SESSION_ID,
-        "dsh_run_stream": "/logs/agent/dsh-run.jsonl",
-        "dsh_home": "/logs/agent/dsh-home",
-    }
+    # P0-5 fix: run() must NOT write context.metadata — a non-empty
+    # context makes Harbor skip populate_context_post_run entirely.
+    assert context.metadata is None
 
 
 async def test_a_second_run_forgets_the_previous_session(tmp_path: Path) -> None:
@@ -326,7 +324,10 @@ def test_collection_reads_the_official_root_with_the_announced_session_id(
 ) -> None:
     agent = make_agent(tmp_path)
     agent._session_id = SESSION_ID
-    host_session_root(tmp_path / "agent-logs").mkdir(parents=True)
+    session_root = host_session_root(tmp_path / "agent-logs")
+    session_dir = session_root / SESSION_ID
+    session_dir.mkdir(parents=True)
+    (session_dir / "session.v4.jsonl.zstd").write_bytes(b"official record")
     captured: list[Any] = []
 
     def fake_read(request: Any) -> DshReaderResponse:
@@ -405,3 +406,129 @@ def test_partial_usage_leaves_the_context_empty(
 
     assert context.n_input_tokens is None
     assert context.n_output_tokens is None
+
+
+def test_post_run_populates_metadata_and_usage(tmp_path, monkeypatch):
+    """P0-5 fix: metadata now lands in populate_context_post_run, so
+    Harbor's empty-context backfill callback actually runs."""
+    from harbor.models.agent.context import AgentContext
+
+    agent = make_agent(tmp_path)
+    agent._session_id = SESSION_ID
+    session_dir = host_session_root(tmp_path / "agent-logs") / SESSION_ID
+    session_dir.mkdir(parents=True)
+    (session_dir / "session.v4.jsonl.zstd").write_bytes(b"official record")
+
+    monkeypatch.setattr(
+        "aeval.agents.dsh.agent.read_dsh_session_via_bridge", lambda request: _response()
+    )
+    trajectory = _trajectory()
+    monkeypatch.setattr(
+        "aeval.agents.dsh.agent.convert_dsh_read_to_atif", lambda response: trajectory
+    )
+
+    context = AgentContext()
+    agent.populate_context_post_run(context)
+    assert context.metadata == {
+        "dsh_session_id": SESSION_ID,
+        "dsh_run_stream": "/logs/agent/dsh-run.jsonl",
+        "dsh_home": "/logs/agent/dsh-home",
+    }
+
+
+def test_post_run_backfills_usage_from_final_metrics(tmp_path, monkeypatch):
+    from harbor.models.agent.context import AgentContext
+
+    agent = make_agent(tmp_path)
+    agent._session_id = SESSION_ID
+    session_dir = host_session_root(tmp_path / "agent-logs") / SESSION_ID
+    session_dir.mkdir(parents=True)
+    (session_dir / "session.v4.jsonl.zstd").write_bytes(b"official record")
+    monkeypatch.setattr(
+        "aeval.agents.dsh.agent.read_dsh_session_via_bridge", lambda request: _response()
+    )
+    trajectory = _trajectory()
+    monkeypatch.setattr(
+        "aeval.agents.dsh.agent.convert_dsh_read_to_atif", lambda response: trajectory
+    )
+
+    class Metrics:
+        total_prompt_tokens = 111
+        total_completion_tokens = 22
+        total_cached_tokens = 5
+
+    class Atif:
+        session_id = SESSION_ID
+        final_metrics = Metrics()
+
+    class TranscriptWithMetrics:
+        atif = Atif()
+
+    agent._transcript = None
+    monkeypatch.setattr(
+        "aeval.agents.dsh.agent.build_canonical_transcript",
+        lambda atif, evidence, stop_reason: TranscriptWithMetrics(),
+    )
+    context = AgentContext()
+    agent.populate_context_post_run(context)
+    assert context.n_input_tokens == 111
+    assert context.n_output_tokens == 22
+    assert context.n_cache_tokens == 5
+
+
+# --- P0-5: download completeness (fail closed on partial syncs) -------
+
+
+def test_read_fails_closed_when_session_dir_missing(tmp_path, monkeypatch):
+    agent = make_agent(tmp_path)
+    agent._session_id = SESSION_ID
+    host_session_root(tmp_path / "agent-logs").mkdir(parents=True)  # root but no session
+    monkeypatch.setattr(
+        "aeval.agents.dsh.agent.resolve_session_reader", lambda explicit=None: Path("reader.js")
+    )
+    with pytest.raises(DshRunError, match="session directory missing"):
+        agent.read_trial_session()
+
+
+def test_read_fails_closed_when_record_missing(tmp_path, monkeypatch):
+    agent = make_agent(tmp_path)
+    agent._session_id = SESSION_ID
+    (host_session_root(tmp_path / "agent-logs") / SESSION_ID).mkdir(parents=True)
+    monkeypatch.setattr(
+        "aeval.agents.dsh.agent.resolve_session_reader", lambda explicit=None: Path("reader.js")
+    )
+    with pytest.raises(DshRunError, match="session record missing"):
+        agent.read_trial_session()
+
+
+def test_read_fails_closed_on_duplicate_records(tmp_path, monkeypatch):
+    agent = make_agent(tmp_path)
+    agent._session_id = SESSION_ID
+    session_dir = host_session_root(tmp_path / "agent-logs") / SESSION_ID
+    session_dir.mkdir(parents=True)
+    (session_dir / "session.v4.jsonl.zstd").write_bytes(b"one")
+    (session_dir / "session.v9.jsonl.zstd").write_bytes(b"two")
+    monkeypatch.setattr(
+        "aeval.agents.dsh.agent.resolve_session_reader", lambda explicit=None: Path("reader.js")
+    )
+    with pytest.raises(DshRunError, match="expected exactly one"):
+        agent.read_trial_session()
+
+
+def test_read_accepts_official_layout_with_lease_artifact(tmp_path, monkeypatch):
+    """The official backend leaves an empty session.lock lease file on
+    POSIX — it must not be mistaken for a second record."""
+    agent = make_agent(tmp_path)
+    agent._session_id = SESSION_ID
+    session_dir = host_session_root(tmp_path / "agent-logs") / SESSION_ID
+    session_dir.mkdir(parents=True)
+    (session_dir / "session.v4.jsonl.zstd").write_bytes(b"record")
+    (session_dir / "session.lock").write_bytes(b"")
+    monkeypatch.setattr(
+        "aeval.agents.dsh.agent.read_dsh_session_via_bridge", lambda request: _response()
+    )
+    monkeypatch.setattr(
+        "aeval.agents.dsh.agent.convert_dsh_read_to_atif", lambda response: _trajectory()
+    )
+    transcript = agent.read_trial_session()
+    assert transcript.atif.session_id == SESSION_ID

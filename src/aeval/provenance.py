@@ -30,6 +30,7 @@ from aeval.contracts import (
     HarborLock,
     ImageIdentity,
     NpmPackageLock,
+    ObservedIdentity,
     PluginIdentity,
     PythonEnvironmentLock,
     RuntimeLock,
@@ -37,6 +38,9 @@ from aeval.contracts import (
 
 __all__ = [
     "LockMismatchError",
+    "BackendNotAvailableError",
+    "verify_e2b_backend",
+    "bind_observed_identity",
     "OFFICIAL_HARBOR_VERSION",
     "OFFICIAL_HARBOR_COMMIT",
     "OFFICIAL_DSH_TAG",
@@ -378,3 +382,127 @@ def lock_report(lock: RuntimeLock) -> str:
     if lock.plugin:
         lines.append(f"plugin: {lock.plugin.distribution} {lock.plugin.version}")
     return "\n".join(lines)
+
+
+class BackendNotAvailableError(RuntimeError):
+    """The selected sandbox backend's SDK is not installed.
+
+    P0-2: startup-time detection — an e2b run with a missing SDK must
+    fail before any template or sandbox is created, not mid-trial.
+    """
+
+
+def verify_e2b_backend() -> str:
+    """Fail loudly unless the e2b SDK is importable; return its version.
+
+    The pyproject dependency is ``harbor[e2b]==0.23.0``; this check is
+    the runtime half — the extra being declared does not prove the SDK
+    landed in the active environment (doc §4.4).
+    """
+    try:
+        import e2b  # noqa: F401
+    except ImportError as exc:
+        raise BackendNotAvailableError(
+            "e2b backend selected but the e2b SDK is not importable — "
+            "install the harbor[e2b] extra into the active environment "
+            "before starting a run"
+        ) from exc
+    version = getattr(e2b, "__version__", None)
+    if not version:
+        from importlib.metadata import PackageNotFoundError, version as dist_version
+
+        try:
+            version = dist_version("e2b")
+        except PackageNotFoundError:
+            version = None
+    if not version:
+        raise BackendNotAvailableError(
+            "e2b SDK is importable but its version is not determinable — "
+            "record the actual version before binding an observed identity"
+        )
+    return str(version)
+
+
+def bind_observed_identity(
+    observed: ObservedIdentity, expected: RuntimeLock
+) -> None:
+    """Bind a live sandbox's observed identity to the expected lock (§3.4).
+
+    Fail-closed: every expected dimension must be OBSERVED and equal.
+    A missing observation is a binding failure — never a silent
+    default, never a rewrite of the already-referenced lock.
+
+    - image digest: must match the locked ``sandbox`` image identity;
+    - architecture: must match the locked image platform (arm64);
+    - Node version: must fall inside the locked DSH node matrix
+      (``24.20.0``-style exact or ``22.19.x``-style minor range);
+    - e2b SDK version: must be recorded (observed from the SDK itself).
+    """
+    if observed.backend != "e2b":
+        raise LockMismatchError(
+            f"observed backend: expected 'e2b', actual {observed.backend!r}"
+        )
+    if not observed.e2b_sdk_version:
+        raise LockMismatchError(
+            "observed identity records no e2b SDK version — the SDK "
+            "presence must be observed, not assumed"
+        )
+
+    sandbox_image = expected.images.get("sandbox")
+    if sandbox_image is None:
+        raise LockMismatchError(
+            "expected lock pins no 'sandbox' image — nothing to bind the "
+            "observed sandbox against"
+        )
+    if not observed.image_digest:
+        raise LockMismatchError(
+            "observed identity records no image digest — an unobserved "
+            "image cannot be bound to the expected lock"
+        )
+    if observed.image_digest.removeprefix("sha256:") != sandbox_image.digest.removeprefix("sha256:"):
+        raise LockMismatchError(
+            "sandbox image digest: expected "
+            f"{sandbox_image.digest!r}, actual {observed.image_digest!r}"
+        )
+    if not observed.architecture:
+        raise LockMismatchError(
+            "observed identity records no architecture — the sandbox "
+            "architecture must be measured, not assumed"
+        )
+    if observed.architecture != sandbox_image.platform:
+        raise LockMismatchError(
+            f"sandbox architecture: expected {sandbox_image.platform!r}, "
+            f"actual {observed.architecture!r}"
+        )
+
+    node_matrix = expected.dsh.node_versions if expected.dsh else []
+    if not node_matrix:
+        raise LockMismatchError(
+            "expected lock declares no DSH node matrix — cannot bind the "
+            "observed Node version"
+        )
+    if not observed.node_version:
+        raise LockMismatchError(
+            "observed identity records no Node version — the runtime "
+            "Node version must be measured inside the sandbox"
+        )
+    if not _node_in_matrix(observed.node_version, node_matrix):
+        raise LockMismatchError(
+            f"observed Node version {observed.node_version!r} is outside "
+            f"the locked matrix {node_matrix} — either install a matrix "
+            "version or revise the matrix with a recorded decision"
+        )
+
+
+def _node_in_matrix(version: str, matrix: list[str]) -> bool:
+    """``24.20.0`` matches exactly; ``22.19.x`` matches any 22.19 patch."""
+    version = version.strip().lstrip("v")
+    for allowed in matrix:
+        allowed = allowed.strip().lstrip("v")
+        if allowed.endswith(".x"):
+            prefix = allowed[:-2]
+            if version.startswith(prefix + "."):
+                return True
+        elif version == allowed:
+            return True
+    return False
