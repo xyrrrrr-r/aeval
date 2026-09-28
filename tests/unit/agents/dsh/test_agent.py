@@ -339,7 +339,7 @@ def test_collection_reads_the_official_root_with_the_announced_session_id(
 
     monkeypatch.setattr("aeval.agents.dsh.agent.read_dsh_session_via_bridge", fake_read)
     monkeypatch.setattr(
-        "aeval.agents.dsh.agent.convert_dsh_read_to_atif", lambda response: _trajectory()
+        "aeval.agents.dsh.agent.convert_dsh_read_to_atif", lambda response, **_: _trajectory()
     )
 
     transcript = agent.read_trial_session()
@@ -428,7 +428,7 @@ def test_post_run_populates_metadata_and_usage(tmp_path, monkeypatch):
     )
     trajectory = _trajectory()
     monkeypatch.setattr(
-        "aeval.agents.dsh.agent.convert_dsh_read_to_atif", lambda response: trajectory
+        "aeval.agents.dsh.agent.convert_dsh_read_to_atif", lambda response, **_: trajectory
     )
 
     context = AgentContext()
@@ -453,7 +453,7 @@ def test_post_run_backfills_usage_from_final_metrics(tmp_path, monkeypatch):
     )
     trajectory = _trajectory()
     monkeypatch.setattr(
-        "aeval.agents.dsh.agent.convert_dsh_read_to_atif", lambda response: trajectory
+        "aeval.agents.dsh.agent.convert_dsh_read_to_atif", lambda response, **_: trajectory
     )
 
     class Metrics:
@@ -532,7 +532,7 @@ def test_read_accepts_official_layout_with_lease_artifact(tmp_path, monkeypatch)
         "aeval.agents.dsh.agent.read_dsh_session_via_bridge", lambda request: _response()
     )
     monkeypatch.setattr(
-        "aeval.agents.dsh.agent.convert_dsh_read_to_atif", lambda response: _trajectory()
+        "aeval.agents.dsh.agent.convert_dsh_read_to_atif", lambda response, **_: _trajectory()
     )
     transcript = agent.read_trial_session()
     assert transcript.atif.session_id == SESSION_ID
@@ -601,7 +601,7 @@ def test_read_accepts_the_project_scoped_session_layout(tmp_path, monkeypatch):
         "aeval.agents.dsh.agent.read_dsh_session_via_bridge", lambda request: _response()
     )
     monkeypatch.setattr(
-        "aeval.agents.dsh.agent.convert_dsh_read_to_atif", lambda response: _trajectory()
+        "aeval.agents.dsh.agent.convert_dsh_read_to_atif", lambda response, **_: _trajectory()
     )
     transcript = agent.read_trial_session()
     assert transcript.atif.session_id == SESSION_ID
