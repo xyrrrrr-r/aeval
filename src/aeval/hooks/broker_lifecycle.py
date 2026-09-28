@@ -28,6 +28,7 @@ from __future__ import annotations
 import json
 import os
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Mapping
 
@@ -303,3 +304,14 @@ def stop_trial_broker(state: TrialState, *, reason: str = "trial_terminal") -> N
         return
     if code not in (0, None):
         state.mark_infra_invalid(f"model broker exited with code {code} on stop")
+    # Keep the broker's own account of any lease it closed: an unexplained
+    # closed lease is otherwise impossible to attribute (real-chain).
+    tail = str(getattr(broker, "_stderr_tail", "") or "").strip()
+    if tail and tail not in state.broker_diagnostics:
+        state.broker_diagnostics.append(tail)
+        # Pair it with the owner's own teardown time: a broker stop earlier
+        # than this line cannot have come from the normal trial-end stop, so
+        # an external signal is distinguishable from our own teardown.
+        state.broker_diagnostics.append(
+            f"owner stopped broker at={datetime.now(timezone.utc).isoformat()} reason={reason}"
+        )

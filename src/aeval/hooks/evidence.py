@@ -467,6 +467,7 @@ async def finalize_trial_record(event: Any, context: Any) -> None:
             "evidence_ok": state.evidence_ok,
             "evidence_issues": state.evidence_issues,
             "infra_invalid_reasons": state.infra_invalid_reasons,
+            "broker_diagnostics": state.broker_diagnostics,
             "stop_reason": state.stop_reason,
         }
         summary_path.write_text(

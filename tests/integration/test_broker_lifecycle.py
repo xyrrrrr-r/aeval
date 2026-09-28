@@ -415,3 +415,63 @@ def test_broker_that_died_is_reported_with_its_stderr(tmp_path):
     assert "EADDRINUSE" in message
     silent = note_broker_unexpected_exit(_State(_Broker(0)))
     assert silent is not None and "no stderr captured" in silent
+
+
+def test_stop_trial_broker_keeps_the_brokers_own_stop_attribution():
+    """A lease that closes for an unexplained reason must be attributable.
+
+    The broker writes its lease-stop lines to stderr; the trial record is
+    the only place they survive (real-chain finding: without them a closed
+    lease could not be blamed on any path)."""
+    from aeval.hooks.broker_lifecycle import stop_trial_broker
+    from aeval.hooks.context import TrialState
+
+    class _Broker:
+        def __init__(self, code, tail):
+            self._code = code
+            self._stderr_tail = tail
+
+        def stop(self, reason):
+            return self._code
+
+    state = TrialState(trial_id="t1")
+    state.broker = _Broker(
+        0, "[aeval-broker] lease stop reason=infra_error cause=client_abort_in_flight"
+    )
+    stop_trial_broker(state)
+    assert state.broker is None
+    assert len(state.broker_diagnostics) == 2
+    assert "client_abort_in_flight" in state.broker_diagnostics[0]
+    assert state.broker_diagnostics[1].startswith("owner stopped broker at=")
+    # a silent broker adds no diagnostics and no infra reason
+    quiet = TrialState(trial_id="t2")
+    quiet.broker = _Broker(0, "")
+    stop_trial_broker(quiet)
+    assert quiet.broker_diagnostics == []
+    assert quiet.infra_invalid_reasons == []
+
+
+def test_audit_records_broker_diagnostics(tmp_path):
+    """The trial's own audit file carries the broker diagnostics."""
+    import asyncio
+    import json
+
+    from aeval.hooks.context import TrialState
+    from aeval.hooks.evidence import finalize_trial_record
+
+    state = TrialState(trial_id="t1", trial_dir=tmp_path)
+    state.phase = "ended"
+    state.broker_diagnostics = ["[aeval-broker] lease stop reason=infra_error cause=dispatch_incomplete"]
+
+    class _Event:
+        trial_id = "t1"
+
+    class _Context:
+        def trial_state(self, trial_id):
+            assert trial_id == "t1"
+            return state
+
+    asyncio.run(finalize_trial_record(_Event(), _Context()))
+    summary = json.loads((tmp_path / "aeval_audit.json").read_text(encoding="utf-8"))
+    assert summary["broker_diagnostics"] == state.broker_diagnostics
+    assert summary["trial_id"] == "t1"

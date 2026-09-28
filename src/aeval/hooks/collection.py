@@ -210,9 +210,14 @@ async def collect_trial_evidence(
     # empty object that could be mistaken for a passing check.
     calls = list(broker_calls or [])
     if not calls:
+        # Truthful wording: an empty list means THIS collector saw no call
+        # records. The in-sandbox collect hook cannot see the host-side
+        # broker log, and the previous wording asserted "no model broker was
+        # started", which was false on the real chain where the broker had
+        # served the very call the run was scored on (real-chain finding).
         calls = [{
             "event": "no_calls_observed",
-            "reason": "no model broker was started for this trial",
+            "reason": "this collector observed no broker call records for the trial",
             "recorded_at": _now().isoformat(),
         }]
     outcome, ref = produce_mock_call_log(trial_dir, calls)

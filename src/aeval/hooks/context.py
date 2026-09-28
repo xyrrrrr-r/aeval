@@ -28,6 +28,9 @@ class TrialState:
     evidence_issues: list[str] = field(default_factory=list)
     stop_reason: str | None = None
     infra_invalid_reasons: list[str] = field(default_factory=list)
+    # Diagnostics the trial's model broker wrote to stderr (lease-stop
+    # attribution). Evidence only — never used for scoring.
+    broker_diagnostics: list[str] = field(default_factory=list)
     session_id: str = field(default_factory=lambda: str(uuid4()))
     phase: Literal["created", "running", "ended", "failed", "cancelled"] = "created"
     trial_dir: Path | None = None

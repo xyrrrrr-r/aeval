@@ -200,6 +200,11 @@ class ModelBrokerProcess:
                 stderr=subprocess.PIPE,
                 text=True,
                 start_new_session=True,
+                # Ask the broker for lease-stop attribution on stderr. It is
+                # silent by default (the bin's clean-stderr contract), and
+                # this process captures the stream, so a trial that ends
+                # with an unexplained closed lease carries its own evidence.
+                env={**os.environ, "AEVAL_BROKER_DIAG": "1"},
             )
         except OSError as exc:
             raise BrokerStartupError(f"cannot spawn broker: {exc}") from exc
@@ -270,11 +275,13 @@ class ModelBrokerProcess:
         self.url = url
         self.token_path = Path(token_path)
 
-    def _collect_stderr(self) -> str:
-        assert self.process is not None
+    def _collect_stderr(self, process: subprocess.Popen | None = None) -> str:
+        target = process if process is not None else self.process
+        if target is None:
+            return self._stderr_tail
         try:
-            if self.process.stderr is not None:
-                return self.process.stderr.read() or ""
+            if target.stderr is not None:
+                return target.stderr.read() or ""
         except OSError:
             pass
         return self._stderr_tail
@@ -298,6 +305,11 @@ class ModelBrokerProcess:
                 except (OSError, ProcessLookupError):
                     process.kill()
                 process.wait()
+        # The process is gone, so the pipe holds every diagnostic it wrote
+        # before exiting: keep the tail as evidence for the trial record.
+        tail = self._collect_stderr(process).strip()
+        if tail:
+            self._stderr_tail = tail
         for stream in (process.stdout, process.stderr):
             if stream is not None:
                 try:
