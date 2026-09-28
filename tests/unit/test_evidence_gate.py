@@ -247,14 +247,30 @@ def test_bundle_rejects_missing_descriptor(tmp_path, demo_suite, runtime_lock):
         verify_evidence_bundle(trial_dir, runtime_lock, _full_plan(demo_suite))
 
 
-def test_bundle_rejects_session_outside_session_root(tmp_path, demo_suite, runtime_lock):
-    """Session ownership: dsh_session must live under the descriptor root."""
+def test_bundle_rejects_a_session_root_without_the_official_record(
+    tmp_path, demo_suite, runtime_lock
+):
+    """Session ownership is by content: the descriptor's session_root
+    must hold the official record for its own session id."""
     trial_dir, _ = build_complete_trial_dir(
         tmp_path / "trial", plan=_full_plan(demo_suite), runtime_lock=runtime_lock,
-        session_root="elsewhere",
     )
-    (trial_dir / "elsewhere").mkdir()
-    with pytest.raises(EvidenceIntegrityError, match="not inside the descriptor's session_root"):
+    # the descriptor's session root exists but holds no record for this session
+    (trial_dir / "dsh-home" / "s-1" / "session.v4.jsonl.zstd").unlink()
+    with pytest.raises(EvidenceIntegrityError, match="holds no official record"):
+        verify_evidence_bundle(trial_dir, runtime_lock, _full_plan(demo_suite))
+
+
+def test_bundle_rejects_a_session_artifact_that_is_not_the_record(
+    tmp_path, demo_suite, runtime_lock
+):
+    """A dsh_session artifact whose bytes differ from the official record
+    must be refused (content ownership, not location)."""
+    trial_dir, _ = build_complete_trial_dir(
+        tmp_path / "trial", plan=_full_plan(demo_suite), runtime_lock=runtime_lock,
+    )
+    (trial_dir / "dsh-home" / "s-1" / "session.v4.jsonl.zstd").write_bytes(b"someone else")
+    with pytest.raises(EvidenceIntegrityError, match="not this trial's official session"):
         verify_evidence_bundle(trial_dir, runtime_lock, _full_plan(demo_suite))
 
 
@@ -436,3 +452,19 @@ def test_bundle_descriptor_rejected_on_escape(tmp_path, runtime_lock, demo_suite
         verify_evidence_bundle(
             trial_dir, runtime_lock, _full_plan(demo_suite)
         )
+
+
+def test_bundle_descriptor_is_found_where_harbor_downloads_it(tmp_path):
+    """Harbor downloads the sandbox agent logs tree into <trial>/agent/,
+    so the descriptor lands there — gate it at that path (the trial root
+    is still accepted for a deployment that copies it)."""
+    from aeval.hooks.evidence import find_bundle_descriptor
+
+    trial = tmp_path / "trial"
+    (trial / "agent").mkdir(parents=True)
+    assert find_bundle_descriptor(trial) is None
+    (trial / "agent" / "bundle_descriptor.json").write_text("{}")
+    assert find_bundle_descriptor(trial) == trial / "agent" / "bundle_descriptor.json"
+    (trial / "bundle_descriptor.json").write_text("{}")
+    # the downloaded location wins when both exist
+    assert find_bundle_descriptor(trial) == trial / "agent" / "bundle_descriptor.json"

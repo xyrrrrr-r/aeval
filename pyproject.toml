@@ -12,6 +12,16 @@ dependencies = [
     # review the lock churn when installing on the Linux host and never
     # treat the new transitive versions as verified until recorded.
     "harbor[e2b]==0.23.0",
+    # Environment-verification finding (example-lab, openEuler 24.03 aarch64):
+    # the self-hosted e2b cluster (api:3000 / client-proxy:3002) implements
+    # only the v1 sandbox API. e2b>=2.51.0 switched sandbox creation to
+    # POST /v2/sandboxes, which that API rejects with
+    # "404: validation error: method not allowed", so the upper bound is
+    # required. The lower bound is harbor 0.23.0's own requirement
+    # (e2b>=2.25.0): 2.24.0 is where SandboxNetworkUpdate — imported by
+    # harbor's e2b backend — first exists. 2.50.0 is the newest release
+    # that still speaks the v1 API.
+    "e2b>=2.25.0,<2.51.0",
     "pydantic>=2.12.0",
     "pyyaml>=6.0.2",
 ]

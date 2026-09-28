@@ -80,6 +80,7 @@ def write_broker_config(
     listen_host: str,
     token_out: Path,
     listen_port: int | None = None,
+    listen_tls: Mapping[str, str] | None = None,
     upstream: Mapping[str, Any],
     token_count: Mapping[str, Any] | None = None,
     timeout_ms: int | None = None,
@@ -104,6 +105,15 @@ def write_broker_config(
                                     or isinstance(listen_port, bool)
                                     or not 1 <= listen_port <= 65535):
         raise BrokerConfigError("broker config listen.port: must be a TCP port")
+    if listen_tls is not None:
+        for key in ("key", "cert"):
+            if not isinstance(listen_tls.get(key), str) or not listen_tls[key]:
+                raise BrokerConfigError(f"broker config listen.tls.{key}: required file path")
+        if listen_host in ("127.0.0.1", "::1", "localhost") and listen_tls:
+            raise BrokerConfigError(
+                "broker config listen.tls: a loopback listener does not need TLS "
+                "(and the sandbox could not trust it)"
+            )
     _identifier(str(upstream.get("apiKeyEnv", "")), "upstream.apiKeyEnv")
     _identifier(str(upstream.get("model", "")), "upstream.model")
     for key in ("baseUrl",):
@@ -121,6 +131,9 @@ def write_broker_config(
         "listen": {
             "host": listen_host,
             **({"port": listen_port} if listen_port is not None else {}),
+            # non-loopback listeners require TLS; the broker reads the PEM
+            # files these paths point at (D20)
+            **({"tls": dict(listen_tls)} if listen_tls else {}),
         },
         "tokenOut": str(token_out),
         "upstream": dict(upstream),

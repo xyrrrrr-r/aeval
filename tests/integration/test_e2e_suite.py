@@ -38,6 +38,42 @@ def test_suite_loads_and_composes(suite):
     assert job.n_concurrent_trials == 1
 
 
+def test_job_targets_the_e2b_backend(suite):
+    """Regression (found on the aarch64 e2b host): without an explicit
+    environment type the composed job falls back to the local docker
+    backend, which rejects the task's network_mode="no-network" and
+    aborts the run before any trial starts."""
+    from harbor.models.environment_type import EnvironmentType
+
+    job = compose_harbor_job(suite)
+    assert job.environment.type is EnvironmentType.E2B
+
+
+def test_dsh_job_carries_the_verified_agent_settings():
+    """The DSH job must pin what the environment verification proved
+    necessary: a tmpfs install prefix (the tree is ~500 MB), the official
+    session reader, and a raised setup bound (Harbor's default caused
+    AgentSetupTimeoutError on a cold sandbox)."""
+    job = (SUITE / "jobs" / "dsh.yaml").read_text("utf-8")
+    assert "aeval.agents.dsh.agent:DshAgent" in job
+    assert "install_prefix:" in job and "npm_cache:" in job
+    assert "session_reader:" in job
+    # it must be an agent-entry field: inside kwargs it is popped and ignored
+    assert "\n    override_setup_timeout_sec: 900" in job
+    assert "      override_setup_timeout_sec" not in job
+
+
+def test_verifier_always_writes_a_reward_file():
+    """Regression (real chain): Harbor requires a reward file; a verifier
+    that only exits non-zero makes the trial crash with
+    RewardFileNotFoundError before any grading happens."""
+    script = (SUITE / "tasks" / "hello" / "tests" / "test.sh").read_text("utf-8")
+    assert "/logs/verifier/reward.txt" in script
+    assert "exit 0" in script
+    # and it must not rely on the file existing
+    assert "[ -f /workspace/result ]" in script
+
+
 def test_observables_are_file_sources_only(suite):
     """P0-2: db:/screenshot:/dom: probes fail closed — the e2e suite
     must declare file: observables exclusively."""
@@ -68,17 +104,30 @@ def test_collect_plan_and_task_declarations_agree(suite):
         assert name in task_toml, f"task.toml must declare collect output {name}"
 
 
-def test_image_is_digest_pinned_everywhere():
-    """The sandbox image must be digest-pinned in task.toml AND the
-    Dockerfile — mutable tags are forbidden (thin overlay cannot
-    narrow at runtime)."""
+def test_image_is_digest_pinned_in_the_dockerfile_only():
+    """One source of image identity: the Dockerfile's digest-pinned FROM.
+
+    Regression (aarch64 host): Harbor's e2b backend builds the template
+    from ``environment.docker_image`` ALONE whenever that key is set,
+    silently ignoring the Dockerfile — which dropped the baseline seed
+    ``RUN`` and failed every trial's baseline gate. Mutable tags stay
+    forbidden."""
     task_toml = (SUITE / "tasks" / "hello" / "task.toml").read_text("utf-8")
     dockerfile = (SUITE / "tasks" / "hello" / "environment" / "Dockerfile").read_text("utf-8")
-    assert f"ubuntu@{PINNED_DIGEST}" in task_toml
     assert f"FROM ubuntu@{PINNED_DIGEST}" in dockerfile
+    active_assignments = [
+        line for line in task_toml.splitlines()
+        if line.strip().startswith("docker_image")
+    ]
+    assert not active_assignments, (
+        "declaring environment.docker_image makes Harbor ignore the "
+        "Dockerfile (and its baseline seed)"
+    )
     # no mutable tag reference anywhere
     assert '"ubuntu:24.04"' not in task_toml
     assert "FROM ubuntu:" not in dockerfile
+    # the seed the baseline asserts must come from the Dockerfile
+    assert "> /workspace/ready" in dockerfile
 
 
 def test_pinned_digest_is_the_arm64_manifest_digest():

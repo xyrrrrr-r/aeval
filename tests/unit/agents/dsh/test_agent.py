@@ -163,7 +163,7 @@ async def test_run_boots_headless_once_with_the_isolated_home(tmp_path: Path) ->
     task_vars = [key for key in call["env"] if key.startswith("AEVAL_DSH_TASK_")]
     assert len(task_vars) == 1
     assert call["env"][task_vars[0]] == "secret instruction"
-    assert agent.session_id == SESSION_ID
+    assert agent.dsh_session_id == SESSION_ID
     # P0-5 fix: run() must NOT write context.metadata — a non-empty
     # context makes Harbor skip populate_context_post_run entirely.
     assert context.metadata is None
@@ -176,7 +176,7 @@ async def test_a_second_run_forgets_the_previous_session(tmp_path: Path) -> None
     )
 
     await agent.run("first", environment, AgentContext())  # type: ignore[arg-type]
-    assert agent.session_id == SESSION_ID
+    assert agent.dsh_session_id == SESSION_ID
     agent._transcript = CanonicalTranscript(atif=_trajectory(), stop_reason="agent_claimed_done")
 
     failed = RecordingEnvironment(
@@ -186,7 +186,7 @@ async def test_a_second_run_forgets_the_previous_session(tmp_path: Path) -> None
         await agent.run("second", failed, AgentContext())  # type: ignore[arg-type]
     # A run that never announced a session must not inherit the old trial's
     # identity or its cached transcript.
-    assert agent.session_id is None
+    assert agent.dsh_session_id is None
     assert agent._transcript is None
 
 
@@ -194,9 +194,11 @@ async def test_a_pinned_trial_adopts_the_session_it_named(tmp_path: Path) -> Non
     agent = make_agent(tmp_path, session_id=PINNED_SESSION_ID)
     environment = RecordingEnvironment(
         results={
+            # --session-id resumes: the pinned session must already exist
+            "find ": ExecResult(stdout=f"/sessions/{PINNED_SESSION_ID}\n", return_code=0),
             "dsh --profile headless": ExecResult(
                 stdout=RUN_STREAM.replace(SESSION_ID, PINNED_SESSION_ID), return_code=0
-            )
+            ),
         }
     )
 
@@ -205,20 +207,21 @@ async def test_a_pinned_trial_adopts_the_session_it_named(tmp_path: Path) -> Non
     call = environment.matching("dsh --profile headless")
     # --session-id belongs to the headless program, so it follows --json.
     assert "--json --session-id " + PINNED_SESSION_ID in call["command"]
-    assert agent.session_id == PINNED_SESSION_ID
+    assert agent.dsh_session_id == PINNED_SESSION_ID
 
 
 async def test_a_pinned_trial_refuses_to_collect_another_session(tmp_path: Path) -> None:
     agent = make_agent(tmp_path, session_id=PINNED_SESSION_ID)
     environment = RecordingEnvironment(
-        results={"dsh --profile headless": ExecResult(stdout=RUN_STREAM, return_code=0)}
+        results={
+            "find ": ExecResult(stdout="/sessions/" + PINNED_SESSION_ID + "\n", return_code=0),"dsh --profile headless": ExecResult(stdout=RUN_STREAM, return_code=0)}
     )
 
     with pytest.raises(DshRunError, match="different session"):
         await agent.run("task", environment, AgentContext())  # type: ignore[arg-type]
     # The run drove a session nobody named; collecting it would grade the
     # wrong trajectory.
-    assert agent.session_id is None
+    assert agent.dsh_session_id is None
 
 
 @pytest.mark.parametrize(
@@ -378,6 +381,7 @@ def test_context_usage_comes_from_the_session_not_the_stream(
         ),
         stop_reason="agent_claimed_done",
     )
+    agent._session_id = SESSION_ID  # a successful run recorded its session
     context = AgentContext()
 
     agent.populate_context_post_run(context)
@@ -486,7 +490,7 @@ def test_read_fails_closed_when_session_dir_missing(tmp_path, monkeypatch):
     monkeypatch.setattr(
         "aeval.agents.dsh.agent.resolve_session_reader", lambda explicit=None: Path("reader.js")
     )
-    with pytest.raises(DshRunError, match="session directory missing"):
+    with pytest.raises(DshRunError, match="not found under"):
         agent.read_trial_session()
 
 
@@ -497,7 +501,7 @@ def test_read_fails_closed_when_record_missing(tmp_path, monkeypatch):
     monkeypatch.setattr(
         "aeval.agents.dsh.agent.resolve_session_reader", lambda explicit=None: Path("reader.js")
     )
-    with pytest.raises(DshRunError, match="session record missing"):
+    with pytest.raises(DshRunError, match="not found under"):
         agent.read_trial_session()
 
 
@@ -532,3 +536,205 @@ def test_read_accepts_official_layout_with_lease_artifact(tmp_path, monkeypatch)
     )
     transcript = agent.read_trial_session()
     assert transcript.atif.session_id == SESSION_ID
+
+
+# --- constrained-filesystem install prefix (aarch64 environment finding) ---
+
+
+def test_install_uses_default_global_prefix_by_default(tmp_path):
+    agent = make_agent(tmp_path)
+    assert agent.cli_bin_dir() is None
+    assert agent.get_version_command() == "dsh --version"
+
+
+def test_install_prefix_and_cache_are_honoured(tmp_path):
+    agent = make_agent(
+        tmp_path, install_prefix="/dev/shm/dshpkg", npm_cache="/dev/shm/npmcache"
+    )
+    assert agent.cli_bin_dir() == "/dev/shm/dshpkg/bin"
+    assert agent.get_version_command() == "/dev/shm/dshpkg/bin/dsh --version"
+
+
+async def test_install_redirects_prefix_and_cache(tmp_path):
+    """The 502 MB DSH tree does not fit the default sandbox root FS
+    (~268 MB free); the operator can redirect prefix + npm cache."""
+    agent = make_agent(
+        tmp_path, session_id=SESSION_ID,
+        install_prefix="/dev/shm/dshpkg", npm_cache="/dev/shm/npmcache",
+    )
+    environment = RecordingEnvironment(
+        results={
+            "mkdir -p /dev/shm/dshpkg": ExecResult(stdout="", return_code=0),
+            "npm install": ExecResult(stdout="", return_code=0),
+            "/dev/shm/dshpkg/bin/dsh --version": ExecResult(
+                stdout=agent._locked_version(), return_code=0
+            ),
+        }
+    )
+    await agent.install(environment)
+    commands = [c["command"] for c in environment.commands]
+    assert any("mkdir -p /dev/shm/dshpkg" in c for c in commands)
+    install_cmd = next(c for c in commands if "npm install" in c)
+    assert "--prefix /dev/shm/dshpkg" in install_cmd
+    assert "npm_config_cache=/dev/shm/npmcache" in install_cmd
+    version_cmd = next(c for c in commands if "dsh --version" in c)
+    assert "/dev/shm/dshpkg/bin/dsh --version" in version_cmd
+    assert agent.version() == agent._locked_version()
+
+
+# --- real session layout (aarch64 environment finding) ----------------
+
+
+def test_read_accepts_the_project_scoped_session_layout(tmp_path, monkeypatch):
+    """The official backend nests sessions under a project directory
+    derived from the cwd (``sessions/--home-user--/<id>/…``); the flat
+    assumption rejected a complete download (found on the real host)."""
+    agent = make_agent(tmp_path)
+    agent._session_id = SESSION_ID
+    session_dir = (
+        host_session_root(tmp_path / "agent-logs") / "--home-user--" / SESSION_ID
+    )
+    session_dir.mkdir(parents=True)
+    (session_dir / "session.v4.jsonl.zstd").write_bytes(b"official record")
+    (session_dir / "session.lock").write_bytes(b"")
+    monkeypatch.setattr(
+        "aeval.agents.dsh.agent.read_dsh_session_via_bridge", lambda request: _response()
+    )
+    monkeypatch.setattr(
+        "aeval.agents.dsh.agent.convert_dsh_read_to_atif", lambda response: _trajectory()
+    )
+    transcript = agent.read_trial_session()
+    assert transcript.atif.session_id == SESSION_ID
+
+
+def test_read_refuses_ambiguous_session_records(tmp_path):
+    agent = make_agent(tmp_path)
+    agent._session_id = SESSION_ID
+    root = host_session_root(tmp_path / "agent-logs")
+    for project in ("--home-user--", "--workspace--"):
+        d = root / project / SESSION_ID
+        d.mkdir(parents=True)
+        (d / "session.v4.jsonl.zstd").write_bytes(b"record")
+    with pytest.raises(DshRunError, match="refusing to guess"):
+        agent.read_trial_session()
+
+
+# --- DSH --session-id is resume-only (aarch64 environment finding) -----
+
+
+async def test_pinned_session_must_exist_before_the_run(tmp_path):
+    """dsh --session-id resumes an existing session and errors on an
+    unknown id, so a pinned trial id has to exist first; the run must
+    fail closed with that diagnosis instead of DSH's own error."""
+    agent = make_agent(tmp_path, session_id=PINNED_SESSION_ID)
+    environment = RecordingEnvironment(
+        results={
+            "find ": ExecResult(stdout="", stderr="", return_code=0),
+            "dsh --profile headless": ExecResult(stdout=RUN_STREAM, return_code=0),
+        }
+    )
+    with pytest.raises(DshRunError, match="only resumes an existing session"):
+        await agent.run("instruction", environment, AgentContext())  # type: ignore[arg-type]
+    # the run never started
+    assert not any("headless" in c["command"] for c in environment.commands)
+
+
+async def test_pinned_session_present_allows_the_run(tmp_path, monkeypatch):
+    agent = make_agent(tmp_path, session_id=PINNED_SESSION_ID)
+    environment = RecordingEnvironment(
+        results={
+            "find ": ExecResult(
+                stdout=f"/logs/agent/dsh-home/sessions/--home-user--/{PINNED_SESSION_ID}\n",
+                stderr="", return_code=0,
+            ),
+            "dsh --profile headless": ExecResult(
+                stdout=RUN_STREAM.replace(SESSION_ID, PINNED_SESSION_ID), return_code=0
+            ),
+        }
+    )
+    context = AgentContext()
+    await agent.run("instruction", environment, context)  # type: ignore[arg-type]
+    assert any("--session-id" in c["command"] for c in environment.commands)
+    # the run adopted the pinned id it announced
+    assert agent.dsh_session_id == PINNED_SESSION_ID
+
+
+async def test_unpinned_session_needs_no_preflight(tmp_path):
+    agent = make_agent(tmp_path)
+    environment = RecordingEnvironment(
+        results={"dsh --profile headless": ExecResult(stdout=RUN_STREAM, return_code=0)}
+    )
+    await agent.run("instruction", environment, AgentContext())  # type: ignore[arg-type]
+    assert not any(c["command"].startswith("find ") for c in environment.commands)
+
+
+def test_builder_documents_resume_only_semantics():
+    command = build_headless_command(
+        session_id=PINNED_SESSION_ID,
+        stream_path=PurePosixPath("/logs/agent/dsh-run.jsonl"),
+        task_env_var="AEVAL_DSH_TASK_x",
+    )
+    assert "--session-id" in command and PINNED_SESSION_ID in command
+    assert build_headless_command.__doc__ is not None
+    assert "RESUMES an existing session" in build_headless_command.__doc__
+
+
+def test_harbor_owns_session_id_and_dsh_keeps_its_own(tmp_path):
+    """Harbor's BaseAgent assigns ``agent.session_id`` (its sandbox
+    identifier ``<trial>__agent``). Shadowing it with a read-only
+    property killed every real trial with "property 'session_id' of
+    'DshAgent' object has no setter" — the two ids are different things.
+    """
+    agent = make_agent(tmp_path)
+    agent.session_id = "hello__abc__agent"  # Harbor's assignment: must work
+    assert agent.session_id == "hello__abc__agent"
+    agent._session_id = SESSION_ID
+    assert agent.dsh_session_id == SESSION_ID
+    assert agent.session_id == "hello__abc__agent"
+
+
+async def test_prefixed_install_exports_path_inside_the_shell(tmp_path):
+    """A prefixed install must put its bin dir on PATH via a shell
+    export: passing "dir:$PATH" as an environment VALUE leaves $PATH
+    literal and wipes the sandbox PATH (exit 127 on the real host)."""
+    agent = make_agent(tmp_path, install_prefix="/dev/shm/dshpkg")
+    environment = RecordingEnvironment(
+        results={"dsh --profile headless": ExecResult(stdout=RUN_STREAM, return_code=0)}
+    )
+    await agent.run("task", environment, AgentContext())  # type: ignore[arg-type]
+    call = environment.matching("dsh --profile headless")
+    assert 'export PATH=/dev/shm/dshpkg/bin:"$PATH";' in call["command"]
+    # and never as an environment value
+    assert call["env"] is not None
+    assert "PATH" not in call["env"]
+
+
+def test_post_run_backfill_skips_a_run_without_a_session(tmp_path):
+    """A failed run must not be re-reported as a backfill error."""
+    from harbor.models.agent.context import AgentContext
+
+    agent = make_agent(tmp_path)
+    assert agent._session_id is None
+    context = AgentContext()
+    agent.populate_context_post_run(context)
+    assert context.metadata is None  # no session claim was made
+    assert context.n_input_tokens is None
+
+
+def test_find_session_record_covers_dsh_home_and_session_root(tmp_path):
+    """A descriptor's session_root names the DSH HOME, so the record sits
+    at <home>/sessions/<project>/<id>/ — the resolver must reach it."""
+    from aeval.agents.dsh.agent import find_session_record
+
+    home = tmp_path / "dsh-home"
+    record = home / "sessions" / "--home-user--" / SESSION_ID / "session.v4.jsonl.zstd"
+    record.parent.mkdir(parents=True)
+    record.write_bytes(b"record")
+    assert find_session_record(home, SESSION_ID) == record
+    # the flat session-root form still works
+    flat = tmp_path / "sessions"
+    flat_record = flat / "--workspace--" / SESSION_ID / "session.v4.jsonl.zstd"
+    flat_record.parent.mkdir(parents=True)
+    flat_record.write_bytes(b"record")
+    assert find_session_record(flat, SESSION_ID) == flat_record
+    assert find_session_record(tmp_path / "empty", SESSION_ID) is None

@@ -59,6 +59,9 @@ def run_cmd(
     sandbox_platform: Annotated[
         str | None, typer.Option(help="Platform of the pinned sandbox image (e.g. arm64)")
     ] = None,
+    force_build: Annotated[
+        bool, typer.Option(help="Rebuild the sandbox template instead of reusing a cached alias")
+    ] = False,
 ) -> None:
     """Validate + synthesize a Harbor job and DELEGATE the run to Harbor."""
     import os
@@ -85,6 +88,13 @@ def run_cmd(
             raise SuiteError("Run output must be outside the source suite directory")
         resolved = load_suite(suite)
         job = compose_harbor_job(resolved)
+        if force_build:
+            # Doc §6.3: the first run (and every run after the base image
+            # digest changes) must rebuild — Harbor reuses an existing
+            # template alias otherwise, silently running the experiment on
+            # a stale image. `aeval run` delegates to Harbor, so the flag
+            # must be carried in the composed job.
+            job.environment.force_build = True
         source_commit = suite_source_commit(suite)
         job.jobs_dir = run_dir / "harbor"
         if len(Path(job.job_name).parts) != 1 or job.job_name in ("", ".", ".."):

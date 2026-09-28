@@ -3,12 +3,14 @@
 from __future__ import annotations
 
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
 from aeval.contracts import RunBinding, TrialPaths
 from aeval.control.bootstrap import (
     BootstrapError,
+    deploy_control_stack,
     SANDBOX_TOKEN_PATH,
     bootstrap_trial_control,
     compose_control_config,
@@ -187,4 +189,173 @@ async def test_bootstrap_rejects_owner_binding_mismatch(demo_suite, runtime_lock
             environment=FakeUploadEnvironment(), context=ctx, trial_id="t",
             paths=bad, broker=_FakeBroker(tmp_path),
             provider="p", model="m",
+        )
+
+
+async def test_bootstrap_refuses_a_tainted_trial(demo_suite, runtime_lock, tmp_path):
+    """The owner is the hard block: no model token for a trial already
+    judged infra_invalid (baseline/policy/evidence failure)."""
+    ctx = await _context(demo_suite, runtime_lock, tmp_path)
+    ctx.trials["t"].mark_infra_invalid("baseline_arrival: seed mismatch")
+    with pytest.raises(BootstrapError, match="refusing to deploy a model token"):
+        await bootstrap_trial_control(
+            environment=FakeUploadEnvironment(), context=ctx, trial_id="t",
+            paths=_paths(tmp_path), broker=_FakeBroker(tmp_path),
+            provider="p", model="m",
+        )
+
+
+def test_control_config_mirrors_the_lease_limits(runtime_lock):
+    """The sandbox adapter compares the broker's /info against this
+    config field by field; a lease with maxSteps and a config without it
+    fails with AEVAL_LEASE_MISMATCH (found on the real sandbox)."""
+    paths = TrialPaths(
+        sandbox_cwd="/w", dsh_home="/h", bundle_path="/b.json",
+        session_root="h", download_root="d",
+    )
+    base = dict(
+        run_binding={"run_id": "r"}, trial_id="t", session_id="s", paths=paths,
+        gateway_url="http://127.0.0.1:1", provider="p", model="m",
+    )
+    bare = compose_control_config(**base)
+    assert "maxSteps" not in bare and "reasoningEffort" not in bare
+
+    mirrored = compose_control_config(
+        **base, reasoning_effort="high", limits={"maxSteps": 5, "maxTokens": 4096}
+    )
+    assert mirrored["maxSteps"] == 5
+    assert mirrored["maxTokens"] == 4096
+    assert mirrored["reasoningEffort"] == "high"
+    # the sandboxed deployment lets the harness process finalize as owner
+    assert mirrored["ownerFinalize"] is True
+    # limits participate in the digest, so the two cannot be confused
+    assert mirrored["configDigest"] != bare["configDigest"]
+
+
+class _RecordingEnvironment:
+    def __init__(self, *, mint_ok=True):
+        self.uploads: list[tuple[str, str]] = []
+        self.commands: list[str] = []
+        self.mint_ok = mint_ok
+
+    async def upload_file(self, source: str, target: str):
+        self.uploads.append((Path(source).name, target))
+
+    async def exec(self, command: str):
+        self.commands.append(command)
+        if "session_stub.js" in command:
+            return SimpleNamespace(
+                return_code=0 if self.mint_ok else 1,
+                stdout='{"ok":true}' if self.mint_ok else "",
+            )
+        return SimpleNamespace(return_code=0, stdout="")
+
+
+class _Agent:
+    def __init__(self, prefix="/dev/shm/dshpkg"):
+        self._prefix = prefix
+        self.patches: list[str] = []
+        self.env: dict[str, str] = {}
+
+    def cli_bin_dir(self):
+        return f"{self._prefix}/bin" if self._prefix else None
+
+    def add_patch_file(self, path):
+        self.patches.append(str(path))
+
+    def pin_session(self, session_id):
+        self.pinned = session_id
+
+    def set_workspace_dir(self, path):
+        self.workspace = path
+
+    def set_run_env(self, key, value):
+        self.env[key] = value
+
+
+def _paths_for_stack():
+    return TrialPaths(
+        sandbox_cwd="/workspace", dsh_home="/logs/agent/dsh-home",
+        bundle_path="/logs/agent/bundle_descriptor.json",
+        session_root="dsh-home", download_root="d/t/agent",
+    )
+
+
+async def test_deploy_control_stack_uploads_and_registers(tmp_path):
+    dist = tmp_path / "dist"
+    dist.mkdir()
+    (dist / "index.js").write_text("export const x = 1;\n")
+    (dist / "sandbox_entry.js").write_text("export const y = 2;\n")
+    (dist / "session_stub.js").write_text("export const z = 3;\n")
+    ca = tmp_path / "ca.crt"
+    ca.write_text("-----BEGIN CERTIFICATE-----\n")
+    env = _RecordingEnvironment()
+    agent = _Agent()
+    config = {"sessionId": "sess-1", "jobTokenFile": "/run/aeval/trial-token",
+              "provider": "p", "model": "m", "maxSteps": 5}
+
+    patch = await deploy_control_stack(
+        environment=env, agent=agent, paths=_paths_for_stack(), config=config,
+        control_dist=dist, control_ca=ca, trial_id="t-1",
+    )
+
+    # placed inside the DSH tree so the harness packages resolve
+    assert "/@deepseek-ai/dsh/node_modules/aeval-control/" in patch
+    targets = {t for _, t in env.uploads}
+    assert any(t.endswith("/dist/index.js") for t in targets)
+    assert any(t.endswith("/config.json") for t in targets)
+    assert any(t.endswith("/ca.crt") for t in targets)
+    assert any(t.endswith("/cordis.patch.yml") for t in targets)
+    # the session root is prepared, then the stub mints the owner session
+    assert any(c.startswith("mkdir -p /logs/agent/dsh-home/sessions") for c in env.commands)
+    mint = next(c for c in env.commands if "session_stub.js" in c)
+    assert "sess-1" in mint and "/logs/agent/dsh-home/sessions" in mint
+    assert "--compression zstd" in mint
+    # the agent now carries the patch and trusts the CA
+    assert agent.patches and agent.patches[0].endswith("cordis.patch.yml")
+    assert agent.pinned == "sess-1"
+    assert agent.workspace == "/workspace"
+    assert agent.env["NODE_EXTRA_CA_CERTS"].endswith("/ca.crt")
+
+
+@pytest.mark.parametrize(
+    "mutate, message",
+    [
+        (lambda a: setattr(a, "_prefix", None), "no CLI install prefix"),
+    ],
+)
+async def test_deploy_control_stack_fails_closed(tmp_path, mutate, message):
+    dist = tmp_path / "dist"
+    dist.mkdir()
+    (dist / "index.js").write_text("x")
+    agent = _Agent()
+    mutate(agent)
+    with pytest.raises(BootstrapError, match=message):
+        await deploy_control_stack(
+            environment=_RecordingEnvironment(), agent=agent,
+            paths=_paths_for_stack(), config={"sessionId": "s"},
+            control_dist=dist, control_ca=None, trial_id="t",
+        )
+
+
+async def test_deploy_control_stack_rejects_an_empty_dist(tmp_path):
+    dist = tmp_path / "dist"
+    dist.mkdir()
+    with pytest.raises(BootstrapError, match="no built .js files"):
+        await deploy_control_stack(
+            environment=_RecordingEnvironment(), agent=_Agent(),
+            paths=_paths_for_stack(), config={"sessionId": "s"},
+            control_dist=dist, control_ca=None, trial_id="t",
+        )
+
+
+async def test_deploy_control_stack_requires_a_minted_session(tmp_path):
+    dist = tmp_path / "dist"
+    dist.mkdir()
+    (dist / "index.js").write_text("x")
+    with pytest.raises(BootstrapError, match="could not be minted"):
+        await deploy_control_stack(
+            environment=_RecordingEnvironment(mint_ok=False), agent=_Agent(),
+            paths=_paths_for_stack(), config={"sessionId": "s", "jobTokenFile": "/t"},
+            control_dist=dist, control_ca=None, trial_id="t",
         )

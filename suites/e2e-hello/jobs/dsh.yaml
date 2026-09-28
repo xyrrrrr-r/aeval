@@ -1,0 +1,27 @@
+# Job variant that drives the suite with the real DSH agent.
+#
+# The plain job (e2e-hello.yaml) uses the `nop` agent for suite-shape
+# validation; this one is the end-to-end variant used by the environment
+# verification. Paths are the ones verified on example-lab (openEuler 24.03
+# SP1 aarch64) and must be adapted to the deployment.
+job_name: e2e-hello-dsh
+n_attempts: 1
+n_concurrent_trials: 1
+agents:
+  - import_path: "aeval.agents.dsh.agent:DshAgent"
+    # Harbor reads this from the agent ENTRY, not from kwargs (a kwarg is
+    # popped and ignored, which silently left the default bound in place).
+    # The first install fetches the CLI and its whole dependency tree;
+    # Harbor's default agent-setup bound is too tight on a cold sandbox
+    # (observed: AgentSetupTimeoutError), so raise it explicitly.
+    override_setup_timeout_sec: 900
+    kwargs:
+      # Install the CLI into a tmpfs-backed prefix: the default location
+      # ran the sandbox out of disk (the tree is ~500 MB).
+      install_prefix: "/dev/shm/dshpkg"
+      npm_cache: "/dev/shm/npmcache"
+      # The official session reader shipped by dsh-eval-control.
+      session_reader: "/opt/aeval/session_reader.js"
+      run_timeout_sec: 600
+environment:
+  type: e2b

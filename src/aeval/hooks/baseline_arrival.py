@@ -30,11 +30,26 @@ __all__ = [
 
 
 class _BaselineFailure(Exception):
-    def __init__(self, assertion_id: str, expected: Any, actual: Any, probe: str):
+    """A probe/assertion failure, tagged with WHY it failed.
+
+    ``kind`` separates two very different situations:
+
+    - ``absent``: the environment answered and the fact is not there
+      (the file does not exist, the value does not parse). That is a
+      statement about the RUN, so collection records it as an observed
+      absence and the grader scores it — it is NOT an infrastructure
+      failure;
+    - ``unobservable``: nothing could be observed at all (no handle, no
+      exec, unsupported source). That blocks the trial.
+    """
+
+    def __init__(self, assertion_id: str, expected: Any, actual: Any, probe: str,
+                 kind: str = "unobservable"):
         self.assertion_id = assertion_id
         self.expected = expected
         self.actual = actual
         self.probe = probe
+        self.kind = kind
         super().__init__(
             f"baseline {assertion_id!r} failed: probe={probe!r} "
             f"expected={expected!r} actual={actual!r}"
@@ -83,7 +98,7 @@ async def probe_observable(
         )
     path = payload.strip()
     result = await exec_fn(f"cat {path}")
-    exit_code = getattr(result, "exit_code", None)
+    exit_code = _exec_return_code(result)
     if exit_code is None:
         raise _BaselineFailure(
             observable.name, observable.type,
@@ -92,10 +107,28 @@ async def probe_observable(
     if exit_code != 0:
         raise _BaselineFailure(
             observable.name, observable.type,
-            f"<cat {path} exited {exit_code}>", source,
+            f"<cat {path} exited {exit_code}>", source, kind="absent",
         )
     stdout = getattr(result, "stdout", "")
     return _parse_observable_value(stdout, observable)
+
+
+def _exec_return_code(result: Any) -> int | None:
+    """Return code of a Harbor ``ExecResult`` (``return_code``).
+
+    Harbor's environment API names the field ``return_code``; older
+    fakes and other providers used ``exit_code``. Reading only one of
+    them silently yielded ``None`` on the real e2b backend and turned
+    every probe into a baseline failure (found during the aarch64
+    environment verification), so both spellings are accepted.
+    """
+    for attribute in ("return_code", "exit_code"):
+        value = getattr(result, attribute, None)
+        if isinstance(value, bool):
+            continue
+        if isinstance(value, int):
+            return value
+    return None
 
 
 def _parse_observable_value(raw: Any, observable: ObservableSpec) -> Any:
@@ -246,29 +279,67 @@ async def assert_clock_effective(env_handle: Any, clock: ClockSpec) -> list[str]
 
 
 async def assert_isolation_policy(env_handle: Any) -> list[str]:
-    """Interaction approval policy must not be ``ask`` (case D19).
+    """The trial must run inside an isolated, policy-enforcing sandbox.
 
-    An unasserted interactive-approval policy silently changes agent
-    behavior mid-trial; we require a declared non-interactive policy.
+    Two things are asserted, both from facts the handle really owns:
 
-    P0-2: a missing environment handle or an unobservable policy is an
-    ISSUE, not a silent pass — an unobservable isolation policy cannot
-    be asserted, and an unassertable policy must not default to true.
+    1. the DSH-side interaction approval policy, when the owner injected
+       one, must not be ``ask`` (case D19) — an unasserted interactive
+       approval silently changes agent behaviour mid-trial;
+    2. the environment itself must be able to enforce the requested
+       network policy: providers report this through ``capabilities``
+       (e.g. e2b: ``disable_internet``/``network_allowlist``/
+       ``dynamic_network_policy``). A provider that can enforce nothing
+       cannot isolate the copy.
+
+    P0-2: a missing handle, or an environment where NO isolation fact is
+    observable at all, is an ISSUE — never a silent pass. Environment
+    verification on the real e2b backend showed that ``approval_policy``
+    does not exist on a Harbor environment object, so treating its
+    absence as the only signal made the check permanently fail while
+    proving nothing; the check now asserts the environment-owned facts
+    and still refuses when nothing is observable.
     """
     if env_handle is None:
         return ["isolation policy unverifiable: no environment handle"]
-    policy = getattr(env_handle, "approval_policy", None)
-    if policy is None:
-        return [
+
+    issues: list[str] = []
+    observed: list[str] = []
+
+    approval = getattr(env_handle, "approval_policy", None)
+    if approval is not None:
+        observed.append("approval_policy")
+        if str(approval).strip().lower() == "ask":
+            issues.append(
+                "approval policy is 'ask' — interactive approval is not "
+                "assertable; declare a non-interactive policy"
+            )
+
+    capabilities = getattr(env_handle, "capabilities", None)
+    if capabilities is not None:
+        observed.append("capabilities")
+        enforceable = any(
+            getattr(capabilities, attribute, False) is True
+            for attribute in ("disable_internet", "network_allowlist",
+                              "dynamic_network_policy")
+        )
+        if not enforceable:
+            issues.append(
+                "environment reports no network-policy capability "
+                "(disable_internet/network_allowlist/dynamic_network_policy) "
+                "— it cannot isolate the copy"
+            )
+
+    if getattr(env_handle, "network_policy", None) is not None:
+        observed.append("network_policy")
+
+    if not observed:
+        issues.append(
             "isolation policy unverifiable: the environment exposes no "
-            "approval policy — refuse rather than assume a safe default"
-        ]
-    if str(policy).strip().lower() == "ask":
-        return [
-            "approval policy is 'ask' — interactive approval is not "
-            "assertable; declare a non-interactive policy"
-        ]
-    return []
+            "approval policy, capabilities or network policy — refuse "
+            "rather than assume a safe default"
+        )
+    return issues
 
 
 async def assert_egress_effective(env_handle: Any) -> list[str]:
@@ -316,16 +387,27 @@ async def assert_egress_effective(env_handle: Any) -> list[str]:
     ]
 
 
-async def on_environment_started(event: Any, context: EvaluationContext) -> None:
-    """ENVIRONMENT_START hook: full baseline gate, always record-only.
+async def on_environment_started(
+    event: Any, context: EvaluationContext, env_handle: Any = None
+) -> None:
+    """Baseline gate, always record-only.
 
     Failures mark the trial infra_invalid; we do not rely on raising.
+
+    ``env_handle`` is the started environment supplied by the owner
+    (``EvaluationContext.environments``), because Harbor's hook events
+    carry no environment object. It must be called at the point where
+    the sandbox actually exists: Harbor emits ENVIRONMENT_START *before*
+    ``environment.start()``, so the owner invokes this from AGENT_START
+    (sandbox created + healthcheck passed + agent installed, agent not
+    yet running). A missing handle stays a blocking condition.
     """
     trial_id = str(getattr(event, "trial_id", ""))
     state = context.trial_state(trial_id)
     suite = context.suite.overlay
 
-    env_handle = getattr(event, "environment", None) or getattr(event, "env", None)
+    if env_handle is None:
+        env_handle = getattr(event, "environment", None) or getattr(event, "env", None)
 
     ok, failures = await assert_baseline_arrival(
         env_handle, suite.baselines, suite.observables

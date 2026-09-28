@@ -17,7 +17,7 @@ import os
 import re
 import shlex
 import uuid
-from collections.abc import Iterable
+from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 from typing import Any, ClassVar
@@ -49,6 +49,7 @@ __all__ = [
     "resolve_session_reader",
     "session_id_from_stream",
     "session_reader_candidates",
+    "find_session_record",
 ]
 
 # The shipped one-shot profile, i.e. ``dsh-app-boot``'s PROFILE_TEMPLATES entry
@@ -120,6 +121,53 @@ def host_session_root(logs_dir: Path) -> Path:
     return logs_dir / DSH_HOME_DIRNAME / SESSIONS_DIRNAME
 
 
+def find_session_record(source_root: Path, session_id: str) -> Path | None:
+    """Locate the official session record under the session root.
+
+    Environment verification on the real cluster showed the official
+    backend nests sessions under a PROJECT directory derived from the
+    working directory::
+
+        <session_root>/--home-user--/session-<id>/session.v4.jsonl.zstd
+
+    while an older/flat layout puts the session directly under the root.
+    The official reader resolves this itself (it hands the root to the
+    official persistence backend), so aeval must not assume one shape:
+    both are accepted, and ambiguity (two records for one id) is
+    reported rather than guessed.
+    """
+    source_root = Path(source_root)
+    # Bounded breadth-first search: the record sits one project level under
+    # a session ROOT (``<root>/--home-user--/<id>/``), while a descriptor's
+    # ``session_root`` names the DSH HOME (``dsh-home``), putting the record
+    # at ``<dsh-home>/sessions/--home-user--/<id>/``. Both are handled, and
+    # the search never wanders further than a couple of levels.
+    candidates: list[Path] = []
+    frontier = [source_root]
+    for _depth in range(3):
+        next_frontier: list[Path] = []
+        for current in frontier:
+            direct = current / session_id / SESSION_RECORD_FILENAME
+            if direct.is_file() and direct not in candidates:
+                candidates.append(direct)
+            try:
+                children = sorted(p for p in current.iterdir() if p.is_dir())
+            except OSError:
+                continue
+            next_frontier.extend(children)
+        if candidates:
+            break
+        frontier = next_frontier
+    if not candidates:
+        return None
+    if len(candidates) > 1:
+        raise DshRunError(
+            f"session {session_id} has {len(candidates)} official records "
+            f"under {source_root} — refusing to guess which one is the trial's"
+        )
+    return candidates[0]
+
+
 def checked_session_id(value: str) -> str:
     """Return a usable trial session id, or fail before the sandbox is touched.
 
@@ -178,8 +226,16 @@ def build_headless_command(
     flags and forwards everything from the first unrecognised token on to
     the booted profile verbatim, so a later ``--patch`` would reach the
     headless command program as an unknown option. ``--session-id`` is that
-    program's own flag, so it follows ``--json``; it adopts a session that
-    already exists in the store rather than minting one.
+    program's own flag, so it follows ``--json``.
+
+    Environment verification on the real sandbox established the exact
+    semantics of that flag — ``dsh --profile headless --help`` says
+    "adopt the persisted Session with this id; an unknown id is an
+    error" — so it RESUMES an existing session and can never be used to
+    make DSH create one under an owner-chosen id. A freshly minted
+    trial id therefore has to exist in the store first; that is the
+    sandbox-side control plugin's job, and :meth:`DshAgent.run` checks
+    for it before starting instead of failing mid-run.
     """
     parts = ["dsh", "--profile", HEADLESS_PROFILE]
     for patch in patch_files:
@@ -269,8 +325,23 @@ class DshAgent(BaseInstalledAgent):
         patch_files: Iterable[Path | str] = (),
         session_id: str | None = None,
         run_timeout_sec: int | None = None,
+        install_prefix: str | None = None,
+        npm_cache: str | None = None,
+        extra_env: Mapping[str, str] | None = None,
+        workspace_dir: str | None = None,
         **kwargs: Any,
     ):
+        self._install_prefix = install_prefix
+        self._npm_cache = npm_cache
+        # owner-supplied run environment (e.g. NODE_EXTRA_CA_CERTS for a
+        # broker whose TLS certificate is signed by a private CA)
+        self._extra_env: dict[str, str] = dict(extra_env or {})
+        # The task workspace the run must use. DSH records a session's
+        # working directory and refuses to resume it elsewhere, so the
+        # owner mints the session and starts the run in the SAME cwd
+        # (found on the real chain: "session was recorded in /workspace,
+        # not /home/user").
+        self._workspace_dir_value = workspace_dir
         self._session_reader = Path(session_reader) if session_reader else None
         self._patch_files = [str(p) for p in patch_files]
         self._pinned_session_id = (
@@ -297,8 +368,16 @@ class DshAgent(BaseInstalledAgent):
         return OFFICIAL_DSH_TAG
 
     @property
-    def session_id(self) -> str | None:
-        """The session the last run drove, as its own stream announced it.
+    def dsh_session_id(self) -> str | None:
+        """The DSH conversation session the last run drove.
+
+        Deliberately NOT named ``session_id``: Harbor's ``BaseAgent``
+        owns that attribute and assigns its own sandbox identifier to it
+        (``<trial_name>__agent``). Shadowing it with a read-only property
+        made every real trial die with "property 'session_id' of
+        'DshAgent' object has no setter" (found during environment
+        verification) — the two ids mean different things and must not
+        share a name.
 
         With a pinned trial identity this is the id the run was told to
         adopt, attested by the runner announcing it back.
@@ -327,7 +406,44 @@ class DshAgent(BaseInstalledAgent):
         raise DshRunError(f"DSH release lock does not pin {_DEFAULT_NODE_PACKAGE}")
 
     def get_version_command(self) -> str:
+        if self._install_prefix:
+            return f"{self._install_prefix.rstrip('/')}/bin/dsh --version"
         return "dsh --version"
+
+    def pin_session(self, session_id: str) -> None:
+        """Adopt the owner-assigned session identity for the next run.
+
+        ``--session-id`` resumes an EXISTING session (D15), so the owner
+        mints that session first and pins it here; the run then adopts
+        the trial's own identity instead of minting an unrelated one,
+        which is also what the control plugin's identity injection is
+        scoped to.
+        """
+        self._pinned_session_id = checked_session_id(session_id)
+
+    def add_patch_file(self, path: Path | str) -> None:
+        """Register one extra Cordis patch layer for the next run.
+
+        The owner deploys the control stack into the sandbox and points
+        the profile at it; the patch must be in place before ``run()``.
+        """
+        value = str(path)
+        if value not in self._patch_files:
+            self._patch_files.append(value)
+
+    def set_workspace_dir(self, path: str) -> None:
+        """Set the working directory for the sandboxed run (owner-supplied)."""
+        self._workspace_dir_value = path
+
+    def set_run_env(self, key: str, value: str) -> None:
+        """Set one extra environment variable for the sandboxed run."""
+        self._extra_env[key] = value
+
+    def cli_bin_dir(self) -> str | None:
+        """Directory to prepend to PATH for the installed CLI, if any."""
+        if self._install_prefix:
+            return f"{self._install_prefix.rstrip('/')}/bin"
+        return None
 
     def parse_version(self, stdout: str) -> str:
         return stdout.strip()
@@ -340,10 +456,27 @@ class DshAgent(BaseInstalledAgent):
         silently grading a different agent.
         """
         locked = self._locked_version()
+        # Environment verification (example-lab): the DSH dependency tree is
+        # ~502 MB while the e2b sandbox root filesystem can be as small as
+        # 737 MB total (~268 MB free), so the default global install fails
+        # with ENOSPC. An operator can point the install prefix and the npm
+        # cache at a roomier filesystem (e.g. /dev/shm tmpfs on this
+        # cluster). Defaults are unchanged when neither is configured.
+        prefix = f"--prefix {shlex.quote(self._install_prefix)} " if self._install_prefix else ""
+        cache = (
+            f"npm_config_cache={shlex.quote(self._npm_cache)} "
+            if self._npm_cache
+            else ""
+        )
+        if self._install_prefix:
+            await self.exec_as_root(
+                environment,
+                command=f"mkdir -p {shlex.quote(self._install_prefix)}",
+            )
         await self.exec_as_root(
             environment,
             command=(
-                "npm install --global --no-audit --no-fund "
+                f"{cache}npm install --global --no-audit --no-fund {prefix}"
                 f"{shlex.quote(f'{self._CLI_PACKAGE}@{locked}')}"
             ),
         )
@@ -362,6 +495,8 @@ class DshAgent(BaseInstalledAgent):
         paths = self.paths()
         self._session_id = None
         self._transcript = None
+        if self._pinned_session_id is not None:
+            await self._require_resumable_session(environment, paths)
         # A per-invocation variable name keeps the instruction out of the
         # command string that the environment echoes into its own logs.
         task_var = f"AEVAL_DSH_TASK_{uuid.uuid4().hex}"
@@ -371,10 +506,22 @@ class DshAgent(BaseInstalledAgent):
             stream_path=paths.container_stream_path,
             task_env_var=task_var,
         )
+        run_env = {**paths.env(), **self._extra_env, task_var: instruction}
+        bin_dir = self.cli_bin_dir()
+        if bin_dir is not None:
+            # A prefixed install is not on the default PATH. The export
+            # must happen INSIDE the shell: passing "dir:$PATH" as an
+            # environment VALUE leaves $PATH unexpanded, which wiped the
+            # sandbox PATH and made every builtin-less command (mkdir,
+            # tee) fail with exit 127 (found on the real host).
+            command = (
+                f"export PATH={shlex.quote(bin_dir)}"
+                ':"$PATH"; ' + command
+            )
         result = await self.exec_as_agent(
             environment,
             command=command,
-            env={**paths.env(), task_var: instruction},
+            env=run_env,
             cwd=self._workspace_dir(),
             timeout_sec=self._run_timeout_sec,
         )
@@ -389,11 +536,38 @@ class DshAgent(BaseInstalledAgent):
             )
         self._session_id = announced
 
+    async def _require_resumable_session(
+        self, environment: BaseEnvironment, paths: DshTrialPaths
+    ) -> None:
+        """A pinned trial session must already exist in the sandbox store.
+
+        ``--session-id`` resumes an existing Session and errors on an
+        unknown id (verified against dsh 0.1.7-alpha.1 in the real
+        sandbox). An evaluation trial pins the OWNER-assigned session id,
+        so something must have created that session before the run — the
+        sandbox-side control plugin. Failing here gives that diagnosis
+        instead of a mid-run "session does not exist".
+        """
+        sessions_root = paths.container_session_root
+        listing = await self.exec_as_agent(
+            environment,
+            command=f"find {shlex.quote(sessions_root.as_posix())} -maxdepth 2 "
+            f"-name {shlex.quote(str(self._pinned_session_id))} -type d 2>/dev/null | head -1",
+        )
+        if not (listing.stdout or "").strip():
+            raise DshRunError(
+                f"pinned trial session {self._pinned_session_id!r} does not exist "
+                f"under {sessions_root.as_posix()} — DSH's --session-id only "
+                "resumes an existing session, so the owner-assigned id must be "
+                "created first (sandbox-side control plugin); refusing to run "
+                "with a session DSH would mint on its own"
+            )
+
     def _patches_in_environment(self) -> list[str]:
         return list(self._patch_files)
 
     def _workspace_dir(self) -> str | None:
-        return None
+        return self._workspace_dir_value
 
     def read_trial_session(self) -> CanonicalTranscript:
         """Rebuild the canonical transcript from the synced official session.
@@ -443,20 +617,14 @@ class DshAgent(BaseInstalledAgent):
         record (``session.v4.jsonl.zstd``) per session directory, plus
         an optional empty POSIX ``session.lock`` lease artifact.
         """
-        session_dir = source_root / self._session_id
-        if not session_dir.is_dir():
+        record = find_session_record(source_root, self._session_id)
+        if record is None:
             raise DshRunError(
-                f"synced session directory missing: {session_dir} "
-                "(agent log download incomplete — refusing to read a "
-                "session that was never synced)"
+                f"official session record for {self._session_id} not found "
+                f"under {source_root} (agent log download incomplete — the "
+                "record must land before the session can be read)"
             )
-        record = session_dir / SESSION_RECORD_FILENAME
-        if not record.is_file():
-            raise DshRunError(
-                f"session record missing in synced session: {record} "
-                "(agent log download incomplete — the official record "
-                "must land before the session can be read)"
-            )
+        session_dir = record.parent
         records = [
             p for p in session_dir.iterdir()
             if p.is_file() and p.name.startswith("session.v") and p.suffix == ".zstd"
@@ -479,6 +647,12 @@ class DshAgent(BaseInstalledAgent):
         Numbers come from the durable session, never from the run stream, so
         a claim the agent cannot support cannot inflate the recorded cost.
         """
+        if self._session_id is None:
+            # The run never announced a session (it failed). The trial
+            # already carries that exception; raising a second error from
+            # this best-effort backfill masked the real cause on the real
+            # host, so the backfill simply does not happen.
+            return
         paths = self.paths()
         context.metadata = {
             **(context.metadata or {}),

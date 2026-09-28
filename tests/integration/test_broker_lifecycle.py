@@ -311,21 +311,37 @@ async def test_plugin_broker_startup_failure_taints_the_trial(
     owned_job, tmp_path, monkeypatch
 ):
     """A broker that cannot start marks the trial infra_invalid — the
-    model phase must not run uncontrolled (fail-closed)."""
-    monkeypatch.setenv(BROKER_SPEC_ENV, str(_spec_json(tmp_path, port=1)))
-    monkeypatch.setenv(KEY_ENV, KEY)
-    job = owned_job
-    plugin = AevalPlugin()
-    await plugin.on_job_start(job)
-    context = plugin._context
+    model phase must not run uncontrolled (fail-closed).
 
-    start = event_for(job)
-    await emit(job, start, TrialEvent.START)
-    state = context.trials[str(start.trial_id)]
-    assert state.broker is None
-    assert any(
-        "model broker startup failed" in r for r in state.infra_invalid_reasons
-    ), state.infra_invalid_reasons
+    The failure is induced by an OCCUPIED port, not a privileged one:
+    running as root on Linux binds port 1 successfully (found during the
+    aarch64 environment verification), so privilege-based failure is not
+    portable. An occupied loopback port fails to bind on every platform
+    and for every user.
+    """
+    import socket
+
+    occupied = socket.socket()
+    occupied.bind(("127.0.0.1", 0))
+    occupied.listen(1)
+    port = occupied.getsockname()[1]
+    try:
+        monkeypatch.setenv(BROKER_SPEC_ENV, str(_spec_json(tmp_path, port=port)))
+        monkeypatch.setenv(KEY_ENV, KEY)
+        job = owned_job
+        plugin = AevalPlugin()
+        await plugin.on_job_start(job)
+        context = plugin._context
+
+        start = event_for(job)
+        await emit(job, start, TrialEvent.START)
+        state = context.trials[str(start.trial_id)]
+        assert state.broker is None
+        assert any(
+            "model broker startup failed" in r for r in state.infra_invalid_reasons
+        ), state.infra_invalid_reasons
+    finally:
+        occupied.close()
 
 
 async def test_plugin_without_spec_runs_brokerless(owned_job, monkeypatch):
@@ -365,3 +381,37 @@ async def test_plugin_stops_broker_on_cancellation(broker_owned_job):
     assert state.broker is not None
     await emit(job, start, TrialEvent.CANCEL)
     assert state.broker is None
+
+
+def test_broker_that_died_is_reported_with_its_stderr(tmp_path):
+    """A broker that exits on its own closes the lease, and every later
+    model call fails with AEVAL_LEASE_CLOSED — the trial log must carry
+    the reason rather than leaving it unexplained (real-chain finding)."""
+    from aeval.hooks.broker_lifecycle import note_broker_unexpected_exit
+
+    class _Process:
+        def __init__(self, code):
+            self._code = code
+
+        def poll(self):
+            return self._code
+
+    class _Broker:
+        def __init__(self, code, tail=""):
+            self.process = _Process(code)
+            self._stderr_tail = tail
+
+    class _State:
+        def __init__(self, broker):
+            self.broker = broker
+
+    assert note_broker_unexpected_exit(_State(None)) is None
+    assert note_broker_unexpected_exit(_State(_Broker(None))) is None
+    message = note_broker_unexpected_exit(
+        _State(_Broker(1, "Error: listen EADDRINUSE: address already in use"))
+    )
+    assert message is not None
+    assert "code 1" in message
+    assert "EADDRINUSE" in message
+    silent = note_broker_unexpected_exit(_State(_Broker(0)))
+    assert silent is not None and "no stderr captured" in silent

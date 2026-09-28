@@ -33,6 +33,7 @@ import json
 from pathlib import Path
 from typing import Any
 
+from aeval.agents.dsh.agent import find_session_record
 from aeval.contracts import (
     ArtifactRef,
     CollectOutcome,
@@ -44,6 +45,7 @@ from aeval.contracts import (
 from aeval.suite_models import ResolvedSuite
 
 __all__ = [
+    "find_bundle_descriptor",
     "EvidenceIntegrityError",
     "FIXED_OUTPUT_PATHS",
     "build_required_collect_plan",
@@ -127,6 +129,27 @@ def validate_collect_declarations(
                 f"collect plan output {name!r} is not produced by any "
                 "declared [[verifier.collect]] command"
             )
+
+
+def find_bundle_descriptor(trial_dir: Path) -> Path | None:
+    """Locate the descriptor Harbor downloaded for this trial.
+
+    The control plugin writes it inside the sandbox's agent logs dir
+    (``/logs/agent/bundle_descriptor.json``), and Harbor downloads that
+    tree to ``<trial_dir>/agent/`` — so the host-side path carries the
+    ``agent/`` prefix. A deployment that copies it to the trial root is
+    accepted too, but the downloaded location is checked first: looking
+    only at the trial root made every real run fail the evidence gate
+    with "bundle descriptor missing" while the file was present
+    (found during environment verification).
+    """
+    trial_dir = Path(trial_dir)
+    candidates = [trial_dir / "agent" / "bundle_descriptor.json",
+                  trial_dir / "bundle_descriptor.json"]
+    for candidate in candidates:
+        if candidate.is_file():
+            return candidate
+    return None
 
 
 def load_collection_manifest(trial_dir: Path) -> CollectionManifest:
@@ -302,8 +325,8 @@ def verify_evidence_bundle(
     # of what was observed. Without it there is no session ownership
     # and no stop reason: the evidence is incomplete (P0-6 — this used
     # to be a recorded issue, not a gate).
-    descriptor_path = trial_dir / "bundle_descriptor.json"
-    if not descriptor_path.is_file():
+    descriptor_path = find_bundle_descriptor(trial_dir)
+    if descriptor_path is None:
         raise EvidenceIntegrityError(
             f"trial {manifest.trial_id}: bundle descriptor missing "
             "(host-side control plugin) — refusing to pass unverifiable "
@@ -319,8 +342,15 @@ def verify_evidence_bundle(
         raise EvidenceIntegrityError(
             f"bundle descriptor invalid: {exc}"
         ) from exc
-    session_root = (trial_dir / descriptor.session_root).resolve()
-    root = trial_dir.resolve()
+    # ``session_root`` is relative to the DESCRIPTOR's own directory
+    # (the control plugin wrote it beside the sandbox agent logs, which
+    # Harbor downloads to <trial_dir>/agent/), not to the trial root.
+    # Resolving it against the trial root made every real run fail with
+    # "session_root does not exist" while the tree was right there
+    # (found during environment verification).
+    descriptor_dir = descriptor_path.parent.resolve()
+    session_root = (descriptor_dir / descriptor.session_root).resolve()
+    root = descriptor_dir
     if not session_root.is_relative_to(root):
         raise EvidenceIntegrityError(
             f"bundle descriptor session_root escapes the trial dir: "
@@ -333,11 +363,28 @@ def verify_evidence_bundle(
             f"bundle descriptor session_root does not exist: "
             f"{descriptor.session_root}"
         )
-    session_path = (trial_dir / FIXED_OUTPUT_PATHS["dsh_session"]).resolve()
-    if not session_path.is_relative_to(session_root):
+    # Session ownership by CONTENT, not by location: collection writes the
+    # session bytes to a fixed logical path (FIXED_OUTPUT_PATHS), so the
+    # artifact is a copy — the invariant that matters is that it IS the
+    # official record of this descriptor's session, which is a strictly
+    # stronger statement than "the file sits under session_root".
+    record = find_session_record(session_root, descriptor.session_id)
+    if record is None:
         raise EvidenceIntegrityError(
-            "dsh_session artifact is not inside the descriptor's "
-            f"session_root ({descriptor.session_root})"
+            "the descriptor's session_root "
+            f"({descriptor.session_root}) holds no official record for "
+            f"session {descriptor.session_id}"
+        )
+    artifact = bundle.artifacts.get(FIXED_OUTPUT_PATHS["dsh_session"])
+    if artifact is None:
+        raise EvidenceIntegrityError(
+            "dsh_session artifact missing from the evidence bundle"
+        )
+    expected = hashlib.sha256(record.read_bytes()).hexdigest()
+    if artifact.sha256 != expected:
+        raise EvidenceIntegrityError(
+            "dsh_session artifact is not this trial's official session "
+            f"record (artifact {artifact.sha256[:12]}…, official {expected[:12]}…)"
         )
     bundle.bundle_descriptor = descriptor
     bundle.stop_reason = descriptor.stop_reason

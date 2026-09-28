@@ -469,12 +469,11 @@ def bind_observed_identity(
             "observed identity records no architecture — the sandbox "
             "architecture must be measured, not assumed"
         )
-    if observed.architecture != sandbox_image.platform:
+    if _canonical_arch(observed.architecture) != _canonical_arch(sandbox_image.platform):
         raise LockMismatchError(
             f"sandbox architecture: expected {sandbox_image.platform!r}, "
             f"actual {observed.architecture!r}"
         )
-
     node_matrix = expected.dsh.node_versions if expected.dsh else []
     if not node_matrix:
         raise LockMismatchError(
@@ -492,6 +491,36 @@ def bind_observed_identity(
             f"the locked matrix {node_matrix} — either install a matrix "
             "version or revise the matrix with a recorded decision"
         )
+
+
+# The sandbox's own kernel reports `uname -m` (`aarch64`), while OCI image
+# manifests and the runtime lock use the OCI platform vocabulary
+# (`arm64`). Both name the same architecture, so the binding compares
+# canonical forms — verified on the arm64 e2b host, where a strict string
+# compare rejected a correct observation.
+_ARCH_ALIASES = {
+    "aarch64": "arm64",
+    "arm64": "arm64",
+    "armv8l": "arm64",
+    "x86_64": "amd64",
+    "amd64": "amd64",
+    "i386": "386",
+    "i686": "386",
+    "386": "386",
+    "riscv64": "riscv64",
+    "ppc64le": "ppc64le",
+    "s390x": "s390x",
+}
+
+
+def _canonical_arch(value: str) -> str:
+    """Canonicalize an architecture name; unknown values pass through.
+
+    Unknown names are deliberately NOT normalized away: a value nobody
+    recognizes must still compare unequal to the locked platform so the
+    binding fails loudly instead of matching by accident.
+    """
+    return _ARCH_ALIASES.get(value.strip().lower(), value.strip().lower())
 
 
 def _node_in_matrix(version: str, matrix: list[str]) -> bool:

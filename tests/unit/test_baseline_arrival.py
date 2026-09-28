@@ -45,9 +45,20 @@ class FakeEnv:
 
     def __init__(self, *, files=None, network_mode="no-network",
                  allowed_hosts=None, approval_policy="allow",
-                 has_network_policy=True, has_approval_policy=True):
+                 has_network_policy=True, has_approval_policy=True,
+                 capabilities="e2b"):
         self._files = files or {}
         self.approval_policy = approval_policy if has_approval_policy else None
+        if capabilities == "e2b":
+            self.capabilities = SimpleNamespace(
+                disable_internet=True, network_allowlist=True,
+                dynamic_network_policy=True,
+            )
+        elif capabilities == "none":
+            self.capabilities = SimpleNamespace(
+                disable_internet=False, network_allowlist=False,
+                dynamic_network_policy=False,
+            )
         if has_network_policy:
             self.network_policy = SimpleNamespace(
                 network_mode=network_mode, allowed_hosts=allowed_hosts or [],
@@ -123,6 +134,30 @@ async def test_probe_rejects_db_sources_fail_closed():
         )
 
 
+async def test_probe_reads_harbor_exec_result_return_code():
+    """Harbor's ExecResult names the field ``return_code``; reading only
+    ``exit_code`` made every real probe fail (aarch64 finding)."""
+    class HarborExecEnv:
+        async def exec(self, command):
+            return SimpleNamespace(return_code=0, stdout="true", stderr=None)
+
+    value = await probe_observable(
+        HarborExecEnv(), ObservableSpec(name="ready", type="string",
+                                        source="file:/workspace/ready")
+    )
+    assert value == "true"
+
+    class FailingHarborExecEnv:
+        async def exec(self, command):
+            return SimpleNamespace(return_code=1, stdout="", stderr="missing")
+
+    with pytest.raises(Exception, match="exited 1"):
+        await probe_observable(
+            FailingHarborExecEnv(),
+            ObservableSpec(name="ready", type="string", source="file:/workspace/ready"),
+        )
+
+
 async def test_probe_rejects_env_without_exec():
     class NoExec:
         pass
@@ -180,12 +215,31 @@ async def test_clock_effective_detects_missing_handle():
     assert issues and "missing" in issues[0]
 
 
-async def test_isolation_missing_handle_or_policy_is_a_failure():
+async def test_isolation_missing_handle_is_a_failure():
     """P0-2: unverifiable isolation must block, not silently pass."""
     issues = await assert_isolation_policy(None)
     assert issues and "no environment handle" in issues[0]
-    issues2 = await assert_isolation_policy(FakeEnv(has_approval_policy=False))
-    assert issues2 and "unverifiable" in issues2[0]
+
+
+async def test_isolation_without_any_observable_fact_is_a_failure():
+    """An environment exposing nothing to assert must not pass."""
+    env = FakeEnv(has_approval_policy=False, has_network_policy=False)
+    del env.capabilities
+    issues = await assert_isolation_policy(env)
+    assert issues and "unverifiable" in issues[0]
+
+
+async def test_isolation_requires_a_policy_enforcing_environment():
+    """A provider that can enforce no network policy cannot isolate."""
+    issues = await assert_isolation_policy(FakeEnv(capabilities="none"))
+    assert issues and "cannot isolate" in issues[0]
+
+
+async def test_isolation_passes_on_a_real_shaped_e2b_environment():
+    """The real e2b handle exposes capabilities (not approval_policy);
+    that is a valid, observable isolation fact."""
+    env = FakeEnv(has_approval_policy=False, capabilities="e2b")
+    assert await assert_isolation_policy(env) == []
 
 
 async def test_isolation_rejects_ask_policy():
@@ -328,6 +382,47 @@ def test_bind_observed_identity_requires_locked_sandbox_image(runtime_lock):
     )
     with pytest.raises(LockMismatchError, match="pins no 'sandbox' image"):
         bind_observed_identity(observed, runtime_lock)
+
+
+@pytest.mark.parametrize(
+    "observed_arch, expected_platform, ok",
+    [
+        # the real arm64 e2b sandbox reports uname -m aarch64 while the
+        # lock/OCI manifest says arm64 (found on the aarch64 host)
+        ("aarch64", "arm64", True),
+        ("arm64", "arm64", True),
+        ("x86_64", "amd64", True),
+        ("amd64", "amd64", True),
+        # a genuinely wrong architecture must still fail
+        ("x86_64", "arm64", False),
+        ("aarch64", "amd64", False),
+        # an unrecognized name must not match by accident
+        ("not-an-arch", "arm64", False),
+    ],
+)
+def test_observed_architecture_uses_canonical_names(
+    runtime_lock, observed_arch, expected_platform, ok
+):
+    lock = _lock_with_sandbox(runtime_lock).model_copy(
+        update={
+            "images": {
+                "sandbox": ImageIdentity(
+                    reference="harbor:443/e2b-orchestration/ubuntu@sha256:" + "a" * 64,
+                    digest="a" * 64, platform=expected_platform,
+                )
+            }
+        }
+    )
+    observed = ObservedIdentity(
+        backend="e2b", e2b_sdk_version="2.50.0",
+        image_digest="sha256:" + "a" * 64,
+        architecture=observed_arch, node_version="24.20.0",
+    )
+    if ok:
+        bind_observed_identity(observed, lock)
+    else:
+        with pytest.raises(LockMismatchError, match="architecture"):
+            bind_observed_identity(observed, lock)
 
 
 def test_node_matrix_minor_range_matches():

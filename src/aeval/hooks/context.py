@@ -79,6 +79,16 @@ class EvaluationContext:
     trials_dir: Path | None = None
     closed: bool = False
     broker_spec: Any = None
+    # monotonic trial index for grading coordinates
+    trial_counter: int = 0
+    # owner-side access to live trials/environments (hooks/environment_access.py)
+    environments: Any = None
+
+    def next_trial_index(self) -> int:
+        """Zero-based, monotonic index of the trial being recorded."""
+        index = self.trial_counter
+        self.trial_counter += 1
+        return index
 
     def trial_state(self, trial_id: str) -> TrialState:
         if not trial_id:

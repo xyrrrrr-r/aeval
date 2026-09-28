@@ -11,13 +11,22 @@ from typing import Any
 from aeval.bundle.manifest import _atomic_write_json
 from aeval.contracts import RunBinding, RunManifest, RuntimeLock, job_config_hash
 from aeval.hooks.baseline_arrival import on_environment_started
+from aeval.hooks.collection import CollectionError, collect_trial_evidence
+from aeval.control.bootstrap import BootstrapError, bootstrap_trial_control
 from aeval.hooks.broker_lifecycle import (
+    note_broker_unexpected_exit,
     BrokerSpecError,
     parse_broker_spec,
     start_trial_broker,
     stop_trial_broker,
+    trial_control_paths,
 )
 from aeval.hooks.context import EvaluationContext, LifecycleError
+from aeval.hooks.environment_access import (
+    EnvironmentAccessError,
+    TrialEnvironmentRegistry,
+    install_trial_capture,
+)
 from aeval.hooks.evidence import (
     EvidenceIntegrityError, finalize_trial_record, gate_verification,
 )
@@ -98,18 +107,28 @@ def register_trial_hooks(job: Any, context: EvaluationContext) -> None:
             state.mark_infra_invalid(f"model broker startup failed: {exc}")
 
     async def _environment_started(event: Any) -> None:
+        # Harbor emits ENVIRONMENT_START *before* environment.start(),
+        # so the sandbox does not exist yet and no probe can observe
+        # anything here. The baseline/policy audit runs at AGENT_START
+        # (see _agent_started) where the started handle is available.
         state = context.state_for_event(event)
         if state.terminal:
             return
-        try:
-            await on_environment_started(event, context)
-        except Exception as exc:
-            state.mark_infra_invalid(f"environment_started audit failed: {exc}")
 
     async def _agent_started(event: Any) -> None:
         state = context.state_for_event(event)
         if state.terminal:
             return
+        # P0-2 audit at the first point where the sandbox is really up:
+        # the handle comes from the owner's trial registry, never from
+        # the (environment-less) hook event.
+        env_handle = None
+        if context.environments is not None:
+            env_handle = context.environments.environment(state.trial_id)
+        try:
+            await on_environment_started(event, context, env_handle)
+        except Exception as exc:
+            state.mark_infra_invalid(f"environment audit failed: {exc}")
         if state.infra_invalid_reasons:
             # P0-2: the model phase started on a tainted trial. The
             # real hard block is the owner refusing to hand out a model
@@ -119,6 +138,38 @@ def register_trial_hooks(job: Any, context: EvaluationContext) -> None:
             if issue not in state.evidence_issues:
                 state.evidence_issues.append(issue)
             state.mark_infra_invalid(issue)
+            return
+        # P0-4 owner side: deploy the job token and create the trusted
+        # control binding. This is the first point where the sandbox
+        # exists (AGENT_START), and it is deliberately skipped for a
+        # tainted trial — the owner must not hand out a model token to
+        # a trial that already failed its environment audit.
+        if context.broker_spec is None or state.broker is None:
+            return
+        try:
+            binding, config = await bootstrap_trial_control(
+                environment=env_handle,
+                context=context,
+                trial_id=state.trial_id,
+                paths=trial_control_paths(state, context.run_dir),
+                broker=state.broker,
+                provider=str(context.broker_spec.identity.get("provider", "")),
+                model=str(context.broker_spec.identity.get("model", "")),
+                # in-sandbox control stack (verified deployment, §7.5/7.6)
+                agent=(
+                    context.environments.agent(state.trial_id)
+                    if context.environments is not None else None
+                ),
+                control_dist=getattr(context.broker_spec, "control_dist", None),
+                control_ca=getattr(context.broker_spec, "control_ca", None),
+                reasoning_effort=context.broker_spec.identity.get("reasoningEffort"),
+                limits=dict(getattr(context.broker_spec, "limits", {}) or {}),
+            )
+        except BootstrapError as exc:
+            state.mark_infra_invalid(f"control bootstrap failed: {exc}")
+            return
+        state.binding = binding
+        state.control_config = config
 
     async def _agent_ended(event: Any) -> None:
         state = context.state_for_event(event)
@@ -136,6 +187,30 @@ def register_trial_hooks(job: Any, context: EvaluationContext) -> None:
                 raise LifecycleError("verification started after trial termination")
             if state.binding is None:
                 raise LifecycleError("trial has no trusted control binding")
+            # P0-6 real producer: trust first, then collect the fixed
+            # evidence outputs from the live trial. Collection still runs
+            # for trials that will fail later checks, so failures and
+            # cancellations leave locatable evidence behind.
+            environments = context.environments
+            environment = (
+                environments.environment(state.trial_id) if environments else None
+            )
+            agent = environments.agent(state.trial_id) if environments else None
+            if state.trial_dir is not None:
+                try:
+                    await collect_trial_evidence(
+                        trial_dir=state.trial_dir,
+                        trial_id=state.trial_id,
+                        suite=context.suite,
+                        environment=environment,
+                        agent=agent,
+                        runtime_lock=context.runtime_lock,
+                        session_id=state.session_id,
+                    )
+                except CollectionError as exc:
+                    state.evidence_ok = False
+                    state.mark_infra_invalid(f"evidence collection failed: {exc}")
+                    raise EvidenceIntegrityError(str(exc)) from exc
             await gate_verification(event, context)
             bundle = context.artifacts[state.trial_id]
             if bundle.trial_id != state.trial_id or bundle.bundle_descriptor is None:
@@ -150,9 +225,19 @@ def register_trial_hooks(job: Any, context: EvaluationContext) -> None:
         state = context.state_for_event(event)
         exception = event.result.exception_info
         cancelled = cancelled or (exception is not None and exception.exception_type == "CancelledError")
+        # Record a broker that died on its own BEFORE stopping it: that
+        # closes the lease and makes every later model call fail with
+        # AEVAL_LEASE_CLOSED, which is otherwise inexplicable from the
+        # trial log (found on the real chain).
+        unexpected = note_broker_unexpected_exit(state)
+        if unexpected is not None:
+            state.mark_infra_invalid(unexpected)
         stop_trial_broker(state)
         if state.finish(exception, cancelled=cancelled):
             await finalize_trial_record(event, context)
+            await _grade_and_record(event, context, state)
+        if context.environments is not None:
+            context.environments.forget(state.trial_id)
 
     async def _trial_ended(event: Any) -> None:
         await _finish(event)
@@ -172,6 +257,97 @@ def register_trial_hooks(job: Any, context: EvaluationContext) -> None:
         raise HookRegistrationError(f"failed to register trial hooks on the job: {exc}") from exc
 
 
+async def _grade_and_record(event: Any, context: EvaluationContext, state: Any) -> None:
+    """Run the grading pipeline and persist the trial record (P0-7).
+
+    This is the production wiring P0-7 needs: without it no trial ever
+    reaches the store and ``finalize_run`` refuses to seal the run
+    (found on the real chain: "trial(s) without a store record").
+
+    Only a trial whose evidence actually passed the gate is graded; a
+    trial without verified evidence stays unrecorded on purpose, because
+    a fabricated record would let an incomplete run seal. Grader-side
+    failures are already persisted as ``infra_invalid`` by the pipeline;
+    a pipeline-level error is recorded on the trial.
+    """
+    from aeval.contracts import TrialCoordinates
+    from aeval.store.sqlite import TrialStore
+    from aeval.verdict.pipeline import GradingPipelineError, grade_and_record
+    from aeval.verdict.progress import RequirementProgress
+
+    bundle = context.artifacts.get(state.trial_id)
+    if bundle is None or getattr(bundle, "bundle_descriptor", None) is None:
+        return
+
+    # Requirement bitmap from the stages that actually ran. judge_finished
+    # is deliberately absent: only the pipeline may set it.
+    progress = RequirementProgress()
+    progress.mark("input_complete")        # evidence inputs verified
+    progress.mark("artifact_schema_ok")    # fixed-path/schema discipline passed
+    progress.mark("integration_valid")     # binding + descriptor verified
+    if state.phase == "ended":
+        progress.mark("agent_finished")
+    transcript_extra = _transcript_extra(context, state)
+    if transcript_extra is not None:
+        progress.mark("render_valid")      # canonical transcript readable
+
+    store = TrialStore(context.store_path)
+    try:
+        await grade_and_record(
+            suite=context.suite,
+            trial_id=state.trial_id,
+            coordinates=TrialCoordinates(
+                run_id=context.run_id,
+                suite_id=context.suite.id,
+                suite_version=context.suite.version,
+                task_id=str(getattr(event, "task_name", "unknown")),
+                trial_index=context.next_trial_index(),
+            ),
+            stop_reason=bundle.stop_reason,
+            baseline_ok=state.baseline_ok,
+            progress=progress,
+            evidence=bundle,
+            transcript_extra=transcript_extra,
+            store=store,
+        )
+    except GradingPipelineError as exc:
+        state.mark_infra_invalid(f"grading failed: {exc}")
+    finally:
+        store.close()
+
+
+def _transcript_extra(context: EvaluationContext, state: Any) -> dict[str, Any] | None:
+    """The ATIF ``extra`` envelope for grading, read through the official
+    session path (never parsed by hand); ``None`` when unreadable.
+
+    A failure here is recorded on the trial instead of being swallowed:
+    the grader then reports ``cannot_judge`` (its required completeness
+    fields are unavailable), and the reason must be visible in the audit
+    rather than inferred (found on the real chain: the verdict was
+    cannot_judge with nothing explaining why).
+    """
+    environments = context.environments
+    agent = environments.agent(state.trial_id) if environments is not None else None
+    if agent is None or not hasattr(agent, "read_trial_session"):
+        state.evidence_issues.append(
+            "grading has no agent to read the official session from"
+        )
+        return None
+    try:
+        transcript = agent.read_trial_session()
+    except Exception as exc:
+        state.evidence_issues.append(
+            f"official session read failed at grading time: {exc}"
+        )
+        return None
+    extra: dict[str, Any] = {"aeval": {}}
+    completeness = getattr(transcript, "completeness", None)
+    if completeness is not None:
+        extra["aeval"]["completeness"] = completeness.model_dump(mode="json")
+    extra["aeval"]["stop_reason"] = getattr(transcript, "stop_reason", None)
+    return extra
+
+
 class AevalPlugin:
     def __init__(self) -> None:
         self._context: EvaluationContext | None = None
@@ -183,6 +359,11 @@ class AevalPlugin:
         context = create_run_context(job)
         if context.job_id != str(job.id):
             raise LifecycleError("context belongs to another job")
+        context.environments = TrialEnvironmentRegistry()
+        try:
+            install_trial_capture(job, context.environments)
+        except EnvironmentAccessError as exc:
+            raise HookRegistrationError(str(exc)) from exc
         self._context = context
         register_trial_hooks(job, context)
 
@@ -200,6 +381,11 @@ class AevalPlugin:
                     cancelled=result.exception_info.exception_type == "CancelledError",
                 )
         for state in context.trials.values():
+            # A broker that exited on its own closed its lease; record why
+            # before the owner stops it (only its stderr tail explains it).
+            unexpected = note_broker_unexpected_exit(state)
+            if unexpected is not None:
+                state.mark_infra_invalid(unexpected)
             stop_trial_broker(state)
             if not state.terminal:
                 state.mark_infra_invalid("job ended without a terminal trial event")

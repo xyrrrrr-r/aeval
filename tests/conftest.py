@@ -94,7 +94,7 @@ def build_complete_trial_dir(
     tamper: str | None = None,
     omit: str | None = None,
     descriptor: bool = True,
-    session_root: str = "sessions",
+    session_root: str = "dsh-home",
     manifest_overrides: Mapping[str, object] | None = None,
 ) -> tuple[Path, CollectionManifest]:
     """Create a trial dir whose evidence bundle verifies cleanly.
@@ -148,6 +148,17 @@ def build_complete_trial_dir(
         manifest.model_dump_json(), encoding="utf-8"
     )
     if descriptor:
+        # The official session record the descriptor's session_root must
+        # hold: collection copies it to the fixed logical path, and the
+        # gate checks ownership by CONTENT (the artifact must BE this
+        # record), not by where the copy sits.
+        session_id = "s-1"
+        record = root / session_root / session_id / "session.v4.jsonl.zstd"
+        record.parent.mkdir(parents=True, exist_ok=True)
+        collected = root / output_path_for("dsh_session")
+        record.write_bytes(
+            collected.read_bytes() if collected.is_file() else b"session-record"
+        )
         (root / "bundle_descriptor.json").write_text(
             json.dumps(
                 {

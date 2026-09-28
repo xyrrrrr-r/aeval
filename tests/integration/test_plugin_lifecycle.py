@@ -4,6 +4,7 @@ import json
 from datetime import datetime, timezone
 from hashlib import sha256
 from pathlib import Path
+from types import SimpleNamespace
 from uuid import uuid4
 
 import pytest
@@ -299,6 +300,12 @@ async def test_verifier_rejects_unbound_or_cross_trial_evidence(owned_job, monke
         )
 
     monkeypatch.setattr("aeval.hooks.plugin.gate_verification", collect)
+
+    async def noop_collection(**_kwargs):
+        return None
+
+    # this test is about descriptor identity, not evidence collection
+    monkeypatch.setattr("aeval.hooks.plugin.collect_trial_evidence", noop_collection)
     await emit(owned_job, second, TrialEvent.VERIFICATION_START)
     descriptor = descriptor.model_copy(update={"session_id": "wrong-session"})
     with pytest.raises(EvidenceIntegrityError, match="session_id"):
@@ -418,10 +425,306 @@ async def test_agent_start_on_tainted_trial_is_recorded(owned_job, monkeypatch):
     assert "agent started despite recorded infra failures" in state.evidence_issues
     assert "agent started despite recorded infra failures" in state.infra_invalid_reasons
 
-    # a clean trial records nothing
-    clean = event_for(owned_job, name="clean")
-    await emit(owned_job, clean, TrialEvent.START)
-    clean_state = context.trials[str(clean.trial_id)]
-    await hook(clean.model_copy(update={"event": TrialEvent.AGENT_START}))
-    assert not clean_state.evidence_issues
-    assert "agent started despite recorded infra failures" not in clean_state.infra_invalid_reasons
+
+async def test_agent_start_with_a_started_environment_passes_the_audit(owned_job):
+    """P0-4 seam: the owner resolves the live environment at AGENT_START,
+    so a healthy sandbox passes the baseline/policy audit instead of being
+    blocked for a missing handle."""
+
+    class Env:
+        def __init__(self):
+            self.approval_policy = "allow"
+            self.network_policy = type(
+                "P", (), {"network_mode": "no-network", "allowed_hosts": []}
+            )()
+
+        async def exec(self, command):
+            return type("R", (), {"exit_code": 0, "stdout": "true", "stderr": ""})()
+
+    plugin = AevalPlugin()
+    await plugin.on_job_start(owned_job)
+    context = plugin._context
+    # the suite's baseline must probe a suite-declared observable
+    context.suite.overlay.baselines = [
+        type(context.suite.overlay.baselines[0])(
+            id="ready", probe="observable:ready", equals="true",
+        )
+    ]
+    context.suite.overlay.observables = [
+        type(context.suite.overlay.observables[0])(
+            name="ready", type="string", source="file:/workspace/ready",
+        )
+    ]
+    start = event_for(owned_job)
+    await emit(owned_job, start, TrialEvent.START)
+    state = context.trials[str(start.trial_id)]
+    # the started handle the owner would have captured from the live trial
+    state.trial_id  # noqa: B018 - explicit: registry is keyed by this id
+    context.environments.capture(_FakeTrial(state.trial_id, Env()))
+
+    hook = owned_job._trial_queue._hooks[TrialEvent.AGENT_START][-1]
+    await hook(start.model_copy(update={"event": TrialEvent.AGENT_START}))
+
+    assert state.baseline_ok, state.baseline_failures
+    assert not state.infra_invalid_reasons, state.infra_invalid_reasons
+
+
+class _FakeTrial:
+    def __init__(self, trial_id, environment):
+        self.id = trial_id
+        self.agent_environment = environment
+
+
+class _FakeTrial:
+    def __init__(self, trial_id, environment):
+        self.id = trial_id
+        self.agent_environment = environment
+
+
+
+
+async def test_verification_collects_evidence_from_the_live_trial(owned_job, monkeypatch):
+    """P0-6 producer wiring: a bound trial collects real artifacts through
+    the owner's live handle, and the manifest reaches the gate."""
+    plugin = await attach_job_plugin(owned_job, "aeval.hooks:AevalPlugin")
+    event = event_for(owned_job, "collecting")
+    await emit(owned_job, event, TrialEvent.START)
+    context = plugin._context
+    state = context.trials[str(event.trial_id)]
+    _, _, binding = bind(context, event)
+
+    seen: dict[str, Any] = {}
+
+    async def fake_collect(**kwargs):
+        seen.update(kwargs)
+        return None
+
+    monkeypatch.setattr("aeval.hooks.plugin.collect_trial_evidence", fake_collect)
+
+    async def fake_gate(_event, ctx):
+        ctx.artifacts[str(state.trial_id)] = EvidenceBundle(
+            trial_id=state.trial_id, stop_reason="agent_exit_0",
+            bundle_descriptor=BundleDescriptor(
+                run=binding.run, trial_id=binding.trial_id,
+                session_id=binding.session_id, config_digest=binding.config_digest,
+                session_root=binding.paths.session_root, stop_reason="agent_exit_0",
+            ),
+        )
+
+    monkeypatch.setattr("aeval.hooks.plugin.gate_verification", fake_gate)
+    await emit(owned_job, event, TrialEvent.VERIFICATION_START)
+    assert seen["trial_id"] == state.trial_id
+    assert seen["trial_dir"] == state.trial_dir
+    assert seen["session_id"] == binding.session_id
+    assert seen["suite"] is context.suite
+
+
+async def test_verification_marks_infra_invalid_when_collection_fails(
+    owned_job, monkeypatch
+):
+    """A trial whose evidence cannot be produced must not reach grading."""
+    plugin = await attach_job_plugin(owned_job, "aeval.hooks:AevalPlugin")
+    event = event_for(owned_job, "uncollectable")
+    await emit(owned_job, event, TrialEvent.START)
+    context = plugin._context
+    state = context.trials[str(event.trial_id)]
+    bind(context, event)
+
+    async def boom(**_kwargs):
+        from aeval.hooks.collection import CollectionError
+
+        raise CollectionError("official session record missing")
+
+    monkeypatch.setattr("aeval.hooks.plugin.collect_trial_evidence", boom)
+    with pytest.raises(EvidenceIntegrityError, match="official session record missing"):
+        await emit(owned_job, event, TrialEvent.VERIFICATION_START)
+    assert state.evidence_ok is False
+    assert any("evidence collection failed" in r for r in state.infra_invalid_reasons)
+
+
+async def _agent_start_with_neutral_audit(owned_job, monkeypatch, name):
+    """Attach the plugin and emit START+AGENT_START with the audit stubbed.
+
+    The audit itself is covered elsewhere; these tests target the owner's
+    control-bootstrap wiring at AGENT_START.
+    """
+    plugin = await attach_job_plugin(owned_job, "aeval.hooks:AevalPlugin")
+    context = plugin._context
+
+    async def neutral_audit(_event, _ctx, _handle=None):
+        return None
+
+    monkeypatch.setattr("aeval.hooks.plugin.on_environment_started", neutral_audit)
+    event = event_for(owned_job, name)
+    await emit(owned_job, event, TrialEvent.START)
+    return plugin, context, event
+
+
+async def test_agent_start_bootstraps_the_control_binding(owned_job, monkeypatch):
+    """P0-4: at AGENT_START the owner deploys the token and binds control."""
+    plugin, context, event = await _agent_start_with_neutral_audit(
+        owned_job, monkeypatch, "bootstrapping"
+    )
+    state = context.trials[str(event.trial_id)]
+    context.broker_spec = SimpleNamespace(identity={"provider": "offline", "model": "m"})
+    state.broker = SimpleNamespace(url="http://127.0.0.1:9", token_path=Path("/tmp/tok"))
+    seen: dict[str, Any] = {}
+
+    async def fake_bootstrap(**kwargs):
+        seen.update(kwargs)
+        binding = SimpleNamespace(config_digest="a" * 64, trial_id=state.trial_id)
+        return binding, {"digest": "a" * 64}
+
+    monkeypatch.setattr("aeval.hooks.plugin.bootstrap_trial_control", fake_bootstrap)
+    await emit(
+        owned_job, event.model_copy(update={"event": TrialEvent.AGENT_START}),
+        TrialEvent.AGENT_START,
+    )
+    assert seen["trial_id"] == state.trial_id
+    assert seen["provider"] == "offline" and seen["model"] == "m"
+    assert seen["broker"] is state.broker
+    assert state.binding is not None and state.control_config == {"digest": "a" * 64}
+    assert not any("control bootstrap failed" in r for r in state.infra_invalid_reasons)
+
+
+async def test_tainted_trial_never_receives_a_control_binding(owned_job, monkeypatch):
+    """The owner's hard block: a trial that failed its environment audit
+    must not get a model token or a control binding."""
+    plugin, context, event = await _agent_start_with_neutral_audit(
+        owned_job, monkeypatch, "tainted"
+    )
+    state = context.trials[str(event.trial_id)]
+    context.broker_spec = SimpleNamespace(identity={"provider": "offline", "model": "m"})
+    state.broker = SimpleNamespace(url="http://127.0.0.1:9", token_path=Path("/tmp/tok"))
+    state.mark_infra_invalid("baseline_arrival: seed mismatch")
+    called = False
+
+    async def fake_bootstrap(**_kwargs):
+        nonlocal called
+        called = True
+        return None, None
+
+    monkeypatch.setattr("aeval.hooks.plugin.bootstrap_trial_control", fake_bootstrap)
+    await emit(
+        owned_job, event.model_copy(update={"event": TrialEvent.AGENT_START}),
+        TrialEvent.AGENT_START,
+    )
+    assert called is False, "a tainted trial must not be bootstrapped"
+    assert state.binding is None
+
+
+async def test_bootstrap_failure_taints_the_trial(owned_job, monkeypatch):
+    """A binding that cannot be created keeps the trial out of grading."""
+    plugin, context, event = await _agent_start_with_neutral_audit(
+        owned_job, monkeypatch, "bootstrap-fails"
+    )
+    state = context.trials[str(event.trial_id)]
+    context.broker_spec = SimpleNamespace(identity={"provider": "offline", "model": "m"})
+    state.broker = SimpleNamespace(url="http://127.0.0.1:9", token_path=Path("/tmp/tok"))
+
+    async def failing_bootstrap(**_kwargs):
+        from aeval.control.bootstrap import BootstrapError
+
+        raise BootstrapError("environment exposes no upload_file")
+
+    monkeypatch.setattr("aeval.hooks.plugin.bootstrap_trial_control", failing_bootstrap)
+    await emit(
+        owned_job, event.model_copy(update={"event": TrialEvent.AGENT_START}),
+        TrialEvent.AGENT_START,
+    )
+    assert state.binding is None
+    assert any(
+        "control bootstrap failed" in r for r in state.infra_invalid_reasons
+    ), state.infra_invalid_reasons
+
+
+async def test_trial_end_grades_and_persists_when_evidence_is_verified(
+    owned_job, monkeypatch
+):
+    """D34 (real-chain finding): the plugin must run the grading pipeline
+    at trial end, or no trial reaches the store and the run can never
+    seal."""
+    from aeval.contracts import BundleDescriptor, EvidenceBundle
+
+    plugin = await attach_job_plugin(owned_job, "aeval.hooks:AevalPlugin")
+    event = event_for(owned_job, "graded")
+    await emit(owned_job, event, TrialEvent.START)
+    context = plugin._context
+    state = context.trials[str(event.trial_id)]
+    _, _, binding = bind(context, event)
+    descriptor = BundleDescriptor(
+        run=binding.run, trial_id=binding.trial_id, session_id=binding.session_id,
+        config_digest=binding.config_digest, session_root=binding.paths.session_root,
+        stop_reason="agent_exit_0",
+    )
+    context.artifacts[state.trial_id] = EvidenceBundle(
+        trial_id=state.trial_id, stop_reason="agent_exit_0",
+        bundle_descriptor=descriptor,
+    )
+
+    seen: dict[str, Any] = {}
+
+    async def fake_grade(**kwargs):
+        seen.update(kwargs)
+        return None
+
+    monkeypatch.setattr("aeval.verdict.pipeline.grade_and_record", fake_grade)
+    await emit(owned_job, event, TrialEvent.END)
+
+    assert seen, "the grading pipeline ran"
+    assert seen["trial_id"] == state.trial_id
+    assert seen["coordinates"].run_id == context.run_id
+    assert seen["coordinates"].task_id == "example"
+    assert seen["stop_reason"] == "agent_exit_0"
+    assert seen["evidence"].bundle_descriptor is descriptor
+    snapshot = seen["progress"].snapshot()
+    assert snapshot.input_complete and snapshot.integration_valid
+    assert snapshot.artifact_schema_ok
+    assert snapshot.agent_finished, "the trial ended cleanly"
+    assert snapshot.judge_finished is False, "only the pipeline sets judging"
+
+
+async def test_trial_without_verified_evidence_is_not_recorded(
+    owned_job, monkeypatch
+):
+    """A trial whose evidence never passed the gate must stay unrecorded:
+    a fabricated record would let an incomplete run seal."""
+    plugin = await attach_job_plugin(owned_job, "aeval.hooks:AevalPlugin")
+    event = event_for(owned_job, "unverified")
+    await emit(owned_job, event, TrialEvent.START)
+    called = False
+
+    async def fake_grade(**_kwargs):
+        nonlocal called
+        called = True
+
+    monkeypatch.setattr("aeval.verdict.pipeline.grade_and_record", fake_grade)
+    await emit(owned_job, event, TrialEvent.END)
+    assert called is False
+
+
+async def test_grading_pipeline_failure_taints_the_trial(owned_job, monkeypatch):
+    from aeval.contracts import BundleDescriptor, EvidenceBundle
+    from aeval.verdict.pipeline import GradingPipelineError
+
+    plugin = await attach_job_plugin(owned_job, "aeval.hooks:AevalPlugin")
+    event = event_for(owned_job, "grading-fails")
+    await emit(owned_job, event, TrialEvent.START)
+    context = plugin._context
+    state = context.trials[str(event.trial_id)]
+    _, _, binding = bind(context, event)
+    context.artifacts[state.trial_id] = EvidenceBundle(
+        trial_id=state.trial_id, stop_reason="agent_exit_0",
+        bundle_descriptor=BundleDescriptor(
+            run=binding.run, trial_id=binding.trial_id, session_id=binding.session_id,
+            config_digest=binding.config_digest,
+            session_root=binding.paths.session_root, stop_reason="agent_exit_0",
+        ),
+    )
+
+    async def failing_grade(**_kwargs):
+        raise GradingPipelineError("grader loading failed")
+
+    monkeypatch.setattr("aeval.verdict.pipeline.grade_and_record", failing_grade)
+    await emit(owned_job, event, TrialEvent.END)
+    assert any("grading failed" in r for r in state.infra_invalid_reasons)

@@ -82,6 +82,9 @@ class BrokerSpec:
     limits: Mapping[str, int]
     max_output_tokens: int
     listen_host: str = "127.0.0.1"
+    listen_tls: Mapping[str, str] | None = None
+    control_dist: Path | None = None
+    control_ca: Path | None = None
     node_bin: str | None = None
     token_count: Mapping[str, Any] | None = None
     timeout_ms: int | None = None
@@ -91,7 +94,8 @@ class BrokerSpec:
 
     @property
     def gateway_url(self) -> str:
-        return f"http://{self.listen_host}:{self.listen_port}"
+        scheme = "https" if self.listen_tls else "http"
+        return f"{scheme}://{self.listen_host}:{self.listen_port}"
 
 
 def parse_broker_spec(path_env: str | None = None) -> BrokerSpec | None:
@@ -115,8 +119,9 @@ def parse_broker_spec(path_env: str | None = None) -> BrokerSpec | None:
 
     unknown = set(data) - {
         "brokerJs", "nodeBin", "controlRoot", "upstream", "identity", "limits",
-        "maxOutputTokens", "listenHost", "listenPort", "tokenCount", "timeoutMs",
-        "tokenTtlMs", "readyTimeoutSec", "stopTimeoutSec",
+        "maxOutputTokens", "listenHost", "listenPort", "listenTls", "tokenCount",
+        "timeoutMs", "tokenTtlMs", "readyTimeoutSec", "stopTimeoutSec",
+        "controlDist", "controlCa",
     }
     if unknown:
         raise BrokerSpecError(f"broker spec has unknown keys: {sorted(unknown)}")
@@ -152,9 +157,24 @@ def parse_broker_spec(path_env: str | None = None) -> BrokerSpec | None:
     if not isinstance(max_output, int) or isinstance(max_output, bool) or max_output < 1:
         raise BrokerSpecError("broker spec maxOutputTokens must be a positive integer")
 
+    listen_tls = data.get("listenTls")
+    if listen_tls is not None:
+        if not isinstance(listen_tls, dict) or not listen_tls.get("key") or not listen_tls.get("cert"):
+            raise BrokerSpecError(
+                "broker spec listenTls needs {key, cert} file paths (PEM paths, not PEM text)"
+            )
+    control_dist = data.get("controlDist")
+    if control_dist is not None and not Path(str(control_dist)).is_dir():
+        raise BrokerSpecError(f"broker spec controlDist is not a directory: {control_dist}")
+    control_ca = data.get("controlCa")
+    if control_ca is not None and not Path(str(control_ca)).is_file():
+        raise BrokerSpecError(f"broker spec controlCa is not a file: {control_ca}")
     return BrokerSpec(
         broker_js=Path(broker_js),
         listen_port=listen_port,
+        listen_tls={k: str(v) for k, v in listen_tls.items()} if listen_tls else None,
+        control_dist=Path(str(control_dist)) if control_dist else None,
+        control_ca=Path(str(control_ca)) if control_ca else None,
         node_bin=str(data["nodeBin"]) if isinstance(data.get("nodeBin"), str) else None,
         upstream=upstream,
         identity=dict(data["identity"]),
@@ -204,6 +224,9 @@ def start_trial_broker(
         gateway_url=spec.gateway_url,
         provider=str(spec.identity.get("provider", "")),
         model=str(spec.identity.get("model", "")),
+        # the lease identity must match the control config field by field
+        reasoning_effort=spec.identity.get("reasoningEffort"),
+        limits=dict(spec.limits),
     )
     digest = control_config_digest(config)
 
@@ -219,6 +242,7 @@ def start_trial_broker(
         max_output_tokens=spec.max_output_tokens,
         listen_host=spec.listen_host,
         listen_port=spec.listen_port,
+        listen_tls=spec.listen_tls,
         token_out=trial_dir / "job-token",
         upstream=dict(spec.upstream),
         token_count=dict(spec.token_count) if spec.token_count else None,
@@ -242,6 +266,28 @@ def start_trial_broker(
     state.broker = broker
     state.control_config = config
     return broker, config
+
+
+def note_broker_unexpected_exit(state: TrialState) -> str | None:
+    """Describe a broker that died on its own; ``None`` when it is alive.
+
+    A broker that exits without the owner stopping it closes its lease,
+    and every later model call in the sandbox fails with
+    ``AEVAL_LEASE_CLOSED`` for a reason the trial log does not explain
+    (observed on the real chain). Only its stderr tail explains it.
+    """
+    broker = getattr(state, "broker", None)
+    process = getattr(broker, "process", None)
+    if process is None:
+        return None
+    code = process.poll()
+    if code is None:
+        return None
+    tail = str(getattr(broker, "_stderr_tail", "") or "").strip()
+    return (
+        f"broker exited on its own with code {code} before the trial ended"
+        + (f": {tail[-400:]}" if tail else " (no stderr captured)")
+    )
 
 
 def stop_trial_broker(state: TrialState, *, reason: str = "trial_terminal") -> None:

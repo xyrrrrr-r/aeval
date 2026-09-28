@@ -1,12 +1,17 @@
 #!/bin/sh
-# Harbor verifier test: the agent must have written exactly "hello"
-# into /workspace/result (no trailing newline, no extra whitespace).
-set -eu
+# Harbor verifier: the agent must have written exactly "hello" into
+# /workspace/result. Harbor requires a reward file from every verifier —
+# a script that only exits non-zero makes the trial crash with
+# RewardFileNotFoundError (found on the real e2b chain), so the reward is
+# always written and the script always exits 0.
+set -u
 
-expected="hello"
-actual="$(cat /workspace/result)"
+mkdir -p /logs/verifier
 
-if [ "$actual" != "$expected" ]; then
-    echo "result mismatch: expected '$expected', got '$actual'" >&2
-    exit 1
+reward=0
+if [ -f /workspace/result ] && [ "$(cat /workspace/result)" = "hello" ]; then
+    reward=1
 fi
+
+printf '%s\n' "$reward" > /logs/verifier/reward.txt
+exit 0

@@ -53,6 +53,12 @@ def _descriptor(trial_dir: Path, runtime_lock: RuntimeLock) -> None:
         ),
         encoding="utf-8",
     )
+    # the descriptor's session root must hold the official record whose
+    # bytes the collected dsh_session artifact copies (content ownership)
+    official = trial_dir / "sessions" / "s-1" / "session.v4.jsonl.zstd"
+    official.parent.mkdir(parents=True, exist_ok=True)
+    official.write_bytes(produce_session_record(trial_dir, b"binary session bytes")[1]
+                         and (trial_dir / "sessions" / "session.v4.jsonl.zstd").read_bytes())
 
 
 class _FakeTranscript:

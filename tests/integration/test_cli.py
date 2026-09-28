@@ -557,3 +557,19 @@ def test_run_sandbox_image_must_be_digest_pinned(tmp_path, native_suite_dir, har
     assert result.exit_code == 3
     assert not harbor_calls
     assert "digest-pinned" in result.output
+
+
+def test_run_force_build_reaches_the_composed_job(tmp_path, native_suite_dir, harbor_calls):
+    """Doc §6.3: aeval run delegates to Harbor, so --force-build must be
+    carried into the composed job or a stale template is reused."""
+    import json as _json
+
+    run_dir = tmp_path / "myrun"
+    result = runner.invoke(app, [
+        "run", "--suite", str(native_suite_dir), "--run-dir", str(run_dir),
+        "--store", str(tmp_path / "store.sqlite3"), "--harbor-cli", "test-harbor",
+        "--force-build",
+    ])
+    assert result.exit_code == 7, result.output
+    job = _json.loads((run_dir / "harbor-job.json").read_text(encoding="utf-8"))
+    assert job["environment"]["force_build"] is True

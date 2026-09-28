@@ -136,9 +136,16 @@ def test_evidence_verifier_accepts_in_trial_descriptor(tmp_path, runtime_lock, d
         plan=build_required_collect_plan(demo_suite),
         runtime_lock=runtime_lock,
     )
-    # a descriptor whose session_root owns the session artifact passes
+    # a descriptor whose session_root owns the session artifact passes;
+    # ownership is by content, so the official record must carry the same
+    # bytes the collector wrote to the fixed path
     (trial_dir / "bundle_descriptor.json").write_text(
         json.dumps(_descriptor(session_root="sessions")), encoding="utf-8")
+    record = trial_dir / "sessions" / "s-1" / "session.v4.jsonl.zstd"
+    record.parent.mkdir(parents=True, exist_ok=True)
+    record.write_bytes(
+        (trial_dir / "sessions" / "session.v4.jsonl.zstd").read_bytes()
+    )
     from aeval.hooks.evidence import build_required_collect_plan
     plan = build_required_collect_plan(demo_suite)
     bundle = verify_evidence_bundle(trial_dir, runtime_lock, plan)

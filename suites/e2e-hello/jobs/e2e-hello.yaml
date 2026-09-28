@@ -3,3 +3,10 @@ n_attempts: 5
 n_concurrent_trials: 1
 agents:
   - name: nop
+# The suite targets the e2b sandbox backend. Without an explicit type the
+# job falls back to the local docker environment, which cannot enforce the
+# task's network_mode="no-network" and aborts the run (found during the
+# aarch64 environment verification). Pinned here so the composed job
+# always runs on the backend the suite was validated against.
+environment:
+  type: e2b
