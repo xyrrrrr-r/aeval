@@ -13,6 +13,7 @@ from collections import Counter
 from copy import deepcopy
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 from typing import Any
 
 from harbor.models.trajectories import Agent, ObservationResult, Step, ToolCall, Trajectory
@@ -520,7 +521,89 @@ def normalized_interactions_to_atif_steps(interactions: list[NormalizedInteracti
     return steps
 
 
-def _usage_summary(events: list[dict[str, Any]], inherited: int) -> dict[str, Any]:
+# Records the pinned build emits that are not event types at all but
+# provably carry no model work: the session header has no seq and no data.
+# Anything else that is neither a known official event nor known token-free
+# fails closed, because it could hide a model call.
+TOKEN_FREE_NON_EVENT_TYPES = frozenset({"session"})
+
+# Event types that can represent model work whose usage this reducer cannot
+# see. Every other known official type is lifecycle/surface bookkeeping
+# (permission/preset, sandbox/mode, approval/policy, agent/inbox/spliced,
+# session/title, tool/result, ...) and cannot have consumed tokens.
+MODEL_WORK_EVENT_TYPES = frozenset({
+    "assistant/attempt",
+    "session/title-llm-request",
+    "web/deepseek-search-llm-request",
+    "llm/retry",
+    "llm/retry-started",
+    "compaction/start",
+    "compaction/summary",
+    "compaction/end",
+})
+
+# Gateway rejections the broker returns BEFORE dispatching to any provider:
+# the request provably consumed zero tokens (no upstream request was made).
+PRE_DISPATCH_REJECTION_CODES = frozenset({
+    "AEVAL_LEASE_CLOSED",
+    "AEVAL_LEASE_BUSY",
+    "AEVAL_AUXILIARY_REFUSED",
+    "AEVAL_BUDGET_EXHAUSTED",
+})
+
+# Written by the sandbox transport next to the bundle descriptor.
+GATEWAY_REJECTION_LOG = "gateway_refusals.jsonl"
+
+# An auxiliary model call the owner's policy does not allow the runtime to
+# make on its own; the session records the request, not its outcome.
+AUXILIARY_REQUEST_EVENT_TYPES = frozenset({"session/title-llm-request"})
+
+
+def _blocks_usage_exactness(event: dict[str, Any]) -> bool:
+    """True when a record can hide model work this reducer cannot see."""
+    kind = event.get("type")
+    if kind == "assistant/message":
+        return False
+    if kind in MODEL_WORK_EVENT_TYPES:
+        return True
+    return kind not in OFFICIAL_EVENT_TYPES and kind not in TOKEN_FREE_NON_EVENT_TYPES
+
+
+def count_pre_dispatch_auxiliary_rejections(logs_dir: Path) -> int:
+    """Auxiliary requests the gateway rejected before dispatch.
+
+    The in-sandbox transport appends one JSON object per rejection to
+    ``gateway_refusals.jsonl`` beside the bundle descriptor. Only rejections
+    the broker returns before dispatching count, and only for a request that
+    declared a purpose. Missing, oversized, or malformed evidence counts as
+    zero: an unexplained auxiliary request stays unaccounted and the verdict
+    stays ``partial`` instead of silently scoring an unknown run.
+    """
+    path = Path(logs_dir) / GATEWAY_REJECTION_LOG
+    try:
+        if not path.is_file() or path.stat().st_size > 1 << 20:
+            return 0
+        lines = path.read_text("utf-8").splitlines()
+    except OSError:
+        return 0
+    count = 0
+    for line in lines:
+        try:
+            record = json.loads(line)
+        except ValueError:
+            continue
+        if not isinstance(record, dict):
+            continue
+        if (record.get("code") in PRE_DISPATCH_REJECTION_CODES
+                and isinstance(record.get("purpose"), str) and record["purpose"]):
+            count += 1
+    return count
+
+
+def _usage_summary(
+    events: list[dict[str, Any]], inherited: int,
+    zero_token_auxiliary_rejections: int = 0,
+) -> dict[str, Any]:
     live = events[inherited:]
     samples = [e for e in live if e["type"] == "assistant/message" and e["surfaceOp"] == "append"]
     values = [_usage_values(e["data"].get("usage")) for e in samples]
@@ -530,7 +613,16 @@ def _usage_summary(events: list[dict[str, Any]], inherited: int) -> dict[str, An
     ends = Counter((e["data"]["turn"], e["data"]["step"]) for e in live if e["type"] == "step/end")
     settlements = Counter((e["data"]["turn"], e["data"]["step"]) for e in samples)
     exact = exact and starts == ends == settlements and all(n == 1 for n in settlements.values())
-    exact = exact and not any(e["type"] == "assistant/attempt" or e["type"] not in MAPPED_EVENT_TYPES for e in live)
+    # A record defeats exactness only if it can hide model work: known
+    # official lifecycle events (and the session header) provably cannot,
+    # while unknown/opaque types and real attempts still fail closed.
+    blocking = [e for e in live if _blocks_usage_exactness(e)]
+    auxiliary = [e for e in blocking if e["type"] in AUXILIARY_REQUEST_EVENT_TYPES]
+    # An auxiliary request the broker rejected before dispatch is provably
+    # zero-token, and the transport recorded that rejection with the request
+    # purpose. Each record can cover at most one request.
+    covered = min(len(auxiliary), max(0, int(zero_token_auxiliary_rejections)))
+    exact = exact and not [e for e in blocking if e["type"] not in AUXILIARY_REQUEST_EVENT_TYPES] and len(auxiliary) == covered
     exact = exact and derive_stop_reason(events, inherited) in {"agent_claimed_done", "budget_exhausted"}
     valid = [v for v in values if v is not None]
     total = sum(v["total"] for v in valid if v["total"] is not None)
@@ -544,7 +636,9 @@ def _usage_summary(events: list[dict[str, Any]], inherited: int) -> dict[str, An
             "cachedTokens": sum(v["cached"] for v in valid) if valid and all(v["cached"] is not None for v in valid) else None}
 
 
-def convert_dsh_read_to_atif(response: DshReaderResponse) -> Trajectory:
+def convert_dsh_read_to_atif(
+    response: DshReaderResponse, *, zero_token_auxiliary_rejections: int = 0,
+) -> Trajectory:
     _validate_header(response.header)
     _require(isinstance(response.events, list), "events must be a complete log array")
     _require(response.event_state in {"detached", "shared-frozen"}, "invalid eventState")
@@ -571,7 +665,7 @@ def convert_dsh_read_to_atif(response: DshReaderResponse) -> Trajectory:
     observed = [{"seq": e["seq"], "reason": e["data"]["reason"],
                  "config": e["data"]["header"]["config"], "inherited": e["seq"] < inherited}
                 for e in events if e["type"] == "request/header"]
-    usage = _usage_summary(events, inherited)
+    usage = _usage_summary(events, inherited, zero_token_auxiliary_rejections)
     extra: dict[str, Any] = {DSH_EXTRA_KEY: {
         "mapperVersion": MAPPER_VERSION, "header": deepcopy(response.header),
         "events": events, "eventState": response.event_state, "inheritedEventCount": inherited,

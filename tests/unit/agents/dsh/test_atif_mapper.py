@@ -583,3 +583,96 @@ def test_issues_dataclass_reports_any_and_dict_forms():
     assert issues.any()
     assert issues.to_dict()["malformedArguments"] == ["x"]
     assert not issues.to_dict()["orphanToolResults"]
+
+
+# --- D44: narrowed usage exactness + authoritative pre-dispatch rejections ---
+
+import json as _json  # noqa: E402
+
+import pytest  # noqa: E402
+
+from aeval.agents.dsh import atif_mapper as _m  # noqa: E402
+from aeval.agents.dsh.atif_mapper import (  # noqa: E402
+    GATEWAY_REJECTION_LOG, _usage_summary, count_pre_dispatch_auxiliary_rejections,
+)
+
+
+def _ev(kind, seq, data=None, surface="append"):
+    return {"seq": seq, "type": kind, "surfaceOp": surface, "data": data or {}}
+
+
+def _sample(seq, turn, step, total):
+    return _ev("assistant/message", seq, {
+        "turn": turn, "step": step,
+        "usage": {"inputTokens": total - 2, "outputTokens": 2, "totalTokens": total},
+    })
+
+
+def _live():
+    return [
+        _ev("turn/start", 1, {"turn": 1}),
+        _ev("step/start", 2, {"turn": 1, "step": 1}),
+        _sample(3, 1, 1, 100),
+        _ev("step/end", 4, {"turn": 1, "step": 1}),
+        _ev("turn/end", 5, {"turn": 1}),
+        _ev("session", 6),
+        _ev("permission/preset", 7, {"preset": "workspace-write"}),
+        _ev("sandbox/mode", 8, {"mode": "workspace-write"}),
+        _ev("approval/policy", 9, {"policy": "ask"}),
+        _ev("agent/inbox/spliced", 10, {"target": "next-turn"}),
+        _ev("session/title", 11, {"title": "t", "source": {"kind": "fallback"}}),
+    ]
+
+
+def _aux():
+    return _ev("session/title-llm-request", 14, {
+        "titleProvider": "session-title-first-prompt-llm", "maxTokens": 64,
+    })
+
+
+@pytest.fixture()
+def claimed_done(monkeypatch):
+    monkeypatch.setattr(
+        _m, "derive_stop_reason", lambda events, inherited: "agent_claimed_done"
+    )
+
+
+def test_exact_usage_accepts_token_free_official_lifecycle_events(claimed_done):
+    assert _usage_summary(_live(), 0)["status"] == "ok"
+
+
+def test_auxiliary_request_without_authoritative_rejection_is_partial(claimed_done):
+    assert _usage_summary(_live() + [_aux()], 0)["status"] == "partial"
+
+
+def test_pre_dispatch_rejection_covers_the_auxiliary_request(claimed_done):
+    assert _usage_summary(_live() + [_aux()], 0, 1)["status"] == "ok"
+    # More requests than records: the extra one could have consumed tokens.
+    assert _usage_summary(_live() + [_aux(), _ev("session/title-llm-request", 15, {})], 0, 1)["status"] == "partial"
+
+
+def test_unknown_event_type_still_fails_closed(claimed_done):
+    events = _live() + [_aux(), _ev("mystery/envelope", 15, {"x": 1})]
+    assert _usage_summary(events, 0, 1)["status"] == "partial"
+    assert _usage_summary(events, 0, 9)["status"] == "partial"
+
+
+def test_attempt_is_never_covered_by_a_rejection(claimed_done):
+    events = _live() + [_ev("assistant/attempt", 12, {"turn": 1, "step": 1})]
+    assert _usage_summary(events, 0, 5)["status"] == "partial"
+
+
+def test_count_pre_dispatch_auxiliary_rejections_reads_transport_log(tmp_path):
+    log = tmp_path / GATEWAY_REJECTION_LOG
+    log.write_text("\n".join([
+        _json.dumps({"code": "AEVAL_LEASE_BUSY", "purpose": "session-title"}),
+        _json.dumps({"code": "AEVAL_AUXILIARY_REFUSED", "purpose": ""}),
+        _json.dumps({"code": "AEVAL_IDENTITY_MISMATCH", "purpose": "session-title"}),
+        "{not json",
+    ]), encoding="utf-8")
+    assert count_pre_dispatch_auxiliary_rejections(tmp_path) == 1
+    assert count_pre_dispatch_auxiliary_rejections(tmp_path / "missing") == 0
+    oversized = tmp_path / "big"
+    oversized.mkdir()
+    (oversized / GATEWAY_REJECTION_LOG).write_text("x" * ((1 << 20) + 1), encoding="utf-8")
+    assert count_pre_dispatch_auxiliary_rejections(oversized) == 0

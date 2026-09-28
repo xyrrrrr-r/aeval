@@ -31,6 +31,7 @@ from aeval.agents.dsh.atif_mapper import (
     MAPPER_VERSION,
     build_canonical_transcript,
     convert_dsh_read_to_atif,
+    count_pre_dispatch_auxiliary_rejections,
     derive_stop_reason,
 )
 from aeval.agents.dsh.bridge import (
@@ -602,7 +603,12 @@ class DshAgent(BaseInstalledAgent):
             )
         )
         self._transcript = build_canonical_transcript(
-            convert_dsh_read_to_atif(response),
+            convert_dsh_read_to_atif(
+                response,
+                zero_token_auxiliary_rejections=count_pre_dispatch_auxiliary_rejections(
+                    paths.logs_dir
+                ),
+            ),
             evidence=None,
             stop_reason=derive_stop_reason(response.events, response.inherited_event_count),
         )
