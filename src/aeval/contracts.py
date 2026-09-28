@@ -560,6 +560,33 @@ class CoverageSummary(BaseModel):
     degraded_fields: list[str] = Field(default_factory=list)
 
 
+class MetricOutcome(BaseModel):
+    """One trajectory metric's evaluated outcome (top-level design §2).
+
+    ``category`` fixes the metric's severity semantics:
+
+    - ``efficiency`` / ``robustness`` / ``governance``: informational — a
+      bad outcome lowers the trajectory *score* but never flips the
+      verdict by itself;
+    - ``integrity``: verdict-affecting — ``violated`` means the agent
+      broke an explicit rule (e.g. read the verifier's tests), and the
+      trajectory grader returns ``fail`` for the trial.
+
+    ``status`` values: ``ok`` (evaluated, healthy), ``degraded``
+    (evaluated, below threshold), ``violated`` (integrity breach),
+    ``skipped`` (not judgeable from this transcript — never fabricated).
+    """
+
+    name: str
+    category: Literal["efficiency", "robustness", "governance", "integrity"]
+    status: Literal["ok", "degraded", "violated", "skipped"]
+    score: float | None = None
+    weight: float = Field(default=1.0, gt=0)
+    required: bool = False
+    reasons: list[str] = Field(default_factory=list)
+    evidence: list[str] = Field(default_factory=list)
+
+
 class GradeResult(BaseModel):
     grader_id: str
     grader_version: str
@@ -569,6 +596,7 @@ class GradeResult(BaseModel):
     status: Literal["pass", "fail", "cannot_judge"]
     reasons: list[str] = Field(default_factory=list)
     coverage: CoverageSummary | None = None
+    metrics: list[MetricOutcome] | None = None
     produced_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
 
@@ -602,6 +630,12 @@ class TrialRecord(BaseModel):
     claim: ClaimCheck | None = None
     artifacts: dict[str, ArtifactRef] = Field(default_factory=dict)
     transcript_extra: dict[str, Any] | None = None
+    # Runtime-only: the directory the sealed ``artifacts`` paths are
+    # relative to. Populated by the grading pipeline so pure graders can
+    # read sealed evidence files; deliberately NOT persisted by the
+    # store (its column list never sees it) because an absolute host
+    # path is not part of the record's identity.
+    artifact_base: str | None = None
     grades: list[GradeResult] = Field(default_factory=list)
     verdict: Verdict | None = None
     fork: ForkLineage | None = None

@@ -309,6 +309,11 @@ async def _grade_and_record(event: Any, context: EvaluationContext, state: Any) 
             evidence=bundle,
             transcript_extra=transcript_extra,
             store=store,
+            # Runtime-only base for sealed artifact paths: trajectory
+            # graders read the sealed canonical transcript from it.
+            artifact_base=(
+                str(state.trial_dir) if state.trial_dir is not None else None
+            ),
         )
     except GradingPipelineError as exc:
         state.mark_infra_invalid(f"grading failed: {exc}")

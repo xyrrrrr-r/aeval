@@ -49,6 +49,7 @@ CREATE TABLE IF NOT EXISTS rubric_results (
     status          TEXT NOT NULL,
     reasons_json    TEXT NOT NULL,
     coverage_json   TEXT,
+    metrics_json    TEXT,
     produced_at     TEXT NOT NULL,
     PRIMARY KEY (trial_id, grader_id, grader_version)
 );

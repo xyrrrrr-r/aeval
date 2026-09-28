@@ -207,8 +207,9 @@ class TrialStore:
             self._conn.execute(
                 """INSERT INTO rubric_results (
                     trial_id, grader_id, grader_version, layer, veto,
-                    score_json, status, reasons_json, coverage_json, produced_at
-                ) VALUES (?,?,?,?,?,?,?,?,?,?)""",
+                    score_json, status, reasons_json, coverage_json,
+                    metrics_json, produced_at
+                ) VALUES (?,?,?,?,?,?,?,?,?,?,?)""",
                 (
                     trial_id,
                     r.grader_id,
@@ -219,6 +220,11 @@ class TrialStore:
                     r.status,
                     json.dumps(r.reasons),
                     r.coverage.model_dump_json(exclude_none=True) if r.coverage else None,
+                    (
+                        json.dumps([m.model_dump() for m in r.metrics])
+                        if r.metrics
+                        else None
+                    ),
                     r.produced_at.isoformat(),
                 ),
             )
@@ -288,7 +294,7 @@ class TrialStore:
         )
 
     def _grades_of(self, trial_id: str) -> list[GradeResult]:
-        from aeval.contracts import CoverageSummary, Score
+        from aeval.contracts import CoverageSummary, MetricOutcome, Score
 
         rows = self._conn.execute(
             "SELECT * FROM rubric_results WHERE trial_id = ? ORDER BY produced_at",
@@ -308,6 +314,14 @@ class TrialStore:
                     coverage=(
                         CoverageSummary.model_validate_json(r["coverage_json"])
                         if r["coverage_json"]
+                        else None
+                    ),
+                    metrics=(
+                        [
+                            MetricOutcome.model_validate(m)
+                            for m in json.loads(r["metrics_json"])
+                        ]
+                        if "metrics_json" in r.keys() and r["metrics_json"]
                         else None
                     ),
                     produced_at=datetime.fromisoformat(r["produced_at"]),
