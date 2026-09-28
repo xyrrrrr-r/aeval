@@ -359,3 +359,28 @@ async def test_deploy_control_stack_requires_a_minted_session(tmp_path):
             paths=_paths_for_stack(), config={"sessionId": "s", "jobTokenFile": "/t"},
             control_dist=dist, control_ca=None, trial_id="t",
         )
+
+
+def test_control_config_mirrors_the_auxiliary_policy(runtime_lock):
+    """D47: an allowed purpose is dispatched and ledgered, so the control
+    config must mirror the broker's served policy or the sandbox adapter
+    fails the lease identity check at /info."""
+    paths = TrialPaths(
+        sandbox_cwd="/w", dsh_home="/h", bundle_path="/b.json",
+        session_root="h", download_root="d",
+    )
+    base = dict(
+        run_binding={"run_id": "r"}, trial_id="t", session_id="s", paths=paths,
+        gateway_url="http://127.0.0.1:1", provider="p", model="m",
+    )
+    bare = compose_control_config(**base)
+    assert "auxiliaryPolicy" not in bare, "an ordinary deployment keeps its digest unchanged"
+    assert bare["refuseAuxiliaryCalls"] is True
+
+    mirrored = compose_control_config(
+        **base, auxiliary_policy={"compaction": "allow"}
+    )
+    assert mirrored["auxiliaryPolicy"] == {"compaction": "allow"}
+    assert mirrored["refuseAuxiliaryCalls"] is True
+    # the policy participates in the digest, so the two cannot be confused
+    assert mirrored["configDigest"] != bare["configDigest"]

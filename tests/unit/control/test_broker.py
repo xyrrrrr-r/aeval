@@ -288,3 +288,35 @@ def test_find_node_rejects_missing_runtime(monkeypatch):
     monkeypatch.setattr(broker_mod.shutil, "which", lambda name: None)
     with pytest.raises(BrokerStartupError, match="node is not on PATH"):
         find_node()
+
+
+def test_broker_config_auxiliary_policy_round_trip(tmp_path):
+    """D47: the strict broker config carries the per-purpose policy exactly
+    as parseBrokerMainConfig accepts it, and refuses anything else."""
+    base = dict(
+        run={"run_id": "r", "job_config_hash": "b", "config_file_sha256": "c",
+             "runtime_lock_digest": "d"},
+        trial_id="t", session_id="s", config_digest="a" * 64,
+        identity={"provider": "p", "model": "m"},
+        limits={"maxSteps": 5}, max_output_tokens=64,
+        listen_host="0.0.0.0", token_out=tmp_path / "token",
+        upstream={"provider": "p", "baseUrl": "http://127.0.0.1:9",
+                  "apiKeyEnv": "AEVAL_KEY", "model": "m"},
+    )
+    path = write_broker_config(
+        tmp_path / "broker.json", **base,
+        auxiliary_policy={"compaction": "allow"},
+    )
+    data = json.loads(path.read_text(encoding="utf-8"))
+    assert data["auxiliaryPolicy"] == {"compaction": "allow"}
+
+    with pytest.raises(BrokerConfigError, match="unknown purposes"):
+        write_broker_config(
+            tmp_path / "broker2.json", **base,
+            auxiliary_policy={"research": "allow"},
+        )
+    with pytest.raises(BrokerConfigError, match="refuse' or 'allow'"):
+        write_broker_config(
+            tmp_path / "broker3.json", **base,
+            auxiliary_policy={"compaction": "sometimes"},
+        )

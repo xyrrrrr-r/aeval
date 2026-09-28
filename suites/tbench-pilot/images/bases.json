@@ -1,0 +1,4 @@
+{
+  "ghcr.io/laude-institute/t-bench/python-3-13:latest": "harbor:443/t-bench/base-pilot@sha256:21c12bb02049f2cd12c72e5a6a9c637469af93c4690ead4a7667996844ce5b08",
+  "ghcr.io/laude-institute/t-bench/ubuntu-24-04:latest": "harbor:443/t-bench/base-pilot@sha256:21c12bb02049f2cd12c72e5a6a9c637469af93c4690ead4a7667996844ce5b08"
+}

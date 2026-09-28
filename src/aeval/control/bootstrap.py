@@ -84,15 +84,20 @@ def compose_control_config(
     reasoning_effort: str | None = None,
     limits: dict[str, int] | None = None,
     owner_finalize: bool = True,
+    auxiliary_policy: dict[str, str] | None = None,
 ) -> dict[str, Any]:
     """Compose the control config handed to the sandboxed DSH runtime.
 
     ``refuseAuxiliaryCalls`` pins the routing: no default provider, no
     title/auxiliary model calls — everything goes through the broker.
+    ``auxiliary_policy`` (D47) overrides that blanket decision per purpose:
+    a purpose set to ``allow`` is dispatched and metered by the broker, and
+    the dispatch ledger beside the descriptor is the accounting evidence the
+    transcript reducer merges. Purposes not listed keep the blanket refusal.
 
-    ``reasoning_effort`` and ``limits`` MUST mirror the broker lease
-    exactly: the sandbox adapter compares the broker's ``/info`` against
-    this config field by field, so a lease with ``maxSteps`` set and a
+    ``reasoning_effort``, ``limits`` and ``auxiliary_policy`` MUST mirror the
+    broker lease exactly: the sandbox adapter compares the broker's ``/info``
+    against this config field by field, so a lease with ``maxSteps`` set and a
     config without it fails with ``AEVAL_LEASE_MISMATCH`` (found by
     running the real sandbox against a real broker).
     """
@@ -114,6 +119,8 @@ def compose_control_config(
         value = (limits or {}).get(key)
         if value is not None:
             config[key] = value
+    if auxiliary_policy:
+        config["auxiliaryPolicy"] = dict(auxiliary_policy)
     if owner_finalize:
         # Inside the sandbox no external party can reach ``evalControl``,
         # so the harness process performs the owner's durable-then-finalize
@@ -133,6 +140,7 @@ async def deploy_control_stack(
     control_dist: Path,
     control_ca: Path | None,
     trial_id: str,
+    sandbox_mode: str | None = None,
 ) -> str:
     """Deploy the in-sandbox control stack; return the patch file path.
 
@@ -146,7 +154,9 @@ async def deploy_control_stack(
       plugin (which injects ``evalBroker``);
     - the owner-assigned session must already EXIST, because
       ``dsh --session-id`` only resumes one (D15) — the stub mints it;
-    - a privately signed broker needs ``NODE_EXTRA_CA_CERTS`` in the run.
+    - a privately signed broker needs ``NODE_EXTRA_CA_CERTS`` in the run;
+    - the suite's declared confinement posture is passed as
+      ``DSH_PERMISSION_MODE`` (see ``DriverSpec.sandbox_mode``).
     """
     bin_dir = agent.cli_bin_dir() if hasattr(agent, "cli_bin_dir") else None
     if not bin_dir:
@@ -200,6 +210,12 @@ async def deploy_control_stack(
             agent.set_workspace_dir(str(paths.sandbox_cwd))
         if control_ca is not None:
             agent.set_run_env("NODE_EXTRA_CA_CERTS", (target / "ca.crt").as_posix())
+        if sandbox_mode is not None:
+            # The CLI reads this in its composed profile (dsh-base's
+            # cordis.patch.yml): the bash executor skips confinement for
+            # danger-full-access instead of probing for a runner the image
+            # does not ship.
+            agent.set_run_env("DSH_PERMISSION_MODE", str(sandbox_mode))
         return patch_path
     finally:
         shutil.rmtree(staging, ignore_errors=True)
@@ -370,9 +386,11 @@ async def bootstrap_trial_control(
             limits=dict(limits or {}),
         )
     if agent is not None and control_dist is not None:
+        driver = getattr(getattr(context.suite, "overlay", None), "driver", None)
         await deploy_control_stack(
             environment=environment, agent=agent, paths=paths, config=config,
             control_dist=Path(control_dist), control_ca=control_ca, trial_id=trial_id,
+            sandbox_mode=getattr(driver, "sandbox_mode", None),
         )
     try:
         binding = context.bind_control(trial_id, config, paths)

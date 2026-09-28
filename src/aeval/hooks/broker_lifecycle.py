@@ -90,6 +90,10 @@ class BrokerSpec:
     token_count: Mapping[str, Any] | None = None
     timeout_ms: int | None = None
     token_ttl_ms: int | None = None
+    # D47: per-purpose decisions for advisory model calls ('compaction',
+    # 'session-title') -> 'refuse' | 'allow'. Missing purposes keep the
+    # broker's blanket default (refuse everything before dispatch).
+    auxiliary_policy: Mapping[str, str] | None = None
     ready_timeout_sec: float = 30.0
     stop_timeout_sec: float = 10.0
 
@@ -122,7 +126,7 @@ def parse_broker_spec(path_env: str | None = None) -> BrokerSpec | None:
         "brokerJs", "nodeBin", "controlRoot", "upstream", "identity", "limits",
         "maxOutputTokens", "listenHost", "listenPort", "listenTls", "tokenCount",
         "timeoutMs", "tokenTtlMs", "readyTimeoutSec", "stopTimeoutSec",
-        "controlDist", "controlCa",
+        "controlDist", "controlCa", "auxiliaryPolicy",
     }
     if unknown:
         raise BrokerSpecError(f"broker spec has unknown keys: {sorted(unknown)}")
@@ -170,6 +174,18 @@ def parse_broker_spec(path_env: str | None = None) -> BrokerSpec | None:
     control_ca = data.get("controlCa")
     if control_ca is not None and not Path(str(control_ca)).is_file():
         raise BrokerSpecError(f"broker spec controlCa is not a file: {control_ca}")
+    auxiliary_policy = data.get("auxiliaryPolicy")
+    if auxiliary_policy is not None:
+        if not isinstance(auxiliary_policy, dict):
+            raise BrokerSpecError("broker spec auxiliaryPolicy must be an object")
+        unknown_purposes = set(auxiliary_policy) - {"compaction", "session-title"}
+        if unknown_purposes:
+            raise BrokerSpecError(
+                f"broker spec auxiliaryPolicy has unknown purposes: {sorted(unknown_purposes)}")
+        for purpose, decision in auxiliary_policy.items():
+            if not isinstance(decision, str) or decision not in ("refuse", "allow"):
+                raise BrokerSpecError(
+                    f"broker spec auxiliaryPolicy.{purpose} must be 'refuse' or 'allow'")
     return BrokerSpec(
         broker_js=Path(broker_js),
         listen_port=listen_port,
@@ -187,16 +203,24 @@ def parse_broker_spec(path_env: str | None = None) -> BrokerSpec | None:
         token_ttl_ms=data.get("tokenTtlMs") if isinstance(data.get("tokenTtlMs"), int) else None,
         ready_timeout_sec=float(data.get("readyTimeoutSec") or 30.0),
         stop_timeout_sec=float(data.get("stopTimeoutSec") or 10.0),
+        auxiliary_policy=dict(auxiliary_policy) if auxiliary_policy is not None else None,
     )
 
 
-def trial_control_paths(state: TrialState, run_dir: Path) -> TrialPaths:
-    """The owner-side TrialPaths for one trial, from fixed conventions."""
+def trial_control_paths(
+    state: TrialState, run_dir: Path, driver: Any = None
+) -> TrialPaths:
+    """The owner-side TrialPaths for one trial, from fixed conventions.
+
+    ``sandbox_cwd`` is the suite's ``driver.workspace_dir`` (default
+    ``/workspace``): the trial's session is minted there and the agent
+    runs there, and the task's tests assume that same directory.
+    """
     if state.trial_dir is None:
         raise BrokerSpecError("trial has no directory — paths cannot be derived")
     download_root = (state.trial_dir / "agent").relative_to(run_dir).as_posix()
     return TrialPaths(
-        sandbox_cwd="/workspace",
+        sandbox_cwd=str(getattr(driver, "workspace_dir", None) or "/workspace"),
         dsh_home=SANDBOX_DSH_HOME,
         bundle_path=SANDBOX_BUNDLE_PATH,
         session_root="dsh-home",
@@ -216,7 +240,10 @@ def start_trial_broker(
     """
     if context.run_binding is None:
         raise BrokerSpecError("run has no trusted binding — no broker identity to pin")
-    paths = trial_control_paths(state, context.run_dir)
+    paths = trial_control_paths(
+        state, context.run_dir,
+        getattr(getattr(context.suite, "overlay", None), "driver", None),
+    )
     config = compose_control_config(
         run_binding=context.run_binding.model_dump(),
         trial_id=state.trial_id,
@@ -228,6 +255,9 @@ def start_trial_broker(
         # the lease identity must match the control config field by field
         reasoning_effort=spec.identity.get("reasoningEffort"),
         limits=dict(spec.limits),
+        # the served auxiliary policy must equal what /info reports, or the
+        # sandbox adapter fails the lease identity check (D47)
+        auxiliary_policy=dict(spec.auxiliary_policy) if spec.auxiliary_policy else None,
     )
     digest = control_config_digest(config)
 
@@ -249,6 +279,7 @@ def start_trial_broker(
         token_count=dict(spec.token_count) if spec.token_count else None,
         timeout_ms=spec.timeout_ms,
         token_ttl_ms=spec.token_ttl_ms,
+        auxiliary_policy=dict(spec.auxiliary_policy) if spec.auxiliary_policy else None,
     )
     broker = ModelBrokerProcess(
         node_bin=spec.node_bin or find_node(),

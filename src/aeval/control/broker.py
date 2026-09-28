@@ -10,7 +10,7 @@ Protocol (docs: dsh-eval-control docs/TESTS/P0-3-host-broker.md):
 
 - spawn ``node <broker_main.js> <config.json>``;
 - exactly one stdout line, JSON:
-  ``{"ready":true,"url":…,"tokenPath":…,"protocol":"aeval-model-broker/2"}``;
+  ``{"ready":true,"url":…,"tokenPath":…,"protocol":"aeval-model-broker/3"}``;
 - exit codes: 0 normal close (signal/TTL included), 1 runtime error,
   2 config/credential error, 3 hard budget without trusted metering.
 
@@ -39,7 +39,7 @@ __all__ = [
     "broker_bin_candidates",
 ]
 
-BROKER_PROTOCOL = "aeval-model-broker/2"
+BROKER_PROTOCOL = "aeval-model-broker/3"
 
 
 class BrokerConfigError(RuntimeError):
@@ -85,6 +85,7 @@ def write_broker_config(
     token_count: Mapping[str, Any] | None = None,
     timeout_ms: int | None = None,
     token_ttl_ms: int | None = None,
+    auxiliary_policy: Mapping[str, str] | None = None,
 ) -> Path:
     """Write the strict broker config JSON (exact key set, no extras).
 
@@ -144,6 +145,20 @@ def write_broker_config(
         config["tokenTtlMs"] = _positive_int(token_ttl_ms, "tokenTtlMs")
     if token_count is not None:
         config["tokenCount"] = dict(token_count)
+    if auxiliary_policy is not None:
+        # D47: per-purpose decisions for advisory model calls. Only the two
+        # known purposes with an explicit decision; missing purposes take the
+        # broker's default (refuse), mirroring parseBrokerMainConfig exactly.
+        policy = dict(auxiliary_policy)
+        unknown = set(policy) - {"compaction", "session-title"}
+        if unknown:
+            raise BrokerConfigError(
+                f"broker config auxiliaryPolicy: unknown purposes {sorted(unknown)}")
+        for purpose, decision in policy.items():
+            if decision not in ("refuse", "allow"):
+                raise BrokerConfigError(
+                    f"broker config auxiliaryPolicy.{purpose}: must be 'refuse' or 'allow'")
+        config["auxiliaryPolicy"] = policy
 
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)

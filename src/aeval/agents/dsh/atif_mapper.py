@@ -554,9 +554,17 @@ PRE_DISPATCH_REJECTION_CODES = frozenset({
 # Written by the sandbox transport next to the bundle descriptor.
 GATEWAY_REJECTION_LOG = "gateway_refusals.jsonl"
 
+# The mirror ledger (D47): one record per auxiliary call the policy ALLOWED
+# and the broker dispatched, carrying the usage metered on the wire.
+GATEWAY_AUX_DISPATCH_LOG = "gateway_aux_dispatches.jsonl"
+AUXILIARY_DISPATCH_CODE = "AEVAL_AUXILIARY_DISPATCHED"
+
 # An auxiliary model call the owner's policy does not allow the runtime to
 # make on its own; the session records the request, not its outcome.
 AUXILIARY_REQUEST_EVENT_TYPES = frozenset({"session/title-llm-request"})
+
+# The two purposes the runtime may declare on an advisory call.
+AUXILIARY_PURPOSES = frozenset({"compaction", "session-title"})
 
 
 def _blocks_usage_exactness(event: dict[str, Any]) -> bool:
@@ -600,9 +608,48 @@ def count_pre_dispatch_auxiliary_rejections(logs_dir: Path) -> int:
     return count
 
 
+def read_dispatched_auxiliary_calls(logs_dir: Path) -> list[dict[str, Any]]:
+    """Auxiliary model calls the policy allowed and the broker dispatched.
+
+    The in-sandbox transport appends one JSON object per completed
+    purpose-tagged call to ``gateway_aux_dispatches.jsonl`` beside the bundle
+    descriptor, carrying the usage the broker metered on the wire (D47). A
+    record counts only with a known purpose and a valid, total-carrying
+    usage object; anything else is absent evidence, so an allowed auxiliary
+    call without accounting stays unaccounted and the verdict stays
+    ``partial`` instead of silently scoring unknown work.
+    """
+    path = Path(logs_dir) / GATEWAY_AUX_DISPATCH_LOG
+    try:
+        if not path.is_file() or path.stat().st_size > 1 << 20:
+            return []
+        lines = path.read_text("utf-8").splitlines()
+    except OSError:
+        return []
+    calls: list[dict[str, Any]] = []
+    for line in lines:
+        try:
+            record = json.loads(line)
+        except ValueError:
+            continue
+        if not isinstance(record, dict):
+            continue
+        purpose = record.get("purpose")
+        if record.get("code") != AUXILIARY_DISPATCH_CODE:
+            continue
+        if not isinstance(purpose, str) or purpose not in AUXILIARY_PURPOSES:
+            continue
+        values = _usage_values(record.get("usage"))
+        if values is None or values["total"] is None:
+            continue
+        calls.append({"purpose": purpose, "usage": values})
+    return calls
+
+
 def _usage_summary(
     events: list[dict[str, Any]], inherited: int,
     zero_token_auxiliary_rejections: int = 0,
+    dispatched_auxiliary: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     live = events[inherited:]
     samples = [e for e in live if e["type"] == "assistant/message" and e["surfaceOp"] == "append"]
@@ -618,26 +665,69 @@ def _usage_summary(
     # while unknown/opaque types and real attempts still fail closed.
     blocking = [e for e in live if _blocks_usage_exactness(e)]
     auxiliary = [e for e in blocking if e["type"] in AUXILIARY_REQUEST_EVENT_TYPES]
-    # An auxiliary request the broker rejected before dispatch is provably
-    # zero-token, and the transport recorded that rejection with the request
-    # purpose. Each record can cover at most one request.
-    covered = min(len(auxiliary), max(0, int(zero_token_auxiliary_rejections)))
-    exact = exact and not [e for e in blocking if e["type"] not in AUXILIARY_REQUEST_EVENT_TYPES] and len(auxiliary) == covered
+    # An auxiliary request is accounted when the broker either rejected it
+    # before dispatch (provably zero tokens, recorded with the purpose) or
+    # dispatched it and the transport ledgered its usage (D47). Each record
+    # can cover at most one request. The same normalized set drives coverage
+    # AND the merged totals, so a record can never cover work it did not
+    # account.
+    normalized: list[dict[str, Any]] = []
+    for record in (dispatched_auxiliary or []):
+        if not isinstance(record, dict) or record.get("purpose") not in AUXILIARY_PURPOSES:
+            continue
+        usage = record.get("usage")
+        settled = _usage_values(usage) if isinstance(usage, dict) else None
+        if settled is None or settled["total"] is None:
+            continue
+        normalized.append({"purpose": record["purpose"], "usage": settled})
+    dispatches = normalized
+    title_dispatches = [d for d in dispatches if d["purpose"] == "session-title"]
+    compaction_dispatches = [d for d in dispatches if d["purpose"] == "compaction"]
+    covered = min(len(auxiliary), max(0, int(zero_token_auxiliary_rejections)) + len(title_dispatches))
+    # Compaction events belong to a cycle the runtime opened; one dispatched
+    # call per started cycle is the minimum the ledger must prove, or the
+    # events keep blocking exactness (fail closed).
+    compaction_events = [e for e in blocking if str(e["type"]).startswith("compaction/")]
+    cycles = sum(1 for e in compaction_events if e["type"] == "compaction/start")
+    compaction_covered = len(compaction_dispatches) >= cycles
+    other_blocking = [e for e in blocking
+                      if e["type"] not in AUXILIARY_REQUEST_EVENT_TYPES
+                      and not str(e["type"]).startswith("compaction/")]
+    exact = exact and not other_blocking and len(auxiliary) == covered and compaction_covered
     exact = exact and derive_stop_reason(events, inherited) in {"agent_claimed_done", "budget_exhausted"}
     valid = [v for v in values if v is not None]
-    total = sum(v["total"] for v in valid if v["total"] is not None)
+    reported = sum(v["total"] for v in valid if v["total"] is not None)
+    # D47 accounting: the merged totals add the ledgered usage of dispatched
+    # auxiliary calls to what the session itself settled. A dispatch without
+    # ledger evidence is not in this list and keeps the verdict partial.
+    dispatch_values = [d["usage"] for d in dispatches]
+    total = reported + sum(v["total"] for v in dispatch_values)
+    prompt_known = bool(valid) and all(v["prompt"] is not None for v in valid) \
+        and all(v["prompt"] is not None for v in dispatch_values)
+    cached_known = all(v["cached"] is not None for v in valid) \
+        and all(v["cached"] is not None for v in dispatch_values)
     return {"status": "ok" if exact and total <= MAX_SAFE_INTEGER else "partial",
-            "scope": "live assistant/message usage only; attempts and opaque events are not inferred",
+            "scope": "live assistant/message usage plus ledgered dispatched auxiliary calls; "
+                     "attempts and opaque events are not inferred",
             "eventSeqs": [e["seq"] for e in samples],
             "totalTokens": total if exact and total <= MAX_SAFE_INTEGER else None,
-            "reportedTotalTokensSubtotal": total if valid else None,
-            "promptTokens": sum(v["prompt"] for v in valid) if valid and all(v["prompt"] is not None for v in valid) else None,
-            "outputTokens": sum(v["output"] for v in valid) if valid else None,
-            "cachedTokens": sum(v["cached"] for v in valid) if valid and all(v["cached"] is not None for v in valid) else None}
+            "reportedTotalTokensSubtotal": reported if valid else None,
+            "promptTokens": (sum(v["prompt"] for v in valid) + sum(v["prompt"] for v in dispatch_values))
+                            if prompt_known else None,
+            "outputTokens": (sum(v["output"] for v in valid) + sum(v["output"] for v in dispatch_values))
+                            if valid else None,
+            "cachedTokens": (sum(v["cached"] for v in valid) + sum(v["cached"] for v in dispatch_values))
+                            if valid and cached_known else None,
+            **({"dispatchedAuxiliaryCalls": [
+                {"purpose": d["purpose"],
+                 "usage": {"prompt": d["usage"]["prompt"], "output": d["usage"]["output"],
+                           "total": d["usage"]["total"], "cached": d["usage"]["cached"]}}
+                for d in dispatches]} if dispatches else {})}
 
 
 def convert_dsh_read_to_atif(
     response: DshReaderResponse, *, zero_token_auxiliary_rejections: int = 0,
+    dispatched_auxiliary_calls: list[dict[str, Any]] | None = None,
 ) -> Trajectory:
     _validate_header(response.header)
     _require(isinstance(response.events, list), "events must be a complete log array")
@@ -665,7 +755,10 @@ def convert_dsh_read_to_atif(
     observed = [{"seq": e["seq"], "reason": e["data"]["reason"],
                  "config": e["data"]["header"]["config"], "inherited": e["seq"] < inherited}
                 for e in events if e["type"] == "request/header"]
-    usage = _usage_summary(events, inherited, zero_token_auxiliary_rejections)
+    usage = _usage_summary(
+        events, inherited, zero_token_auxiliary_rejections,
+        dispatched_auxiliary=dispatched_auxiliary_calls,
+    )
     extra: dict[str, Any] = {DSH_EXTRA_KEY: {
         "mapperVersion": MAPPER_VERSION, "header": deepcopy(response.header),
         "events": events, "eventState": response.event_state, "inheritedEventCount": inherited,
@@ -678,7 +771,8 @@ def convert_dsh_read_to_atif(
     trajectory = Trajectory(
         agent=Agent(name="dsh", version=DSH_VERSION, model_name=observed[-1]["config"]["model"] if observed else None),
         session_id=response.header["id"], steps=steps, extra=extra,
-        notes="Metrics summarize live reported usage only; copied context is excluded. See extra.dsh.usage for completeness.",
+        notes="Metrics summarize live reported usage plus ledgered auxiliary dispatches; "
+              "copied context is excluded. See extra.dsh.usage for completeness.",
         final_metrics=FinalMetrics(total_prompt_tokens=usage["promptTokens"],
                                    total_completion_tokens=usage["outputTokens"], total_cached_tokens=usage["cachedTokens"],
                                    total_steps=len(steps), extra={"dsh": usage}),

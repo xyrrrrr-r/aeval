@@ -1,0 +1,53 @@
+schema_version = "1.4"
+artifacts = []
+
+[metadata]
+author_name = "unknown"
+author_email = "nicholas@carlini.com"
+difficulty = "medium"
+category = "debugging"
+tags = ["file-operations"]
+
+[verifier]
+timeout_sec = 60.0
+
+[[verifier.collect]]
+# Upstream verification runs first and publishes
+# /logs/verifier/reward.txt; the aeval collection follows even when the
+# tests fail, so a failing trial still seals its evidence.
+command = "mkdir -p /logs/verifier; bash /tests/test.sh; aeval-collect runtime_dump mock_call_log dsh_session canonical_transcript"
+
+[verifier.env]
+
+
+[agent]
+timeout_sec = 360.0
+
+[environment]
+# Sealed-pilot adaptation (see PROVENANCE.md): the DSH CLI is installed
+# with `npm install --global` at trial time, so the sandbox needs the
+# package source; the broker host carries the model round trips.
+network_mode = "allowlist"
+allowed_hosts = ["registry.npmjs.org", "nodejs.org", "193.126.4.2"]
+# The CLI tree (502 MB) is installed into /dev/shm (half of RAM); the
+# sandbox root filesystem is too small for it.
+cpus = 2
+memory_mb = 4096
+build_timeout_sec = 600.0
+os = "linux"
+mcp_servers = []
+
+
+[environment.env]
+
+[solution.env]
+
+[metadata.provenance]
+source = "terminal-bench-core@0.1.1 (https://github.com/laude-institute/terminal-bench @ 91e10457b5410f16c44364da1a34cb6de8c488a5)"
+source_url = "https://github.com/laude-institute/terminal-bench"
+original_id = "sqlite-db-truncate"
+imported_at = "2025-09-24"
+converter_version = "aeval-vendor-tbench/1"
+license = "Apache-2.0"
+data_imported = true
+rewritten_by_us = true

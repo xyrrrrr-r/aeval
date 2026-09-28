@@ -115,6 +115,9 @@ def test_parse_spec_happy_path(tmp_path, monkeypatch):
         lambda d: d.update(upstream=[]),                     # not an object
         lambda d: d.update(unknownKey=1),                    # unknown key
         lambda d: d.update(identity="x"),                    # identity not object
+        lambda d: d.update(auxiliaryPolicy="always"),        # policy not object
+        lambda d: d.update(auxiliaryPolicy={"research": "allow"}),   # unknown purpose
+        lambda d: d.update(auxiliaryPolicy={"compaction": "sometimes"}),  # bad decision
     ],
 )
 def test_parse_spec_rejects_broken_specs(tmp_path, monkeypatch, mutate):
@@ -162,20 +165,27 @@ async def test_start_composes_config_first_and_pins_digest(
     with socket.socket() as s:
         s.bind(("127.0.0.1", 0))
         port = s.getsockname()[1]
-    spec_path = _spec_json(tmp_path, port=port)
+    spec_path = _spec_json(
+        tmp_path, port=port, auxiliaryPolicy={"compaction": "allow"}
+    )
     spec = parse_broker_spec(str(spec_path))
+    assert spec.auxiliary_policy == {"compaction": "allow"}
 
     broker, config = start_trial_broker(spec, ctx, state)
     try:
         assert state.broker is broker
         assert state.control_config is config
         assert config["gatewayUrl"] == broker.url
+        # D47: the served auxiliary policy reaches BOTH configs the sandbox
+        # compares — the control config and the broker lease config.
+        assert config["auxiliaryPolicy"] == {"compaction": "allow"}
         # broker config carries the control config digest, verbatim
         broker_cfg = json.loads(
             (tmp_path / "brokers" / state.trial_id / "broker.json").read_text("utf-8")
         )
         assert broker_cfg["configDigest"] == control_config_digest(config)
         assert broker_cfg["listen"]["port"] == port
+        assert broker_cfg["auxiliaryPolicy"] == {"compaction": "allow"}
         assert broker.token_path.is_file()
     finally:
         stop_trial_broker(state)

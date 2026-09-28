@@ -1,0 +1,28 @@
+schema_version = "1.4"
+artifacts = []
+
+[metadata]
+author_name = "unknown"
+author_email = "unknown"
+difficulty = "medium"
+category = "security"
+tags = [ "coding", "file-operations", "security", "system",]
+
+[verifier]
+timeout_sec = 60.0
+collect = []
+
+[verifier.env]
+
+[agent]
+timeout_sec = 360.0
+
+[environment]
+network_mode = "public"
+build_timeout_sec = 600.0
+os = "linux"
+mcp_servers = []
+
+[environment.env]
+
+[solution.env]

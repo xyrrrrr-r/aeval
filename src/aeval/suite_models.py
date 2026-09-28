@@ -175,6 +175,47 @@ class MetricDeclaration(_SuiteModel):
 
 class DriverSpec(_SuiteModel):
     require: list[str] = Field(default_factory=list)
+    # Stage the task's `tests/` directory into the sandbox right after the
+    # agent ends and BEFORE evidence collection.
+    #
+    # Needed when the suite's collect command runs the task's own verifier
+    # and the suite reads the reward it publishes: Terminal-Bench tasks
+    # write /logs/verifier/reward.txt from tests/test.sh, and aeval
+    # collects observables during the collect phase — but Harbor uploads
+    # `tests/` only at verification time, i.e. AFTER collection. Staging
+    # here closes that ordering gap. It does not leak the tests to the
+    # agent: the upload happens once the agent has stopped.
+    stage_tests_before_collect: bool = False
+    # Working directory inside the sandbox for the agent's run — and for
+    # the DSH session the control plugin mints. It must equal the cwd the
+    # task's own verifier assumes, i.e. the environment Dockerfile's
+    # WORKDIR: Terminal-Bench tasks hardcode absolute paths (`/app/...`,
+    # and hello-world says "the current directory"), so an agent that runs
+    # in the owner's default `/workspace` writes its answer where the
+    # tests will never look (measured on the pilot: every trial failed
+    # with `FileNotFoundError: /app/hello.txt`).
+    #
+    # It is one value, not two: DSH refuses to resume a session whose
+    # recorded cwd differs from the run's, so the mint and the run must
+    # agree.
+    workspace_dir: str = "/workspace"
+    # DSH's own confinement posture for the agent's run inside the sandbox
+    # (``DSH_PERMISSION_MODE``, the CLI's documented deployment override).
+    #
+    # ``None`` keeps DSH's default (``workspace-write``), which confines
+    # the shell with a bwrap/Landlock runner. A sealed trial image that
+    # ships neither — as the pilot's does — makes DSH refuse every shell
+    # call ("no sandbox backend is usable on this host"), and the agent
+    # then cannot run a single command: measured on the pilot, where
+    # openssl-selfsigned-cert and sqlite-db-truncate were unanswerable
+    # while hello-world (file tools only) passed.
+    #
+    # A suite whose isolation boundary is the disposable per-trial
+    # microVM declares ``danger-full-access`` here; DSH then applies no
+    # inner confinement and needs no runner. The mode is carried into the
+    # run as an environment variable, so the trial record shows which
+    # posture produced it.
+    sandbox_mode: Literal["read-only", "workspace-write", "danger-full-access"] | None = None
 
 
 class ProvenanceInfo(_SuiteModel):

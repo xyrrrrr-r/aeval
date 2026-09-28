@@ -33,6 +33,7 @@ from aeval.agents.dsh.atif_mapper import (
     convert_dsh_read_to_atif,
     count_pre_dispatch_auxiliary_rejections,
     derive_stop_reason,
+    read_dispatched_auxiliary_calls,
 )
 from aeval.agents.dsh.bridge import (
     DshReaderRequest,
@@ -606,6 +607,9 @@ class DshAgent(BaseInstalledAgent):
             convert_dsh_read_to_atif(
                 response,
                 zero_token_auxiliary_rejections=count_pre_dispatch_auxiliary_rejections(
+                    paths.logs_dir
+                ),
+                dispatched_auxiliary_calls=read_dispatched_auxiliary_calls(
                     paths.logs_dir
                 ),
             ),

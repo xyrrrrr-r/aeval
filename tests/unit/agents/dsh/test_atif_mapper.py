@@ -676,3 +676,130 @@ def test_count_pre_dispatch_auxiliary_rejections_reads_transport_log(tmp_path):
     oversized.mkdir()
     (oversized / GATEWAY_REJECTION_LOG).write_text("x" * ((1 << 20) + 1), encoding="utf-8")
     assert count_pre_dispatch_auxiliary_rejections(oversized) == 0
+
+
+# ---------------------------------------------------------------------------
+# D47: allowed auxiliary calls are dispatched, ledgered, and accounted
+# ---------------------------------------------------------------------------
+
+def _compaction_cycle(seq):
+    return [
+        _ev("compaction/start", seq, {"reason": "context-limit"}),
+        _ev("compaction/summary", seq + 1, {}),
+        _ev("compaction/end", seq + 2, {}),
+    ]
+
+
+def _dispatch(purpose, *, total=50, cached=None):
+    usage = {"inputTokens": 10, "outputTokens": 10, "totalTokens": total}
+    if cached is not None:
+        usage["cacheReadTokens"] = cached
+    return {"purpose": purpose, "usage": usage}
+
+
+def test_compaction_events_without_ledger_evidence_stay_partial(claimed_done):
+    assert _usage_summary(_live() + _compaction_cycle(20), 0)["status"] == "partial"
+
+
+def test_ledgered_compaction_call_is_covered_and_merged(claimed_done):
+    summary = _usage_summary(
+        _live() + _compaction_cycle(20), 0, dispatched_auxiliary=[_dispatch("compaction")]
+    )
+    assert summary["status"] == "ok"
+    # the merged total adds the ledgered call to the settled sample
+    assert summary["totalTokens"] == 100 + 50
+    assert summary["reportedTotalTokensSubtotal"] == 100
+    assert summary["promptTokens"] == 98 + 40
+    assert summary["outputTokens"] == 2 + 10
+    assert summary["dispatchedAuxiliaryCalls"] == [
+        {"purpose": "compaction",
+         "usage": {"prompt": 40, "output": 10, "total": 50, "cached": None}}
+    ]
+
+
+def test_every_compaction_cycle_needs_its_own_ledgered_call(claimed_done):
+    events = _live() + _compaction_cycle(20) + _compaction_cycle(30)
+    assert _usage_summary(events, 0, dispatched_auxiliary=[_dispatch("compaction")])["status"] == "partial"
+    assert _usage_summary(
+        events, 0,
+        dispatched_auxiliary=[_dispatch("compaction"), _dispatch("compaction", total=60)],
+    )["status"] == "ok"
+
+
+def test_ledgered_compaction_without_session_events_is_still_accounted(claimed_done):
+    """A dispatch with no matching session events is surplus model work —
+    counted in the totals, never silently dropped."""
+    summary = _usage_summary(_live(), 0, dispatched_auxiliary=[_dispatch("compaction")])
+    assert summary["status"] == "ok"
+    assert summary["totalTokens"] == 150
+
+
+def test_dispatched_session_title_covers_its_request_event(claimed_done):
+    summary = _usage_summary(
+        _live() + [_aux()], 0, dispatched_auxiliary=[_dispatch("session-title")]
+    )
+    assert summary["status"] == "ok"
+    assert summary["totalTokens"] == 100 + 50
+
+
+def test_dispatch_ledger_never_covers_unknown_or_attempt_events(claimed_done):
+    unknown = _live() + [_ev("mystery/envelope", 15, {"x": 1})]
+    assert _usage_summary(unknown, 0, dispatched_auxiliary=[_dispatch("compaction")])["status"] == "partial"
+    attempt = _live() + [_ev("assistant/attempt", 12, {"turn": 1, "step": 1})]
+    assert _usage_summary(attempt, 0, dispatched_auxiliary=[_dispatch("compaction")])["status"] == "partial"
+
+
+def test_invalid_dispatch_records_do_not_count_as_coverage(claimed_done):
+    bad_purpose = [{"purpose": "research", "usage": {"inputTokens": 1, "outputTokens": 1, "totalTokens": 2}}]
+    bad_usage = [{"purpose": "compaction", "usage": {"inputTokens": 1}}]
+    not_total = [{"purpose": "compaction", "usage": {"inputTokens": 1, "outputTokens": 1}}]
+    for record in (bad_purpose, bad_usage, not_total):
+        assert _usage_summary(
+            _live() + _compaction_cycle(20), 0, dispatched_auxiliary=record
+        )["status"] == "partial"
+
+
+def test_cached_tokens_merge_all_or_nothing(claimed_done):
+    cached_sample = _ev("assistant/message", 3, {
+        "turn": 1, "step": 1,
+        "usage": {"inputTokens": 40, "cacheReadTokens": 55, "cacheWriteTokens": 5,
+                  "outputTokens": 2, "totalTokens": 102},
+    })
+    events = [
+        _ev("turn/start", 1, {"turn": 1}),
+        _ev("step/start", 2, {"turn": 1, "step": 1}),
+        cached_sample,
+        _ev("step/end", 4, {"turn": 1, "step": 1}),
+        _ev("turn/end", 5, {"turn": 1}),
+    ]
+    merged = _usage_summary(
+        events, 0, dispatched_auxiliary=[_dispatch("compaction", total=50, cached=30)]
+    )
+    assert merged["status"] == "ok"
+    assert merged["cachedTokens"] == 55 + 30
+
+
+def test_read_dispatched_auxiliary_calls_parses_the_transport_log(tmp_path):
+    import json
+
+    from aeval.agents.dsh.atif_mapper import read_dispatched_auxiliary_calls
+    good = {"code": "AEVAL_AUXILIARY_DISPATCHED", "purpose": "compaction",
+            "usage": {"inputTokens": 10, "cacheReadTokens": 30, "cacheWriteTokens": 0,
+                      "outputTokens": 10, "totalTokens": 50}}
+    lines = [
+        json.dumps(good),
+        json.dumps({"code": "AEVAL_AUXILIARY_DISPATCHED", "purpose": "research",
+                    "usage": good["usage"]}),                     # unknown purpose
+        json.dumps({"code": "AEVAL_AUXILIARY_REFUSED", "purpose": "compaction"}),  # wrong code
+        json.dumps({"code": "AEVAL_AUXILIARY_DISPATCHED", "purpose": "session-title",
+                    "usage": {"inputTokens": 3}}),                # invalid usage
+        "{not json",
+    ]
+    (tmp_path / "gateway_aux_dispatches.jsonl").write_text("\n".join(lines) + "\n", encoding="utf-8")
+    calls = read_dispatched_auxiliary_calls(tmp_path)
+    assert calls == [{"purpose": "compaction",
+                      "usage": {"prompt": 40, "output": 10, "total": 50, "cached": 30}}]
+    # a missing or oversized ledger is absent evidence, not an error
+    empty = tmp_path / "elsewhere"
+    empty.mkdir()
+    assert read_dispatched_auxiliary_calls(empty) == []

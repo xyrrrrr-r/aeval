@@ -1,0 +1,23 @@
+# M0 pilot: 3 tasks x 3 attempts with the real DSH agent and the real
+# provider. Serial execution (n_concurrent_trials: 1): each trial drives a
+# real e2b sandbox plus the TLS model broker, and the cluster runs the
+# sandbox stack on the same host.
+job_name: tbench-m0
+n_attempts: 3
+n_concurrent_trials: 1
+agents:
+  - import_path: "aeval.agents.dsh.agent:DshAgent"
+    # The CLI tree is ~502 MB and is installed at trial time; the default
+    # setup timeout is too short for it on this cluster.
+    override_setup_timeout_sec: 900
+    kwargs:
+      install_prefix: "/dev/shm/dshpkg"
+      # The base image bakes the cluster host's complete npm cache at
+      # /root/.npm plus an .npmrc with `prefer-offline`, so this install
+      # needs no network: the registry path here is throttled to a few
+      # KB/s and a cold install blew Harbor's 900 s setup bound.
+      npm_cache: "/root/.npm"
+      session_reader: "/root/src/dsh-eval-control/dist/session_reader.js"
+      run_timeout_sec: 900
+environment:
+  type: e2b

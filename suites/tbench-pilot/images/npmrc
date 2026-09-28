@@ -1,0 +1,20 @@
+# npm configuration baked into the pilot base image.
+#
+# The DSH CLI (~501 MB unpacked) is installed by the agent at trial time.
+# On this cluster the registry path is throttled to a few KB/s (measured:
+# ~3 KB/s to registry.npmjs.org, ~35 KB/s to registry.npmmirror.com), so a
+# cold install blew Harbor's 900 s agent-setup bound — observed in the
+# first pilot run: "Trial ... failed: Agent setup timed out after 900.0
+# seconds".
+#
+# The image therefore bakes the cluster host's complete, registry-keyed
+# npm cache at /root/.npm plus this file. `prefer-offline` bypasses npm's
+# staleness revalidation for cached data, so the trial-time install
+# resolves entirely from the local cache; anything the cache is missing
+# still fails loudly (and the image's build-time offline self-check
+# catches that before a sealed trial does).
+registry=https://registry.npmjs.org/
+prefer-offline=true
+audit=false
+fund=false
+update-notifier=false

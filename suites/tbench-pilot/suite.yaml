@@ -1,0 +1,63 @@
+schema_version: 2
+id: tbench-pilot
+version: 0.1.0
+harbor:
+  dataset: datasets/local.yaml
+  job: jobs/tbench-m0.yaml
+baselines:
+  # Proves the ADAPTED image is what the trial ran in: every mirrored base
+  # image seeds /workspace/ready with "true" (images/base-image.Dockerfile),
+  # so a trial that falls back to an unadapted upstream image fails here
+  # instead of being graded as if it had run the pilot's environment.
+  - id: image_ready
+    probe: "observable:ready"
+    equals: "true"
+clock:
+  mode: real
+observables:
+  # file: sources only (P0-2: db:/screenshot:/dom: probes fail closed).
+  # `ready` is the baseline seed; `reward` is published by the upstream
+  # verifier (tests/test.sh) during the verifier phase.
+  - { name: ready, type: string, source: "file:/workspace/ready" }
+  - { name: reward, type: string, source: "file:/logs/verifier/reward.txt" }
+verdict:
+  requirements: [input_complete, agent_finished, integration_valid, render_valid, judge_finished, artifact_schema_ok]
+  graders:
+    # The outcome layer is the upstream verifier's own verdict; the
+    # trajectory layer adds the framework rubric and vetoes a pass that
+    # was obtained by reading the tests or the oracle solution.
+    default: { impl: "graders/tbench_outcome.py@v1", layer: outcome }
+    trajectory: { impl: "graders/tbench_trajectory.py@v1", layer: trajectory, veto: true }
+metrics:
+  # pass^3: the probability that all three attempts of a task pass.
+  - { id: reliability, kind: pass_pow_k, k: 3 }
+driver:
+  require: [acp_stdio, sdk_jsonrpc]
+  # The collect command below runs the task's OWN verifier, and the
+  # suite reads the reward it publishes. Harbor uploads the task's
+  # tests only at verification time — after collection — so aeval
+  # stages them once the agent has stopped (see DriverSpec).
+  stage_tests_before_collect: true
+  # Every vendored task's Dockerfile ends with WORKDIR /app and its tests
+  # hardcode /app (hello-world says "the current directory"), so the DSH
+  # session is minted in /app and the agent runs there. The owner default
+  # (/workspace) made all three tasks fail on a real run.
+  workspace_dir: "/app"
+  # DSH confines the shell with a bwrap/Landlock runner: the local sandbox
+  # backend probes for one at first use and refuses the command outright
+  # when the image ships neither — which this sealed image does not
+  # (measured: "no sandbox backend is usable on this host"). Terminal-Bench
+  # tasks need a working shell; without this, only hello-world (file tools
+  # alone) was answerable. The isolation boundary for a sealed trial is the
+  # disposable per-trial microVM, so DSH's own inner confinement is off —
+  # declared here rather than assumed, and passed to the run as
+  # DSH_PERMISSION_MODE (which also sets approvals to never).
+  sandbox_mode: "danger-full-access"
+provenance:
+  source: "terminal-bench-core@0.1.1 (https://github.com/laude-institute/terminal-bench @ 91e10457b5410f16c44364da1a34cb6de8c488a5)"
+  source_url: "https://github.com/laude-institute/terminal-bench"
+  imported_at: "2025-09-24"
+  converter_version: "aeval-vendor-tbench/1"
+  license: "Apache-2.0"
+  data_imported: true
+  rewritten_by_us: true

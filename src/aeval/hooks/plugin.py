@@ -151,7 +151,10 @@ def register_trial_hooks(job: Any, context: EvaluationContext) -> None:
                 environment=env_handle,
                 context=context,
                 trial_id=state.trial_id,
-                paths=trial_control_paths(state, context.run_dir),
+                paths=trial_control_paths(
+                    state, context.run_dir,
+                    getattr(getattr(context.suite, "overlay", None), "driver", None),
+                ),
                 broker=state.broker,
                 provider=str(context.broker_spec.identity.get("provider", "")),
                 model=str(context.broker_spec.identity.get("model", "")),
@@ -179,6 +182,7 @@ def register_trial_hooks(job: Any, context: EvaluationContext) -> None:
             issue = "agent ended with infra failures recorded"
             if issue not in state.evidence_issues:
                 state.evidence_issues.append(issue)
+        await _stage_task_tests(event, context, state)
 
     async def _verification_started(event: Any) -> None:
         state = context.state_for_event(event)
@@ -255,6 +259,58 @@ def register_trial_hooks(job: Any, context: EvaluationContext) -> None:
         job.on_trial_cancelled(_trial_cancelled)
     except Exception as exc:
         raise HookRegistrationError(f"failed to register trial hooks on the job: {exc}") from exc
+
+
+# Where the task's own verifier expects its tests inside the sandbox
+# (Harbor's ``EnvironmentPaths.tests_dir`` on Linux, and where the
+# Terminal-Bench test scripts look for themselves).
+TEST_STAGE_DIR = "/tests"
+
+
+async def _stage_task_tests(
+    event: Any, context: EvaluationContext, state: Any
+) -> None:
+    """Upload the task's ``tests/`` into the sandbox before collection.
+
+    Terminal-Bench tasks publish their reward from ``tests/test.sh``, and
+    a terminal-bench suite's collect command runs that script. Harbor
+    uploads ``tests/`` only at verification time — which is AFTER the
+    collect phase — so a suite that reads a verifier-published observable
+    must stage the tests itself (``driver.stage_tests_before_collect``).
+
+    The upload happens once the agent has stopped, so the benchmark
+    property Harbor protects is preserved: the agent never sees the
+    tests. Failures are recorded on the trial and left to fail the
+    collect step loudly rather than producing a rewardless trial that
+    still looks gradable.
+    """
+    driver = getattr(getattr(context.suite, "overlay", None), "driver", None)
+    if driver is None or not getattr(driver, "stage_tests_before_collect", False):
+        return
+    task_path = getattr(getattr(event.config, "task", None), "path", None)
+    if task_path is None:
+        state.evidence_issues.append("cannot stage task tests: no task path on the trial config")
+        return
+    tests_dir = Path(str(task_path)) / "tests"
+    if not tests_dir.is_dir():
+        state.evidence_issues.append(f"cannot stage task tests: {tests_dir} is missing")
+        return
+    environment = (
+        context.environments.environment(state.trial_id)
+        if context.environments is not None
+        else None
+    )
+    if environment is None:
+        state.evidence_issues.append("cannot stage task tests: no environment handle")
+        return
+    upload = getattr(environment, "upload_dir", None)
+    if not callable(upload):
+        state.evidence_issues.append("cannot stage task tests: environment has no upload_dir")
+        return
+    try:
+        await upload(source_dir=tests_dir, target_dir=TEST_STAGE_DIR)
+    except Exception as exc:  # noqa: BLE001 - recorded, then fatal at collection
+        state.evidence_issues.append(f"staging task tests failed: {exc}")
 
 
 async def _grade_and_record(event: Any, context: EvaluationContext, state: Any) -> None:

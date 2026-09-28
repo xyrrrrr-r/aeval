@@ -1,0 +1,12 @@
+# Oracle arm of the pilot: the same three tasks with Harbor's built-in
+# `oracle` agent, which runs each task's solution/solve.sh. This is the
+# solvability baseline — it proves the vendored tasks and their adapted
+# images verify green before any model output is graded. One attempt per
+# task (the oracle is deterministic).
+job_name: tbench-oracle
+n_attempts: 1
+n_concurrent_trials: 1
+agents:
+  - name: oracle
+environment:
+  type: e2b
