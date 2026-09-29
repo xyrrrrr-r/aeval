@@ -98,7 +98,7 @@ def create_run_context(job: Any) -> EvaluationContext:
         raise HookRegistrationError("Job output directory differs from intent config")
     if not suite_identity_matches(manifest.overlay, suite):
         raise HookRegistrationError("suite identity differs from intent manifest")
-    _require_adapter_declarations(job)
+    _require_adapter_contract(job)
     trials_dir = Path(job.job_dir).resolve()
     if trials_dir == root or not trials_dir.is_relative_to(root):
         raise HookRegistrationError("Harbor job directory must be inside the run directory")
@@ -472,8 +472,8 @@ async def _record_unjudgeable_exclusion(
         store.close()
 
 
-def _require_adapter_declarations(job: Any) -> None:
-    """Refuse a run whose selected adapter cannot describe itself.
+def _require_adapter_contract(job: Any) -> None:
+    """Refuse a run whose selected adapter cannot describe itself or be read.
 
     The recorded adapter identity (``AdapterSpec``) is what keeps a second agent
     distinguishable from this one in the store and in comparability. Checked at
@@ -481,13 +481,25 @@ def _require_adapter_declarations(job: Any) -> None:
     evidence months later. Harbor-native ``name:`` agents (nop/oracle) make no
     such declaration and are exempt — they never enter the evaluation chain.
     """
-    from aeval.agents.contract import adapter_declaration_gap, load_adapter_class
+    from aeval.agents.contract import (
+        adapter_declaration_gap,
+        adapter_member_gap,
+        load_adapter_class,
+    )
 
     for entry in getattr(job.config, "agents", None) or []:
         import_path = getattr(entry, "import_path", None)
         if not import_path:
             continue
-        gap = adapter_declaration_gap(load_adapter_class(import_path))
+        adapter_class = load_adapter_class(import_path)
+        member_gap = adapter_member_gap(adapter_class)
+        if member_gap:
+            raise HookRegistrationError(
+                f"agent adapter {import_path} is missing required members {member_gap} — "
+                "the evidence chain reads them at trial end (see "
+                "aeval.agents.contract.AgentAdapter)"
+            )
+        gap = adapter_declaration_gap(adapter_class)
         if gap:
             raise HookRegistrationError(
                 f"agent adapter {import_path} declares no {gap} — the run could not "

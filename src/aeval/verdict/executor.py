@@ -160,11 +160,17 @@ def _ct_of(record: TrialRecord):
             FieldCompleteness(field="events", status="unavailable"),
             FieldCompleteness(field="token_usage", status="unavailable"),
         ])
-    # A minimal ATIF shell: field checks only need the extra metadata.
+    # A minimal ATIF shell: field checks only need the extra metadata. The agent
+    # identity comes from the record — it used to be hardcoded to "dsh", so every
+    # archived grading of every adapter was labelled dsh.
     from harbor.models.trajectories import Agent, Step, Trajectory
 
+    adapter = getattr(record, "adapter", None)
     atif = Trajectory(
-        agent=Agent(name="dsh", version="unknown"),
+        agent=Agent(
+            name=getattr(adapter, "id", None) or "unknown",
+            version=getattr(adapter, "version", None) or "unknown",
+        ),
         steps=[Step(step_id=1, source="system", message="(stored record)")],
         extra=extra,
     )

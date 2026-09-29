@@ -41,6 +41,7 @@ __all__ = [
     "load_adapter_class",
     "required_capability_gaps",
     "adapter_declaration_gap",
+    "adapter_member_gap",
     "build_adapter_spec",
     "describe_adapter",
 ]
@@ -55,6 +56,12 @@ PROVIDES_ATTR = "PROVIDES"
 #: Declarations required to build the recorded adapter identity (``AdapterSpec``).
 #: Missing any of these means a run whose records cannot say which agent produced
 #: them — refused at run start rather than discovered at comparison time.
+#: Members the evidence chain actually reads (name/version for identity, paths()
+#: for artifact locations, read_trial_session() for grading) plus a conversation
+#: session id under either the contract name or the deprecated alias. Missing one
+#: used to mean an AttributeError in the middle of collection; now it is refused
+#: before the run starts.
+REQUIRED_MEMBERS = ("name", "version", "paths", "read_trial_session")
 REQUIRED_DECLARATIONS = (
     "ADAPTER_ID",
     "ADAPTER_VERSION",
@@ -64,6 +71,7 @@ REQUIRED_DECLARATIONS = (
 )
 SESSION_ID_ATTR = "agent_session_id"
 LEGACY_SESSION_ID_ATTR = "dsh_session_id"
+SESSION_ID_MEMBERS = (SESSION_ID_ATTR, LEGACY_SESSION_ID_ATTR)
 
 
 def load_adapter_class(import_path: str) -> type:
@@ -194,3 +202,11 @@ def build_adapter_spec(
         write_surface=getattr(adapter_class, "WRITE_SURFACE", "ephemeral_overlay"),
         server_side_session=getattr(adapter_class, "SERVER_SIDE_SESSION", "forbidden"),
     )
+
+
+def adapter_member_gap(adapter: type) -> list[str]:
+    """Required contract members this adapter is missing (empty = complete)."""
+    missing = [member for member in REQUIRED_MEMBERS if not hasattr(adapter, member)]
+    if not any(hasattr(adapter, member) for member in SESSION_ID_MEMBERS):
+        missing.append(f"{SESSION_ID_ATTR} (or legacy {LEGACY_SESSION_ID_ATTR})")
+    return missing

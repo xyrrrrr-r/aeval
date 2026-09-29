@@ -199,6 +199,16 @@ async def deploy_control_stack(
         )
 
         patch_path = (target / "cordis.patch.yml").as_posix()
+        # add_patch_file is DSH's own method (Harbor's BaseInstalledAgent has no
+        # such API), so a non-DSH adapter used to die here with a bare
+        # AttributeError. Silently skipping is not an option either: that would
+        # drop the control stack without saying so. Declarative injection
+        # arrives with the adapter contract (P2-4).
+        if not hasattr(agent, "add_patch_file"):
+            raise BootstrapError(
+                f"agent adapter {type(agent).__name__} cannot accept patch injection "
+                f"({patch_path}); the control stack cannot be applied to it"
+            )
         agent.add_patch_file(patch_path)
         if hasattr(agent, "pin_session"):
             # the run must adopt the trial's own session, not mint one

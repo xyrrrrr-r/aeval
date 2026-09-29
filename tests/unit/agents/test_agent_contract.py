@@ -16,6 +16,7 @@ from types import SimpleNamespace
 from aeval.agents.contract import (
     PROVIDES_ATTR,
     adapter_declaration_gap,
+    adapter_member_gap,
     build_adapter_spec,
     declared_capabilities,
     load_adapter_class,
@@ -23,7 +24,7 @@ from aeval.agents.contract import (
 )
 from aeval.agents.dsh.agent import DshAgent
 from aeval.hooks.plugin import HookRegistrationError
-from aeval.hooks.plugin import _require_adapter_declarations  # noqa: PLC2701
+from aeval.hooks.plugin import _require_adapter_contract  # noqa: PLC2701
 from aeval.suite_loader.composition import _check_agent_capabilities  # noqa: PLC2701
 from aeval.suite_loader.composition import compose_harbor_job
 from aeval.suite_loader.loader import load_suite
@@ -155,13 +156,69 @@ def test_run_start_refuses_an_adapter_that_cannot_describe_itself(tmp_path, monk
     job = SimpleNamespace(config=SimpleNamespace(
         agents=[SimpleNamespace(import_path="bare_adapter:BareAgent")]
     ))
-    with pytest.raises(HookRegistrationError, match="declares no"):
-        _require_adapter_declarations(job)
+    with pytest.raises(HookRegistrationError, match="missing required members"):
+        _require_adapter_contract(job)
     # a Harbor-native placeholder makes no claim and is exempt
-    _require_adapter_declarations(SimpleNamespace(
+    _require_adapter_contract(SimpleNamespace(
         config=SimpleNamespace(agents=[SimpleNamespace(name="nop", import_path=None)])
     ))
     # the shipped adapter passes the gate
-    _require_adapter_declarations(SimpleNamespace(
+    _require_adapter_contract(SimpleNamespace(
         config=SimpleNamespace(agents=[SimpleNamespace(import_path=DSH_IMPORT_PATH)])
     ))
+
+
+# --- P0-3: required members (fail at start, not mid-collection) ---------------
+
+def test_dsh_satisfies_the_adapter_contract_members():
+    assert adapter_member_gap(DshAgent) == []
+
+
+def test_adapter_that_cannot_be_read_is_refused_before_the_run(tmp_path, monkeypatch):
+    monkeypatch.syspath_prepend(str(tmp_path))
+    (tmp_path / "half_adapter.py").write_text(
+        "class HalfAgent:\n"
+        "    PROVIDES = frozenset({'shell'})\n"
+        "    ADAPTER_ID = 'half'\n"
+        "    ADAPTER_VERSION = '1'\n"
+        "    ADAPTER_MODE = 'cli'\n"
+        "    BUDGET_ENFORCEMENT = 'none'\n",
+        encoding="utf-8",
+    )
+    gap = adapter_member_gap(load_adapter_class("half_adapter:HalfAgent"))
+    assert "read_trial_session" in gap and "paths" in gap
+    job = SimpleNamespace(config=SimpleNamespace(
+        agents=[SimpleNamespace(import_path="half_adapter:HalfAgent")]
+    ))
+    with pytest.raises(HookRegistrationError, match="missing required members"):
+        _require_adapter_contract(job)
+
+
+# --- P0-4: graded archives must name the agent that ran, never a hardcoded one -
+
+def _record_with(adapter):
+    from aeval.contracts import TrialCoordinates, TrialRecord
+
+    return TrialRecord(
+        trial_id="t1",
+        coordinates=TrialCoordinates(
+            run_id="r1", suite_id="s", suite_version="1", task_id="task", trial_index=0
+        ),
+        stop_reason="agent_exit_0",
+        baseline_ok=True,
+        verdict="cannot_judge",
+        adapter=adapter,
+    )
+
+
+def test_stored_record_grading_uses_the_recorded_agent_identity():
+    from aeval.verdict.executor import _ct_of  # noqa: PLC2701
+
+    spec = build_adapter_spec(DshAgent, version="2.3.4")
+    spec = spec.model_copy(update={"id": "otheragent"})
+    assert _ct_of(_record_with(spec)).atif.agent.name == "otheragent"
+    assert _ct_of(_record_with(spec)).atif.agent.version == "2.3.4"
+    # no recorded adapter: neutral unknown, NOT a silent "dsh"
+    legacy = _ct_of(_record_with(None)).atif.agent
+    assert legacy.name == "unknown"
+    assert legacy.version == "unknown"
