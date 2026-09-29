@@ -29,9 +29,12 @@ rather than an implicit pass.
 from __future__ import annotations
 
 from importlib import import_module
+from typing import get_args
 from typing import Any, Protocol, runtime_checkable
 
-from aeval.contracts import AdapterSpec
+from pydantic import ValidationError
+
+from aeval.contracts import AdapterSpec, TranscriptCapability
 from aeval.suite_models import SuiteError
 
 __all__ = [
@@ -191,6 +194,29 @@ def build_adapter_spec(
             "A run must record which adapter produced its trials (AdapterSpec); "
             "declare id/version/mode/transcript capability/budget enforcement."
         )
+    try:
+        return _adapter_spec(adapter_class, import_path=import_path, version=version)
+    except ValidationError as exc:
+        raise SuiteError(
+            f"Agent adapter {describe_adapter(adapter_class)} declares a value outside the "
+            f"contract's vocabulary: {exc}. Allowed: "
+            f"mode={_allowed(AdapterSpec, 'mode')}, "
+            f"budget_enforcement={_allowed(AdapterSpec, 'budget_enforcement')}, "
+            f"write_surface={_allowed(AdapterSpec, 'write_surface')}, "
+            f"server_side_session={_allowed(AdapterSpec, 'server_side_session')}, "
+            f"transcript.source={_allowed(TranscriptCapability, 'source')}"
+        ) from exc
+
+
+def _allowed(model: type, field_name: str) -> list[str]:
+    """Allowed values of a Literal-typed model field (for actionable errors)."""
+    annotation = model.model_fields[field_name].annotation
+    return [str(value) for value in get_args(annotation)]
+
+
+def _adapter_spec(
+    adapter_class: type, *, import_path: str | None, version: str | None
+) -> AdapterSpec:
     return AdapterSpec(
         id=str(adapter_class.ADAPTER_ID),
         version=str(version or adapter_class.ADAPTER_VERSION),
