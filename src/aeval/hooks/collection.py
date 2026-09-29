@@ -39,7 +39,6 @@ from aeval.hooks.baseline_arrival import (
 )
 from aeval.hooks.collectors import (
     produce_canonical_transcript,
-    produce_declared_artifact,
     produce_mock_call_log,
     produce_observable,
     produce_runtime_dump,
@@ -233,36 +232,6 @@ async def collect_trial_evidence(
     outcome, ref = produce_canonical_transcript(trial_dir, transcript)
     outcomes.append(outcome)
     artifacts.append(ref)
-
-    # Adapter-declared extra evidence (declaration `artifacts:`). Optional by
-    # design: an adapter that declares none is complete, not deficient, so this
-    # is a loop over what was declared rather than a new required slot. A declared
-    # artifact the adapter cannot produce IS an error — declaring it means the
-    # bundle must carry it, exactly like every other planned output.
-    from aeval.agents.contract import declared_artifacts
-
-    for logical in declared_artifacts(agent):
-        producer = getattr(agent, "read_declared_artifact", None)
-        if not callable(producer):
-            raise CollectionError(
-                f"adapter declares artifact {logical!r} but exposes no "
-                "read_declared_artifact() to produce its bytes"
-            )
-        bare = logical.split(":", 1)[1]
-        try:
-            content = producer(bare)
-        except Exception as exc:  # noqa: BLE001 - the adapter's own fail-closed
-            raise CollectionError(
-                f"declared artifact {logical!r} could not be read: {exc}"
-            ) from exc
-        if not isinstance(content, bytes):
-            raise CollectionError(
-                f"declared artifact {logical!r} returned "
-                f"{type(content).__name__}, expected bytes"
-            )
-        outcome, ref = produce_declared_artifact(trial_dir, logical, content)
-        outcomes.append(outcome)
-        artifacts.append(ref)
 
     # An explicit, truthful record of model/tool calls. A run whose
     # broker observed nothing writes a "no calls" fact rather than an

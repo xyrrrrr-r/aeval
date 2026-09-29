@@ -39,7 +39,6 @@ __all__ = [
     "produce_mock_call_log",
     "produce_session_record",
     "produce_canonical_transcript",
-    "produce_declared_artifact",
     "produce_observable",
     "write_collection_manifest",
 ]
@@ -201,21 +200,6 @@ def produce_canonical_transcript(
     return _produce_bytes(
         trial_dir, "canonical_transcript", content, "application/json",
         command="aeval: canonical_transcript build",
-    )
-
-
-def produce_declared_artifact(
-    trial_dir: Path, logical_name: str, content: bytes
-) -> tuple[CollectOutcome, ArtifactRef]:
-    """One adapter-declared evidence artifact, at its namespaced fixed path.
-
-    ``logical_name`` carries the ``agent_artifact:`` prefix; its path comes from
-    the same fixed table discipline as every other output, so a declaration names
-    evidence without being able to relocate or rename reserved slots.
-    """
-    return _produce_bytes(
-        trial_dir, logical_name, content, "application/octet-stream",
-        command=f"aeval: {logical_name} adapter artifact",
     )
 
 
