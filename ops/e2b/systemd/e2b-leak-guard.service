@@ -1,0 +1,13 @@
+[Unit]
+Description=E2B leak guard (orphan firecracker VMs + stale build scratch)
+Documentation=file:/opt/e2b-hardening/README.md
+After=network-online.target docker.service
+Wants=network-online.target
+OnFailure=e2b-leak-watch.service
+
+[Service]
+Type=oneshot
+Environment=MIN_AGE_MIN=15 INFLIGHT_MIN=30
+ExecStart=/usr/local/bin/e2b-leak-guard.sh
+Nice=10
+IOSchedulingClass=idle

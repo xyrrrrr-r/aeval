@@ -1,0 +1,12 @@
+[Unit]
+Description=E2B hardening watchdog (probe + auto-load + self-heal)
+Documentation=file:/opt/e2b-hardening/README.md
+After=network-online.target docker.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+Environment=WARN_PCT=85 AUTO_INSTALL=1
+ExecStart=/usr/local/bin/e2b-leak-watch.sh
+Nice=10
+IOSchedulingClass=idle

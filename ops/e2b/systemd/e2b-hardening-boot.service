@@ -1,0 +1,15 @@
+[Unit]
+Description=E2B hardening self-load at boot (idempotent apply)
+Documentation=file:/opt/e2b-hardening/README.md
+After=network-online.target docker.service
+Wants=network-online.target
+ConditionPathExists=/opt/e2b-hardening/install-e2b-hardening.sh
+
+[Service]
+Type=oneshot
+ExecStart=/opt/e2b-hardening/install-e2b-hardening.sh --quiet
+RemainAfterExit=yes
+TimeoutStartSec=300
+
+[Install]
+WantedBy=multi-user.target
