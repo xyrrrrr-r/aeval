@@ -620,6 +620,135 @@ async def test_agent_start_derives_control_paths_from_the_adapter(owned_job, mon
     assert seen["paths"].session_root == "deepagent-home"
 
 
+class _RecordingEnvironment:
+    """A sandbox that records commands, with optional canned exit codes."""
+
+    def __init__(self, *, summary_present=True, fail_write=False):
+        self.commands: list[str] = []
+        self.summary_present = summary_present
+        self.fail_write = fail_write
+
+    async def exec(self, command: str):
+        self.commands.append(command)
+        if command.startswith("test -s "):
+            return SimpleNamespace(
+                return_code=0 if self.summary_present else 1, stdout="", stderr=""
+            )
+        if self.fail_write and "bundle_descriptor.json" in command:
+            return SimpleNamespace(return_code=1, stdout="", stderr="read-only fs")
+        return SimpleNamespace(return_code=0, stdout="", stderr="")
+
+
+def _declared_agent(stack: str):
+    """An adapter double whose CONTROL_STACK is a CLASS member, as declared."""
+    return type("DeclaredAgent", (), {"CONTROL_STACK": stack})()
+
+
+def _binding_for(state):
+    from aeval.contracts import RunBinding, TrialPaths, TrialBinding
+
+    return TrialBinding(
+        run=RunBinding(
+            run_id="run-hello", job_config_hash="b" * 64,
+            config_file_sha256="c" * 64, runtime_lock_digest="d" * 64,
+        ),
+        trial_id=state.trial_id,
+        session_id=state.session_id,
+        config_digest="e" * 64,
+        paths=TrialPaths(
+            sandbox_cwd="/workspace", dsh_home="/root/.deepagents",
+            bundle_path="/logs/agent/bundle_descriptor.json",
+            session_root="deepagent-home", download_root="trials/t/agent",
+        ),
+    )
+
+
+async def _agent_end_with_stack(owned_job, monkeypatch, name, stack, env):
+    plugin, context, event = await _agent_start_with_neutral_audit(
+        owned_job, monkeypatch, name
+    )
+    state = context.trials[str(event.trial_id)]
+    state.binding = _binding_for(state)
+    context.environments.capture(
+        _FakeTrial(state.trial_id, env, agent=_declared_agent(stack))
+    )
+    await emit(
+        owned_job, event.model_copy(update={"event": TrialEvent.AGENT_END}),
+        TrialEvent.AGENT_END,
+    )
+    return state, env
+
+
+async def test_agent_end_writes_the_terminal_descriptor_for_the_generic_facade(
+    owned_job, monkeypatch
+):
+    """The generic facade has no sandbox-side writer: the owner writes it.
+
+    Harbor emits AGENT_END and only then downloads the agent log directory that
+    carries the descriptor, so this is the last moment it can be written. Without
+    it a real run dies at the evidence gate with "bundle descriptor missing".
+    """
+    import base64
+    import json as _json
+
+    env = _RecordingEnvironment()
+    state, env = await _agent_end_with_stack(
+        owned_job, monkeypatch, "generic-descriptor", "deepagent-facade", env
+    )
+
+    writes = [c for c in env.commands if "bundle_descriptor.json" in c]
+    assert len(writes) == 1, env.commands
+    encoded = writes[0].split("printf %s ", 1)[1].split(" |", 1)[0]
+    descriptor = _json.loads(base64.b64decode(encoded))
+    assert descriptor["schema_version"] == 2
+    assert descriptor["trial_id"] == state.trial_id
+    assert descriptor["session_id"] == state.session_id
+    assert descriptor["session_root"] == "deepagent-home"
+    assert descriptor["config_digest"] == "e" * 64
+    assert descriptor["run"]["run_id"] == "run-hello"
+    # the ACP summary was present, so the host can defend a completed session
+    assert descriptor["stop_reason"] == "agent_exit_0"
+    assert not state.infra_invalid_reasons
+
+
+async def test_agent_end_states_a_non_completion_when_no_summary_exists(
+    owned_job, monkeypatch
+):
+    """No summary means the session did not complete: never claim exit 0."""
+    import base64
+    import json as _json
+
+    env = _RecordingEnvironment(summary_present=False)
+    _, env = await _agent_end_with_stack(
+        owned_job, monkeypatch, "generic-no-summary", "deepagent-facade", env
+    )
+    writes = [c for c in env.commands if "bundle_descriptor.json" in c]
+    encoded = writes[0].split("printf %s ", 1)[1].split(" |", 1)[0]
+    assert _json.loads(base64.b64decode(encoded))["stop_reason"] == "crashed"
+
+
+async def test_a_sandbox_side_stack_owns_its_own_descriptor(owned_job, monkeypatch):
+    """DSH writes its descriptor in the sandbox: the owner must not overwrite
+    a first-hand statement with a second-hand one."""
+    env = _RecordingEnvironment()
+    state, env = await _agent_end_with_stack(
+        owned_job, monkeypatch, "dsh-descriptor", "dsh", env
+    )
+    assert not [c for c in env.commands if "bundle_descriptor.json" in c]
+    assert not state.infra_invalid_reasons
+
+
+async def test_a_descriptor_that_cannot_be_written_is_infra_invalid(
+    owned_job, monkeypatch
+):
+    env = _RecordingEnvironment(fail_write=True)
+    state, _ = await _agent_end_with_stack(
+        owned_job, monkeypatch, "generic-write-fails", "deepagent-facade", env
+    )
+    assert any("bundle descriptor could not be written" in r
+               for r in state.infra_invalid_reasons), state.infra_invalid_reasons
+
+
 async def test_tainted_trial_never_receives_a_control_binding(owned_job, monkeypatch):
     """The owner's hard block: a trial that failed its environment audit
     must not get a model token or a control binding."""

@@ -2,12 +2,15 @@
 
 from __future__ import annotations
 
+import base64
 import json
 import os
+import shlex
 from hashlib import sha256
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Any
 
+from aeval.agents.contract import control_stack_of
 from aeval.bundle.manifest import _atomic_write_json
 from aeval.contracts import OverlayIdentity, RunBinding, RunManifest, RuntimeLock, job_config_hash
 from aeval.hooks.baseline_arrival import on_environment_started
@@ -17,6 +20,7 @@ from aeval.control.bootstrap import BootstrapError, bootstrap_trial_control
 from aeval.hooks.broker_lifecycle import (
     note_broker_unexpected_exit,
     BrokerSpecError,
+    SANDBOX_BUNDLE_PATH,
     parse_broker_spec,
     start_trial_broker,
     stop_trial_broker,
@@ -214,6 +218,14 @@ def register_trial_hooks(job: Any, context: EvaluationContext) -> None:
         state = context.state_for_event(event)
         if state.terminal:
             return
+        # The terminal bundle descriptor, for a control stack that has no
+        # sandbox-side component to write it (the generic facade flavor). This
+        # is the last moment where it can be written truthfully: Harbor emits
+        # AGENT_END and only THEN downloads the agent logs directory that carries
+        # the descriptor. example-lab: without it every real run died at the evidence
+        # gate with "bundle descriptor missing (host-side control plugin)" —
+        # the DSH flavor writes its own inside the sandbox, this one cannot.
+        await _write_terminal_descriptor(context, state)
         if state.infra_invalid_reasons:
             issue = "agent ended with infra failures recorded"
             if issue not in state.evidence_issues:
@@ -315,6 +327,101 @@ def register_trial_hooks(job: Any, context: EvaluationContext) -> None:
 TEST_STAGE_DIR = "/tests"
 
 
+#: The stack that has no sandbox-side component able to write the descriptor.
+GENERIC_FACADE_STACK = "deepagent-facade"
+
+#: The agent-side log directory Harbor downloads as ``<trial_dir>/agent``.
+AGENT_LOG_DIR = "/logs/agent"
+
+#: The agent's own session summary, written by Harbor's ACP runtime.
+AGENT_ACP_SUMMARY = f"{AGENT_LOG_DIR}/acp-summary.json"
+
+
+async def _observed_agent_reason(exec_fn: Any) -> str:
+    """The terminal reason the trusted host can defend, from the sandbox.
+
+    ``agent_exit_0`` is claimed only when the agent's ACP runner left a completed
+    session summary behind. Anything weaker would be the host asserting an exit it
+    never observed; ``infra_error`` suppresses the judge, so it is reserved for
+    trials the owner already knows are infra-invalid.
+    """
+    probe = await exec_fn(f"test -s {shlex.quote(AGENT_ACP_SUMMARY)}")
+    code = getattr(probe, "return_code", getattr(probe, "exit_code", 1))
+    return "agent_exit_0" if code == 0 else "crashed"
+
+
+async def _write_terminal_descriptor(context: EvaluationContext, state: Any) -> None:
+    """Write the sandbox's bundle descriptor for a host-described control stack.
+
+    Only the generic facade flavor is host-described. DSH ships a sandbox-side
+    control plugin that owns its descriptor and its own first-hand observations;
+    overwriting that from the host would replace first-hand evidence with a
+    second-hand guess. For the generic flavor nothing inside the sandbox knows
+    how the agent's session ended, and the evidence gate requires a descriptor —
+    so the trusted owner states what it observed, at the last moment it can:
+    Harbor emits AGENT_END and only then downloads the agent log directory.
+    A descriptor that cannot be written is infra-invalid, not a warning: the run
+    would otherwise be refused later with a message about a missing file.
+    """
+    if state.binding is None:
+        return
+    environments = context.environments
+    agent = environments.agent(state.trial_id) if environments is not None else None
+    try:
+        stack = control_stack_of(type(agent)) if agent is not None else None
+    except Exception as exc:  # noqa: BLE001 - a bad declaration cannot be skipped
+        state.mark_infra_invalid(f"bundle descriptor: adapter declaration invalid: {exc}")
+        return
+    if stack != GENERIC_FACADE_STACK:
+        return
+    environment = (
+        environments.environment(state.trial_id) if environments is not None else None
+    )
+    exec_fn = getattr(environment, "exec", None)
+    if not callable(exec_fn):
+        state.mark_infra_invalid(
+            "bundle descriptor: the sandbox exposes no exec — the descriptor the "
+            "evidence gate requires cannot be written"
+        )
+        return
+    try:
+        reason = (
+            "infra_error"
+            if state.infra_invalid_reasons
+            else await _observed_agent_reason(exec_fn)
+        )
+        descriptor = {
+            "schema_version": 2,
+            "run": state.binding.run.model_dump(mode="json"),
+            "trial_id": state.binding.trial_id,
+            "session_id": state.binding.session_id,
+            "session_root": state.binding.paths.session_root,
+            "stop_reason": reason,
+            "config_digest": state.binding.config_digest,
+        }
+        payload = json.dumps(descriptor, indent=2, sort_keys=True) + "\n"
+        encoded = base64.b64encode(payload.encode("utf-8")).decode("ascii")
+        target = SANDBOX_BUNDLE_PATH
+        command = (
+            f"mkdir -p {shlex.quote(str(PurePosixPath(target).parent))} && "
+            f"printf %s {shlex.quote(encoded)} | base64 -d > {shlex.quote(target)}.tmp && "
+            f"mv {shlex.quote(target)}.tmp {shlex.quote(target)}"
+        )
+        written = await exec_fn(command)
+    except Exception as exc:  # noqa: BLE001 - fail closed, never break the hook chain
+        state.mark_infra_invalid(f"bundle descriptor could not be written: {exc}")
+        return
+    code = getattr(written, "return_code", getattr(written, "exit_code", 0))
+    if code not in (0, None):
+        detail = str(
+            getattr(written, "stderr", "") or getattr(written, "stdout", "") or ""
+        ).strip()
+        state.mark_infra_invalid(
+            f"bundle descriptor could not be written to {target} (exit {code})"
+            + (f": {detail[:200]}" if detail else "")
+        )
+
+
 async def _stage_task_tests(
     event: Any, context: EvaluationContext, state: Any
 ) -> None:
@@ -414,6 +521,13 @@ async def _grade_and_record(event: Any, context: EvaluationContext, state: Any) 
             transcript_extra=transcript_extra,
             store=store,
             adapter=_observed_adapter(context, state),
+            claim=_claim_check(
+                context,
+                state,
+                context.environments.agent(state.trial_id)
+                if context.environments is not None
+                else None,
+            ),
             # Runtime-only base for sealed artifact paths: trajectory
             # graders read the sealed canonical transcript from it.
             artifact_base=(
@@ -594,6 +708,104 @@ def _transcript_extra(context: EvaluationContext, state: Any) -> dict[str, Any] 
         extra["aeval"]["completeness"] = completeness.model_dump(mode="json")
     extra["aeval"]["stop_reason"] = getattr(transcript, "stop_reason", None)
     return extra
+
+
+def _claim_check(
+    context: EvaluationContext, state: Any, agent: Any
+) -> Any | None:
+    """Cross-check the agent's own claims against independent evidence (None when not applicable).
+
+    The adapter owns the comparison because the shapes it reports are its own;
+    the core only supplies the two independent sources and asks. An adapter that
+    does not declare ``claim_check`` gets ``None`` — no claim record — rather than
+    a check built on another agent's assumptions.
+
+    Inputs are *evidence or nothing*: the lease model comes from the operator's
+    broker spec, and the recorder rows come from the sealed ``mock_call_log``.
+    When the broker was never started there is no gateway to compare against, so
+    every finding is unverifiable by construction and no record is written — an
+    all-unverifiable record would read as a completed check to anything that
+    counts records instead of reading statuses.
+    """
+    from aeval.agents.contract import claims_verification_gap
+
+    if agent is None or not hasattr(agent, "verify_claims"):
+        if agent is not None:
+            gap = claims_verification_gap(type(agent))
+            if gap is not None:
+                state.evidence_issues.append(gap)
+        return None
+    transcript = _transcript_for(state, agent)
+    if transcript is None:
+        return None
+    broker_model = None
+    if context.broker_spec is not None:
+        broker_model = str(
+            getattr(context.broker_spec, "identity", {}).get("model", "") or ""
+        ) or None
+    if broker_model is None:
+        state.evidence_issues.append(
+            "claims are not cross-checked: no broker lease model to compare "
+            "against (no controlled model routing for this run)"
+        )
+        return None
+    mock_calls = _sealed_mock_call_log(state)
+    try:
+        return agent.verify_claims(
+            transcript,
+            expected_model=broker_model,
+            lease_tokens=None,
+            mock_calls=mock_calls,
+        )
+    except Exception as exc:  # noqa: BLE001 - a failed check must not cost the record
+        state.evidence_issues.append(f"claim check could not be produced: {exc}")
+        return None
+
+
+def _transcript_for(state: Any, agent: Any) -> Any | None:
+    """The canonical transcript for this trial (the adapter caches its own read).
+
+    Both call sites — grading and the claim check — go through
+    ``read_trial_session()``, which every conformant adapter memoises on the
+    instance, so they cannot disagree about one trial. A failure here is recorded
+    on the trial instead of being swallowed.
+    """
+    try:
+        return agent.read_trial_session()
+    except Exception as exc:  # noqa: BLE001 - recorded, never swallowed
+        state.evidence_issues.append(
+            f"official session read failed for the claim check: {exc}"
+        )
+        return None
+
+
+def _sealed_mock_call_log(state: Any) -> list[dict[str, Any]] | None:
+    """The trial's sealed broker call rows, or None when unavailable.
+
+    Reads the artifact the collector already wrote (never re-derived), so the
+    checker compares the agent's account against the bytes that were sealed.
+    """
+    from aeval.hooks.evidence import FIXED_OUTPUT_PATHS
+
+    trial_dir = getattr(state, "trial_dir", None)
+    if trial_dir is None:
+        return None
+    path = Path(trial_dir) / FIXED_OUTPUT_PATHS["mock_call_log"]
+    if not path.is_file():
+        return None
+    rows: list[dict[str, Any]] = []
+    for line in path.read_text(encoding="utf-8").splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            parsed = json.loads(line)
+        except ValueError:
+            return None
+        if not isinstance(parsed, dict):
+            return None
+        rows.append(parsed)
+    return rows
 
 
 class AevalPlugin:
