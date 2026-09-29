@@ -101,11 +101,13 @@ DSH_NPM_SLICE: tuple[tuple[str, str, str | None], ...] = (
     ("@deepseek-ai/schemastery", "3.18.3", None),
 )
 
-# The control plugin's complete direct import surface, measured from
-# dsh-eval-control/src at commit 4bc6931. Kept beside the slice so the
-# "import surface ⊆ slice" invariant is checkable without the sibling
-# checkout; the sibling test re-measures reality against this list so a new
-# import cannot appear unrecorded.
+# The control stack's complete direct import surface: the union of the DSH
+# package's own sources (dsh-eval-control/src, non-generated files, after the
+# slim-down at 5d33d43) and the neutral broker cluster (aeval/control/src,
+# whose dist the DSH package composes into its deployment unit). Kept beside
+# the slice so the "import surface ⊆ slice" invariant is checkable without
+# the sibling checkout; the sibling test re-measures reality against this
+# list so a new import cannot appear unrecorded.
 DSH_CONTROL_DIRECT_IMPORTS: tuple[str, ...] = (
     "@deepseek-ai/cordis",
     "@deepseek-ai/dsh-agent",

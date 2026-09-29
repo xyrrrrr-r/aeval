@@ -205,22 +205,33 @@ def test_control_package_pins_match_the_dsh_slice():
 
 
 def test_control_plugin_import_surface_matches_recorded_list():
-    """Re-measure the sibling checkout against the recorded import surface.
+    """Re-measure the real sources against the recorded import surface.
 
-    Skipped (never passed) when the sibling checkout is absent: the defense
-    is only checkable where the control sources live.
+    After the slim-down the deployed control stack is a composition: the
+    DSH package's own sources plus the neutral broker cluster in
+    aeval/control (whose dist the DSH package composes into its own). The
+    invariant covers the union; generated .d.ts shims are excluded because
+    they mirror the neutral sources. Skipped (never passed) when the
+    sibling checkout is absent.
     """
-    sibling = Path(__file__).resolve().parents[2].parent / "dsh-eval-control" / "src"
-    if not sibling.is_dir():
+    dsh_src = Path(__file__).resolve().parents[2].parent / "dsh-eval-control" / "src"
+    neutral_src = Path(__file__).resolve().parents[2] / "control" / "src"
+    if not dsh_src.is_dir():
         pytest.skip("dsh-eval-control sibling checkout not present (dev layout)")
     measured: set[str] = set()
-    for source in sorted(sibling.glob("*.ts")):
+    for source in sorted(dsh_src.glob("*.ts")):
+        if source.name.endswith(".d.ts"):
+            continue  # generated shim pulled from aeval/control/dist
+        measured.update(
+            re.findall(r"from '(@[^']+)'", source.read_text(encoding="utf-8"))
+        )
+    for source in sorted(neutral_src.glob("*.ts")):
         measured.update(
             re.findall(r"from '(@[^']+)'", source.read_text(encoding="utf-8"))
         )
     assert measured == set(provenance.DSH_CONTROL_DIRECT_IMPORTS), (
-        "dsh-eval-control/src direct import surface drifted from "
-        "DSH_CONTROL_DIRECT_IMPORTS — update the constant AND the slice"
+        "control-stack import surface drifted from DSH_CONTROL_DIRECT_IMPORTS "
+        "— update the constant AND the slice"
     )
 
 
