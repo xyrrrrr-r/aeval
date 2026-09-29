@@ -1,0 +1,47 @@
+# The deepAgent adapter: deepagents-code (dcode) driven over ACP stdio.
+# Values agree with aeval/agents/deepagent/agent.py — the declaration is
+# validated against the class (a disagreement is an error). Source-backed
+# facts: docs/TESTS/DEEPAGENTS-FACTS.md.
+extends: _base/agent.base.yaml
+
+id: deepagent
+version: "1"
+import_path: "aeval.agents.deepagent.agent:DeepgentAgent"
+
+provides:
+  - acp_stdio
+  - shell
+  - file_tools
+
+mode: acp_stdio
+# Honest: model traffic does not go through our broker (it is not
+# OpenAI-compatible), so this agent cannot be metered yet. A suite that caps
+# spend refuses it at run start — that refusal is the P1-3 gate working as
+# designed. Metering needs the P2-5b control stack.
+budget_enforcement: none
+transcript:
+  source: native_session_via_bridge
+  reader: harbor-acp-runner
+  capabilities:
+    - atif_via_bridge
+    - token_usage
+  fields_available:
+    events: ok
+    token_usage: partial
+
+# dcode is a Python package run through uvx; the Node observation is
+# DSH-specific. (Inherited from the base as [] — restated for readability.)
+observations: []
+
+sandbox_home: /root/.deepagents
+session_artifact_dir: deepagent-home
+
+# How this adapter is launched in a deployment. The registry entry (uvx
+# deepagents-code==0.1.78 --acp) is built by the adapter itself, so the
+# profile carries only deployment facts: the uvx install of the pinned
+# package needs a generous setup window. Model routing (OPENAI_BASE_URL /
+# OPENAI_API_KEY / …) is supplied per job via the adapter's model_env kwarg,
+# which lands in the launcher env — never baked into a committed file.
+launch:
+  default:
+    override_setup_timeout_sec: 900

@@ -32,17 +32,17 @@ def root(tmp_path):
 
 def test_a_scaffolded_declaration_is_valid_immediately(root, tmp_path):
     result = scaffold_agent(
-        root, "deepagent", package_dir=tmp_path / "pkg", provides=["shell", "file_tools"]
+        root, "agentb", package_dir=tmp_path / "pkg", provides=["shell", "file_tools"]
     )
     resolved = resolve_agent_declaration(result.declaration_path, agents_root=root)
     declaration = resolved.declaration
-    assert declaration.id == "deepagent"
+    assert declaration.id == "agentb"
     assert declaration.provides == ["file_tools", "shell"]
     assert declaration.budget_enforcement == "none"
     # the module was written and is syntactically valid Python
     source = result.module_path.read_text(encoding="utf-8")
     compile(source, str(result.module_path), "exec")
-    assert _class_name("deepagent") in source
+    assert _class_name("agentb") in source
     assert "ADAPTER_ID" in source and "read_trial_session" in source
 
 

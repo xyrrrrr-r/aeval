@@ -58,8 +58,8 @@ def test_the_shipped_declarations_agree_with_their_adapters():
     from pathlib import Path
 
     root = Path(__file__).resolve().parents[3] / "agents"
-    assert discover_agent_declarations(root) == ["dsh", "fakeagent"]
-    for agent_id in ("dsh", "fakeagent"):
+    assert discover_agent_declarations(root) == ["deepagent", "dsh", "fakeagent"]
+    for agent_id in ("deepagent", "dsh", "fakeagent"):
         resolved = resolve_agent_declaration(root / f"{agent_id}.yaml", agents_root=root)
         adapter = load_adapter_class(resolved.declaration.import_path)
         check_declaration_matches_adapter(resolved.declaration, adapter)  # no raise

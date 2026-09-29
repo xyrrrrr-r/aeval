@@ -405,6 +405,7 @@ def agents_cmd(
         resolve_agent_declaration,
     )
     from aeval.suite_loader.paths import suite_path
+    from aeval.suite_models import SuiteError
 
     try:
         ids = discover_agent_declarations(agents_dir)
