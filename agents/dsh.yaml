@@ -31,6 +31,10 @@ transcript:
 observations:
   - node
 
+# The in-sandbox control stack this adapter needs (job token, session minting,
+# the cordis patch). Declared, so the framework never deploys it into another agent.
+control_stack: dsh
+
 sandbox_home: /logs/agent/dsh-home
 session_artifact_dir: dsh-home
 

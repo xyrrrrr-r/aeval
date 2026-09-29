@@ -384,3 +384,64 @@ def test_control_config_mirrors_the_auxiliary_policy(runtime_lock):
     assert mirrored["refuseAuxiliaryCalls"] is True
     # the policy participates in the digest, so the two cannot be confused
     assert mirrored["configDigest"] != bare["configDigest"]
+
+
+# --- P2-4: the control stack is deployed only where it is declared -------------
+
+class _StackAgent:
+    CONTROL_STACK = "dsh"
+
+
+class _NoStackAgent:
+    """A second agent that needs none of the DSH machinery."""
+
+
+async def test_an_agent_without_a_declared_stack_gets_none_deployed(
+    demo_suite, runtime_lock, tmp_path, monkeypatch
+):
+    """The framework must not push DSH's control stack into another agent."""
+    import aeval.control.bootstrap as module
+
+    async def _must_not_run(**kwargs):  # noqa: ANN003
+        raise AssertionError("the control stack was deployed into an undeclared adapter")
+
+    monkeypatch.setattr(module, "deploy_control_stack", _must_not_run)
+    ctx = await _context(demo_suite, runtime_lock, tmp_path)
+    env = FakeUploadEnvironment()
+    broker = _FakeBroker(tmp_path)
+
+    binding, config = await bootstrap_trial_control(
+        environment=env, context=ctx, trial_id="t",
+        paths=_paths(tmp_path), broker=broker,
+        provider="offline-openai", model="test-model",
+        agent=_NoStackAgent(), control_dist=tmp_path,
+    )
+    # the agent-neutral part still happens: token uploaded, control bound
+    assert env.uploaded_contents == ["job-token"]
+    assert config["gatewayUrl"] == "http://127.0.0.1:4321"
+    assert binding is not None
+
+
+async def test_an_agent_with_a_declared_stack_gets_it_deployed(
+    demo_suite, runtime_lock, tmp_path, monkeypatch
+):
+    import aeval.control.bootstrap as module
+
+    calls = []
+
+    async def _record(**kwargs):  # noqa: ANN003
+        calls.append(kwargs)
+        return "cordis.patch.yml"
+
+    monkeypatch.setattr(module, "deploy_control_stack", _record)
+    ctx = await _context(demo_suite, runtime_lock, tmp_path)
+    broker = _FakeBroker(tmp_path)
+
+    await bootstrap_trial_control(
+        environment=FakeUploadEnvironment(), context=ctx, trial_id="t",
+        paths=_paths(tmp_path), broker=broker,
+        provider="offline-openai", model="test-model",
+        agent=_StackAgent(), control_dist=tmp_path,
+    )
+    assert len(calls) == 1
+    assert calls[0]["agent"].__class__ is _StackAgent

@@ -36,6 +36,7 @@ from aeval.contracts import (
     TrialPaths,
     control_config_digest,
 )
+from aeval.agents.contract import control_stack_of
 from aeval.agents.dsh.agent import SESSIONS_DIRNAME
 from aeval.control.broker import ModelBrokerProcess
 
@@ -395,7 +396,7 @@ async def bootstrap_trial_control(
             reasoning_effort=reasoning_effort,
             limits=dict(limits or {}),
         )
-    if agent is not None and control_dist is not None:
+    if agent is not None and control_dist is not None and control_stack_of(type(agent)):
         driver = getattr(getattr(context.suite, "overlay", None), "driver", None)
         await deploy_control_stack(
             environment=environment, agent=agent, paths=paths, config=config,

@@ -328,6 +328,11 @@ class DshAgent(BaseInstalledAgent):
     # artifact lands in the bundle. Declared rather than assumed by the framework:
     # these were hardcoded for every agent, which quietly gave a second agent a
     # DSH home it knows nothing about. The values are exactly what was hardcoded.
+    # The control stack (job token + session minting + the cordis patch) is what
+    # makes gateway_lease enforceable, and it is DSH-specific: declaring it here is
+    # what stops the framework from deploying it into a second agent.
+    CONTROL_STACK = "dsh"
+
     SANDBOX_HOME = "/logs/agent/dsh-home"
     SESSION_ARTIFACT_DIR = "dsh-home"
 

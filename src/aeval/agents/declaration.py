@@ -77,6 +77,8 @@ class AgentDeclaration(BaseModel):
     #: Evidence artifacts this adapter produces, declared rather than assumed by
     #: the framework's fixed logical-name table.
     artifacts: list[dict] = Field(default_factory=list)
+    #: In-sandbox control stack needed, if any (absent = none).
+    control_stack: str | None = None
     #: Named launch profiles (``default`` is used when none is named).
     launch: dict[str, LaunchProfile] = Field(default_factory=dict)
 
@@ -368,6 +370,13 @@ def declaration_class_mismatches(
     if frozenset(declaration.observations) != declared_obs:
         mismatches.append(
             f"observations: declaration={sorted(declaration.observations)} adapter={sorted(declared_obs)}"
+        )
+    from aeval.agents.contract import control_stack_of as _control_stack_of
+
+    if declaration.control_stack != (_control_stack_of(adapter)):
+        mismatches.append(
+            f"control_stack: declaration={declaration.control_stack!r} "
+            f"adapter={_control_stack_of(adapter)!r}"
         )
     for attr, value in (
         ("SANDBOX_HOME", declaration.sandbox_home),

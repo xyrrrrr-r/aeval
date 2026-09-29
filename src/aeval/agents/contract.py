@@ -101,6 +101,22 @@ def load_adapter_class(import_path: str) -> type:
     return target
 
 
+def control_stack_of(adapter: type) -> str | None:
+    """The in-sandbox control stack this adapter needs, if any.
+
+    Optional by design: most adapters need none, and a framework that demands a
+    DSH-specific stack from every agent is what made the second adapter expensive.
+    """
+    declared = getattr(adapter, "CONTROL_STACK", None)
+    if declared is None:
+        return None
+    if not isinstance(declared, str) or not declared.strip():
+        raise SuiteError(
+            f"{describe_adapter(adapter)}.CONTROL_STACK must be a non-empty string or absent"
+        )
+    return declared.strip()
+
+
 def capabilities_of(adapter: type) -> frozenset[str]:
     """Capabilities a resolved adapter class declares via ``PROVIDES``."""
     declared = getattr(adapter, PROVIDES_ATTR, None)
@@ -179,8 +195,21 @@ def describe_adapter(adapter: type) -> str:
 
 
 def adapter_declaration_gap(adapter: type) -> list[str]:
-    """Required declarations this adapter is missing (empty = complete)."""
-    return [name for name in REQUIRED_DECLARATIONS if getattr(adapter, name, None) is None]
+    """Declarations this adapter is missing or that contradict each other.
+
+    Empty = complete. Beyond missing attributes this refuses an unkeepable
+    promise: the gateway lease is enforced *inside* the sandbox by the control
+    stack, so an adapter that claims ``gateway_lease`` without declaring a stack
+    would run unmetered while looking metered.
+    """
+    missing = [name for name in REQUIRED_DECLARATIONS if getattr(adapter, name, None) is None]
+    if not missing and getattr(adapter, "BUDGET_ENFORCEMENT", None) == "gateway_lease":
+        if control_stack_of(adapter) is None:
+            missing.append(
+                "CONTROL_STACK (BUDGET_ENFORCEMENT='gateway_lease' is enforced by the "
+                "in-sandbox control stack; without it the spend would never be measured)"
+            )
+    return missing
 
 
 def build_adapter_spec(
