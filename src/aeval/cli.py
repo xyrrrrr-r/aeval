@@ -279,6 +279,42 @@ def probe_cmd(
         _die(str(exc), EXIT_VALIDATION_ERROR)
 
 
+@app.command("conformance")
+def conformance_cmd(
+    agent: Annotated[Path, typer.Option(help="agents/<id>.yaml declaration to check")],
+    agents_dir: Annotated[Path, typer.Option(help="Directory holding agents/<id>.yaml")] = Path("agents"),
+    suite: Annotated[
+        list[Path] | None,
+        typer.Option(help="Suite directory to check the pairing against (repeatable)"),
+    ] = None,
+) -> None:
+    """Prove an agent adapter is fit to be evaluated — and say what was not exercised.
+
+    Every check maps to a way a second agent breaks an evaluation silently.
+    A check that could not run is reported as skipped, never as passed.
+    """
+    from aeval.agents.conformance import run_conformance_for
+    from aeval.agents.declaration import resolve_agent_declaration
+    from aeval.suite_models import SuiteError
+
+    try:
+        resolved = resolve_agent_declaration(agent, agents_root=agents_dir)
+        reports = run_conformance_for(
+            resolved.declaration.import_path,
+            declaration_path=agent,
+            agents_root=agents_dir,
+            suite_paths=list(suite or []),
+        )
+        failed = False
+        for report in reports:
+            typer.echo(report.render())
+            failed = failed or not report.ok
+        if failed:
+            raise typer.Exit(code=EXIT_VALIDATION_ERROR)
+    except (SuiteError, ValueError, OSError) as exc:
+        _die(str(exc), EXIT_VALIDATION_ERROR)
+
+
 @app.command("agents")
 def agents_cmd(
     agents_dir: Annotated[Path, typer.Option(help="Directory holding agents/<id>.yaml")] = Path("agents"),

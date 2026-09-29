@@ -25,6 +25,7 @@ from aeval.contracts import (
 )
 
 runner = CliRunner()
+_REPO = Path(__file__).resolve().parents[2]
 
 FIXTURES = Path(__file__).resolve().parents[1] / "fixtures"
 DEMO = FIXTURES / "suites" / "demo"
@@ -65,6 +66,45 @@ def test_list_discovers_suites():
     result = runner.invoke(app, ["list", "--suites-dir", str(FIXTURES / "suites")])
     assert result.exit_code == 0
     assert "refund-policy" in result.output
+
+
+def test_conformance_passes_for_the_shipped_pairing():
+    """dsh provides what e2e-hello requires."""
+    root = _REPO / "agents"
+    result = runner.invoke(
+        app,
+        [
+            "conformance",
+            "--agent",
+            str(root / "dsh.yaml"),
+            "--agents-dir",
+            str(root),
+            "--suite",
+            str(_REPO / "suites" / "e2e-hello"),
+        ],
+    )
+    assert result.exit_code == 0, result.output
+    assert "[pass] capabilities" in result.output
+
+
+def test_conformance_fails_a_pairing_that_cannot_work(tmp_path):
+    """The reference agent cannot serve an ACP suite — refuse, with the reason."""
+    root = _REPO / "agents"
+    result = runner.invoke(
+        app,
+        [
+            "conformance",
+            "--agent",
+            str(root / "fakeagent.yaml"),
+            "--agents-dir",
+            str(root),
+            "--suite",
+            str(_REPO / "suites" / "e2e-hello"),
+        ],
+    )
+    assert result.exit_code == 3
+    assert "[fail] capabilities" in result.output
+    assert "missing" in result.output
 
 
 def test_agents_lists_declarations_and_proves_they_match_their_classes():
