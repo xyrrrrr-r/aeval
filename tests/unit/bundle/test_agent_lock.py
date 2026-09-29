@@ -14,14 +14,20 @@ from aeval.provenance import build_runtime_lock
 
 
 def _legacy_payload(lock: RuntimeLock) -> dict:
-    """A lock as it was recorded before ``agents`` existed."""
+    """A lock as it was recorded before ``agents``/``control_dist`` existed.
+
+    Neither key is present in a historical record — the fields did not exist
+    — so the simulation must drop both, or it stops being a copy of the
+    historical bytes and starts passing for the wrong reason.
+    """
     payload = lock.model_dump(mode="json")
     payload.pop("agents", None)
+    payload.pop("control_dist", None)
     return payload
 
 
 def _historical_digest(payload: dict) -> str:
-    """The digest algorithm exactly as it was (no ``agents`` exclusion rule)."""
+    """The digest algorithm exactly as it was (no exclusion rules)."""
     return _digest({k: v for k, v in payload.items() if k != "created_at"})
 
 

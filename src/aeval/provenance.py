@@ -28,6 +28,7 @@ import yaml
 
 from aeval.contracts import (
     AgentReleaseLock,
+    ControlDistLock,
     DshReleaseLock,
     HarborLock,
     ImageIdentity,
@@ -54,6 +55,7 @@ __all__ = [
     "resolve_image_digest",
     "fingerprint_python_environment",
     "fingerprint_plugin_distribution",
+    "fingerprint_control_dist",
     "sha256_file",
 ]
 
@@ -72,7 +74,12 @@ OFFICIAL_HARBOR_COMMIT = "7464ab541773ea1d4618336f043970042f33a1b5"
 OFFICIAL_DSH_TAG = "dsh-v0.1.7-alpha.1"
 OFFICIAL_DSH_COMMIT = "c36a83ff6bb95e3f82cf79f9be7c724270a8aa61"
 
-# Exact npm compatibility slice for DSH 0.1.7-alpha.1 (plan §0.1).
+# Exact npm compatibility slice for DSH 0.1.7-alpha.1 (plan §0.1). Beyond the
+# packages the CLI itself ships, this pins every package the control plugin
+# imports DIRECTLY inside the DSH process (defense 1 of the control-stack
+# split): the plugin resolves these from DSH's own nested node_modules, so a
+# DSH release that changes any of them silently changes what the plugin runs
+# against — the lock must name them, never trust them transitively.
 DSH_NPM_SLICE: tuple[tuple[str, str, str | None], ...] = (
     ("@deepseek-ai/dsh", "0.1.7-alpha.1",
      "sha512-fim76775kLyal0lLNmpktZfOiOwU0P9qdluknL5Sm3F6ax9I5PcLD0W0WzqH9tMOOY8yHya5VShuEzSSh223sw=="),
@@ -81,6 +88,35 @@ DSH_NPM_SLICE: tuple[tuple[str, str, str | None], ...] = (
     ("@deepseek-ai/dsh-acp", "0.1.7-alpha.1", None),
     ("@agentclientprotocol/sdk", "1.4.0", None),
     ("@deepseek-ai/cordis", "4.0.3", None),
+    # Direct imports of the control plugin (dsh-eval-control/src), all pinned
+    # to the same release slice the plugin was compiled against:
+    ("@deepseek-ai/dsh-agent", "0.1.7-alpha.1", None),
+    ("@deepseek-ai/dsh-llm", "0.1.7-alpha.1", None),
+    ("@deepseek-ai/dsh-scope", "0.1.7-alpha.1", None),
+    ("@deepseek-ai/dsh-session", "0.1.7-alpha.1", None),
+    ("@deepseek-ai/dsh-session-persistence", "0.1.7-alpha.1", None),
+    ("@deepseek-ai/dsh-session-persistence-jsonl", "0.1.7-alpha.1", None),
+    ("@deepseek-ai/dsh-system-prompt", "0.1.7-alpha.1", None),
+    ("@deepseek-ai/dsh-tools", "0.1.7-alpha.1", None),
+    ("@deepseek-ai/schemastery", "3.18.3", None),
+)
+
+# The control plugin's complete direct import surface, measured from
+# dsh-eval-control/src at commit 4bc6931. Kept beside the slice so the
+# "import surface ⊆ slice" invariant is checkable without the sibling
+# checkout; the sibling test re-measures reality against this list so a new
+# import cannot appear unrecorded.
+DSH_CONTROL_DIRECT_IMPORTS: tuple[str, ...] = (
+    "@deepseek-ai/cordis",
+    "@deepseek-ai/dsh-agent",
+    "@deepseek-ai/dsh-llm",
+    "@deepseek-ai/dsh-scope",
+    "@deepseek-ai/dsh-session",
+    "@deepseek-ai/dsh-session-persistence",
+    "@deepseek-ai/dsh-session-persistence-jsonl",
+    "@deepseek-ai/dsh-system-prompt",
+    "@deepseek-ai/dsh-tools",
+    "@deepseek-ai/schemastery",
 )
 
 DSH_NODE_VERSIONS = ("22.19.x", "24.20.0")
@@ -97,6 +133,27 @@ def sha256_file(path: Path) -> str:
         for chunk in iter(lambda: f.read(1 << 20), b""):
             h.update(chunk)
     return h.hexdigest()
+
+
+def fingerprint_control_dist(control_dist: Path) -> ControlDistLock:
+    """Fingerprint the built control distribution an operator supplies.
+
+    Only the built ``.js`` files count — the same set ``deploy_control_stack``
+    uploads into a sandbox — so the lock binds exactly what can run there.
+    Deterministic: files are sorted by name and each contributes its name and
+    content digest to the running hash.
+    """
+    root = Path(control_dist)
+    files = sorted(path.name for path in root.glob("*.js") if path.is_file())
+    if not files:
+        raise LockMismatchError(f"control dist has no built .js files: {root}")
+    h = hashlib.sha256()
+    for name in files:
+        h.update(name.encode("utf-8"))
+        h.update(b"\x00")
+        h.update(sha256_file(root / name).encode("ascii"))
+        h.update(b"\n")
+    return ControlDistLock(files=files, sha256=h.hexdigest())
 
 
 def _git(repo: Path, *args: str) -> str:
@@ -212,6 +269,7 @@ def build_runtime_lock(
     agents: dict[str, AgentReleaseLock] | None = None,
     agent_ids: Iterable[str] | None = None,
     harbor_lock_ref: str | None = None,
+    control_dist: Path | None = None,
 ) -> RuntimeLock:
     """Assemble the RuntimeLock describing the live environment.
 
@@ -257,6 +315,14 @@ def build_runtime_lock(
         dsh=dsh,
         agents=agents or {},
         harbor_lock_ref=harbor_lock_ref,
+        # The operator-supplied control distribution, fingerprinted when there
+        # is one. ``None`` keeps the lock byte-compatible with everything
+        # recorded before this field existed.
+        control_dist=(
+            fingerprint_control_dist(control_dist)
+            if control_dist is not None
+            else None
+        ),
     )
 
 
@@ -321,6 +387,16 @@ def verify_runtime_lock(expected: RuntimeLock) -> None:
                 raise LockMismatchError(
                     "@deepseek-ai/dsh lock is missing its npm integrity hash"
                 )
+
+    if expected.control_dist is not None:
+        if not expected.control_dist.files:
+            raise LockMismatchError("control dist lock declares no files")
+        digest = expected.control_dist.sha256
+        if len(digest) != 64 or any(c not in "0123456789abcdef" for c in digest):
+            raise LockMismatchError(
+                "control dist lock digest is not a sha256 hex digest: "
+                f"{digest!r}"
+            )
 
     if expected.plugin is not None:
         live_plugin = fingerprint_plugin_distribution()

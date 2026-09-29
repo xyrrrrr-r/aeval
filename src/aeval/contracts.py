@@ -757,6 +757,20 @@ class AgentReleaseLock(BaseModel):
         )
 
 
+class ControlDistLock(BaseModel):
+    """Identity of the control-stack distribution an operator supplied.
+
+    Records the built ``.js`` files the broker spec's ``controlDist`` holds —
+    the same set ``deploy_control_stack`` uploads into a sandbox whose agent
+    declares a control stack. Binding file set and digest into the lock makes
+    a changed control build show up as a lock mismatch (a loud comparability
+    break) instead of a silent behavioral shift inside the agent's process.
+    """
+
+    files: list[str] = Field(default_factory=list)
+    sha256: str
+
+
 class ObservedIdentity(BaseModel):
     """Identity observed in a LIVE sandbox, bound to the expected lock.
 
@@ -789,6 +803,11 @@ class RuntimeLock(BaseModel):
     images: dict[str, ImageIdentity] = Field(default_factory=dict)
     plugin: PluginIdentity | None = None
     dsh: DshReleaseLock | None = None
+    # The control-stack distribution the operator's broker spec supplied for
+    # this run (what deploy_control_stack uploads into an agent that declares
+    # a stack). ``None`` on locks recorded before the field existed — and
+    # excluded from digest() while None so those still recompute identically.
+    control_dist: ControlDistLock | None = None
     # Every pinned agent release. ``dsh`` above stays the DSH-specific record
     # (byte-identical to what earlier versions wrote) and is projected into this
     # section on read; new agents only ever appear here.
@@ -796,10 +815,14 @@ class RuntimeLock(BaseModel):
     harbor_lock_ref: str | None = None
 
     def digest(self) -> str:
-        # ``agents`` is excluded while empty so a lock recorded before the
-        # generalisation still digests to its recorded value — sealed evidence
-        # must recompute identically.
-        exclude = {"created_at"} | ({"agents"} if not self.agents else set())
+        # ``agents``/``control_dist`` are excluded while empty/None so a lock
+        # recorded before either field existed still digests to its recorded
+        # value — sealed evidence must recompute identically.
+        exclude = {"created_at"}
+        if not self.agents:
+            exclude.add("agents")
+        if self.control_dist is None:
+            exclude.add("control_dist")
         return _digest(self.model_dump(mode="json", exclude=exclude))
 
     def agent_locks(self) -> dict[str, AgentReleaseLock]:
