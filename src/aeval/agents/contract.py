@@ -45,6 +45,7 @@ __all__ = [
     "required_capability_gaps",
     "adapter_declaration_gap",
     "adapter_member_gap",
+    "declared_observations",
     "budget_enforcement_point",
     "budget_gate_violation",
     "build_adapter_spec",
@@ -230,6 +231,17 @@ def _adapter_spec(
         write_surface=getattr(adapter_class, "WRITE_SURFACE", "ephemeral_overlay"),
         server_side_session=getattr(adapter_class, "SERVER_SIDE_SESSION", "forbidden"),
     )
+
+
+def declared_observations(adapter: type) -> frozenset[str]:
+    """Runtime facts the adapter requires to be OBSERVED in the sandbox.
+
+    Names are an open vocabulary (``node``, ``python``, ``dsh_npm_packages``…).
+    An adapter that pins nothing declares nothing — a lock that does pin a runtime
+    still forces the matching observation, so this cannot be used to opt out.
+    """
+    declared = getattr(adapter, "REQUIRED_OBSERVATIONS", ()) or ()
+    return frozenset(str(item) for item in declared)
 
 
 def adapter_member_gap(adapter: type) -> list[str]:

@@ -433,8 +433,20 @@ def verify_e2b_backend() -> str:
     return str(version)
 
 
+def _declared_node_matrix(expected: RuntimeLock) -> list[str]:
+    """Node versions any pinned agent release expects (legacy ``dsh`` projected)."""
+    versions: list[str] = []
+    for lock in expected.agent_locks().values():
+        if lock.runtime == "node":
+            versions.extend(lock.runtime_versions)
+    return versions
+
+
 def bind_observed_identity(
-    observed: ObservedIdentity, expected: RuntimeLock
+    observed: ObservedIdentity,
+    expected: RuntimeLock,
+    *,
+    required_observations: Iterable[str] | None = None,
 ) -> None:
     """Bind a live sandbox's observed identity to the expected lock (§3.4).
 
@@ -444,9 +456,15 @@ def bind_observed_identity(
 
     - image digest: must match the locked ``sandbox`` image identity;
     - architecture: must match the locked image platform (arm64);
-    - Node version: must fall inside the locked DSH node matrix
-      (``24.20.0``-style exact or ``22.19.x``-style minor range);
+    - Node version: must fall inside the node matrix the lock pins — for a DSH
+      run the DSH release's matrix, for any other agent whatever its release lock
+      declares. The matrix is derived from the lock plus the adapter's declared
+      observations, so a second agent is never gated on a DSH fact it does not
+      have (a lock that pins a node runtime still forces the node observation);
     - e2b SDK version: must be recorded (observed from the SDK itself).
+
+    ``required_observations`` defaults to what the lock itself pins (plus the DSH
+    node matrix for legacy locks) so every existing caller keeps its behaviour.
     """
     if observed.backend != "e2b":
         raise LockMismatchError(
@@ -484,10 +502,16 @@ def bind_observed_identity(
             f"sandbox architecture: expected {sandbox_image.platform!r}, "
             f"actual {observed.architecture!r}"
         )
-    node_matrix = expected.dsh.node_versions if expected.dsh else []
+    pinned: set[str] = {str(item) for item in (required_observations or ())}
+    node_matrix = _declared_node_matrix(expected)
+    if node_matrix:
+        # a lock that pins a node runtime cannot opt out of observing it
+        pinned.add("node")
+    if "node" not in pinned:
+        return
     if not node_matrix:
         raise LockMismatchError(
-            "expected lock declares no DSH node matrix — cannot bind the "
+            "expected lock declares no node matrix — cannot bind the "
             "observed Node version"
         )
     if not observed.node_version:

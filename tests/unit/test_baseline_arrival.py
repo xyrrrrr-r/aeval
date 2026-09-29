@@ -432,3 +432,49 @@ def test_node_matrix_minor_range_matches():
     assert _node_in_matrix("v24.20.0", ["22.19.x", "24.20.0"])
     assert not _node_in_matrix("22.20.0", ["22.19.x", "24.20.0"])
     assert not _node_in_matrix("24.19.0", ["22.19.x", "24.20.0"])
+
+
+# --- P1-2: what must be observed is declared, not hardcoded to DSH -------------
+
+def test_a_non_dsh_agent_binds_without_a_node_observation(runtime_lock):
+    """A python-only agent must not be gated on a Node fact it does not have."""
+    without_dsh = runtime_lock.model_copy(update={"dsh": None})
+    lock = _lock_with_sandbox(without_dsh)
+    observed = ObservedIdentity(
+        backend="e2b",
+        e2b_sdk_version="1.0.0",
+        image_digest="sha256:" + "a" * 64,
+        architecture="arm64",
+    )
+    bind_observed_identity(observed, lock)  # no raise: nothing pins a node runtime
+    # ...but declaring the node observation without a matrix is still refused
+    with pytest.raises(LockMismatchError, match="no node matrix"):
+        bind_observed_identity(observed, lock, required_observations=["node"])
+
+
+def test_a_pinned_node_runtime_cannot_opt_out_of_the_observation(runtime_lock):
+    """A lock that pins node forces the node observation — no declaration needed."""
+    from aeval.contracts import AgentReleaseLock
+
+    without_dsh = runtime_lock.model_copy(update={"dsh": None})
+    without_dsh.agents["otheragent"] = AgentReleaseLock(
+        id="otheragent", version="1.0.0", runtime="node", runtime_versions=["24.20.0"]
+    )
+    lock = _lock_with_sandbox(without_dsh)
+    base = dict(
+        backend="e2b", e2b_sdk_version="1.0.0",
+        image_digest="sha256:" + "a" * 64, architecture="arm64",
+    )
+    # no declaration, but the pinned runtime is what decides
+    with pytest.raises(LockMismatchError, match="no Node version"):
+        bind_observed_identity(ObservedIdentity(**base), lock)
+    with pytest.raises(LockMismatchError, match="outside"):
+        bind_observed_identity(ObservedIdentity(**{**base, "node_version": "22.1.0"}), lock)
+    bind_observed_identity(ObservedIdentity(**{**base, "node_version": "24.20.0"}), lock)
+
+
+def test_the_dsh_adapter_declares_its_observed_facts():
+    from aeval.agents.contract import declared_observations
+    from aeval.agents.dsh.agent import DshAgent
+
+    assert declared_observations(DshAgent) == frozenset({"node"})

@@ -319,6 +319,11 @@ class DshAgent(BaseInstalledAgent):
     # Recorded adapter identity (aeval.contracts.AdapterSpec). Without these a
     # run cannot say which adapter produced its trials — a second agent would be
     # indistinguishable from this one in the store and in comparability.
+    # Observed in the live sandbox and bound to the lock before grading: the
+    # Node runtime the DSH release is pinned against. (DSH npm package identity is
+    # checked separately when the lock is verified.)
+    REQUIRED_OBSERVATIONS = ("node",)
+
     ADAPTER_ID = "dsh"
     ADAPTER_VERSION = "1"
     ADAPTER_MODE = "acp_stdio"
