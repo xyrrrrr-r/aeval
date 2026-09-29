@@ -51,6 +51,23 @@ def _declared_adapter(entry):
     return build_adapter_spec(load_adapter_class(import_path), import_path=import_path)
 
 
+def _declares_facade_stack(agents) -> bool:
+    """Does any selected agent declare the generic facade control stack?
+
+    Reads the same declaration the plugin's bootstrap dispatches on, so the
+    lock and the deployment can never disagree about whether a facade ran.
+    """
+    from aeval.agents.contract import control_stack_of, load_adapter_class
+
+    for entry in agents:
+        import_path = getattr(entry, "import_path", None)
+        if not import_path:
+            continue
+        if control_stack_of(load_adapter_class(str(import_path))) == "deepagent-facade":
+            return True
+    return False
+
+
 def _die(message: str, code: int) -> int:
     typer.secho(f"error: {message}", fg=typer.colors.RED, err=True)
     raise typer.Exit(code=code)
@@ -171,10 +188,23 @@ def run_cmd(
         from aeval.hooks.broker_lifecycle import parse_broker_spec
 
         broker_spec = parse_broker_spec()
+        # The generic facade is part of what runs, exactly like the DSH
+        # control dist: when a selected adapter declares that stack, the
+        # built dist is fingerprinted into the lock. A missing dist is
+        # refused here rather than silently running unmetered.
+        facade_dist = None
+        if _declares_facade_stack(job.agents):
+            from aeval.control.bootstrap import BootstrapError, resolve_facade_dist
+
+            try:
+                facade_dist = resolve_facade_dist()
+            except BootstrapError as exc:
+                raise SuiteError(str(exc)) from exc
         lock = build_runtime_lock(
             images=images,
             agent_ids=[spec.id for spec in adapters],
             control_dist=broker_spec.control_dist if broker_spec else None,
+            facade_dist=facade_dist,
         )
         manifest = RunManifest(
             run_id=f"run-{run_dir.name}",

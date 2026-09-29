@@ -185,6 +185,11 @@ def register_trial_hooks(job: Any, context: EvaluationContext) -> None:
                 ),
                 control_dist=getattr(context.broker_spec, "control_dist", None),
                 control_ca=getattr(context.broker_spec, "control_ca", None),
+                # The generic facade flavor resolves its own dist (env override,
+                # else the sibling deepagents-eval-control build) — the same
+                # artifact `aeval run` fingerprints into the lock, and the
+                # deployment re-fingerprints it against that lock before
+                # uploading, so locked bytes are the bytes that run.
                 reasoning_effort=context.broker_spec.identity.get("reasoningEffort"),
                 limits=dict(getattr(context.broker_spec, "limits", {}) or {}),
             )

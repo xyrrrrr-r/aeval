@@ -808,6 +808,11 @@ class RuntimeLock(BaseModel):
     # a stack). ``None`` on locks recorded before the field existed — and
     # excluded from digest() while None so those still recompute identically.
     control_dist: ControlDistLock | None = None
+    # The GENERIC facade distribution (deepagents-eval-control's dist) when a
+    # selected adapter declares the ``deepagent-facade`` control stack. Same
+    # discipline as ``control_dist``: the built ``.js`` files are bound, and
+    # ``None`` keeps older locks recomputing to their recorded digest.
+    facade_dist: ControlDistLock | None = None
     # Every pinned agent release. ``dsh`` above stays the DSH-specific record
     # (byte-identical to what earlier versions wrote) and is projected into this
     # section on read; new agents only ever appear here.
@@ -815,14 +820,16 @@ class RuntimeLock(BaseModel):
     harbor_lock_ref: str | None = None
 
     def digest(self) -> str:
-        # ``agents``/``control_dist`` are excluded while empty/None so a lock
-        # recorded before either field existed still digests to its recorded
-        # value — sealed evidence must recompute identically.
+        # ``agents``/``control_dist``/``facade_dist`` are excluded while
+        # empty/None so a lock recorded before the field existed still digests
+        # to its recorded value — sealed evidence must recompute identically.
         exclude = {"created_at"}
         if not self.agents:
             exclude.add("agents")
         if self.control_dist is None:
             exclude.add("control_dist")
+        if self.facade_dist is None:
+            exclude.add("facade_dist")
         return _digest(self.model_dump(mode="json", exclude=exclude))
 
     def agent_locks(self) -> dict[str, AgentReleaseLock]:

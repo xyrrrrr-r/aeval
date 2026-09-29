@@ -14,15 +14,18 @@ from aeval.provenance import build_runtime_lock
 
 
 def _legacy_payload(lock: RuntimeLock) -> dict:
-    """A lock as it was recorded before ``agents``/``control_dist`` existed.
+    """A lock as it was recorded before ``agents``/``control_dist``/``facade_dist``
+    existed.
 
-    Neither key is present in a historical record — the fields did not exist
-    — so the simulation must drop both, or it stops being a copy of the
-    historical bytes and starts passing for the wrong reason.
+    None of those keys is present in a historical record — the fields did not
+    exist — so the simulation must drop every one of them, or it stops being a
+    copy of the historical bytes and starts passing for the wrong reason. Each
+    new optional section has to be added here when it lands.
     """
     payload = lock.model_dump(mode="json")
     payload.pop("agents", None)
     payload.pop("control_dist", None)
+    payload.pop("facade_dist", None)
     return payload
 
 

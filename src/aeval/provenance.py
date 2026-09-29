@@ -272,6 +272,7 @@ def build_runtime_lock(
     agent_ids: Iterable[str] | None = None,
     harbor_lock_ref: str | None = None,
     control_dist: Path | None = None,
+    facade_dist: Path | None = None,
 ) -> RuntimeLock:
     """Assemble the RuntimeLock describing the live environment.
 
@@ -323,6 +324,15 @@ def build_runtime_lock(
         control_dist=(
             fingerprint_control_dist(control_dist)
             if control_dist is not None
+            else None
+        ),
+        # The generic facade distribution, fingerprinted on the same terms:
+        # the built .js files uploaded into an agent that declares
+        # ``deepagent-facade``. ``None`` keeps the lock byte-compatible with
+        # everything recorded before the field existed.
+        facade_dist=(
+            fingerprint_control_dist(facade_dist)
+            if facade_dist is not None
             else None
         ),
     )

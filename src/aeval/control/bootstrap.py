@@ -24,10 +24,12 @@ are environment-verification phase, not offline code.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import shlex
 import shutil
 import tempfile
+import time
 from pathlib import Path, PurePosixPath
 from typing import TYPE_CHECKING, Any
 
@@ -50,8 +52,13 @@ __all__ = [
     "BootstrapError",
     "SANDBOX_TOKEN_PATH",
     "CONTROL_DIR_NAME",
+    "FACADE_SANDBOX_ROOT",
+    "DEFAULT_FACADE_PORT",
+    "facade_dist_candidates",
+    "resolve_facade_dist",
     "compose_control_config",
     "deploy_control_stack",
+    "deploy_generic_facade",
     "bootstrap_trial_control",
     "teardown_trial_control",
 ]
@@ -61,6 +68,18 @@ __all__ = [
 # nested ``@deepseek-ai`` package directory, so node's ESM resolver finds
 # the harness packages by walking up from the plugin files.
 CONTROL_DIR_NAME = "aeval-control"
+
+# Where the GENERIC facade flavor is deployed: a self-contained tree the
+# agent-neutral deployment owns end to end (upload → start → health). The
+# task image must ship node; the port is fixed so the suite's task env can
+# point the agent at http://127.0.0.1:<port>/v1 without per-trial plumbing.
+FACADE_SANDBOX_ROOT = PurePosixPath("/opt/aeval-facade")
+DEFAULT_FACADE_PORT = 8787
+
+# The runtime closure ships with the facade: the neutral gateway-lease client
+# imports the pinned @deepseek-ai packages, so the sandbox tree needs them
+# beside the facade's own dist. Development-only trees never ship.
+FACADE_NODE_MODULES_EXCLUDE = {"typescript", ".bin", ".package-lock.json", ".test-dist"}
 
 
 class BootstrapError(RuntimeError):
@@ -301,6 +320,233 @@ async def _mint_owner_session(
         )
 
 
+def facade_dist_candidates(start: Path | None = None) -> list[Path]:
+    """Where the built deepagent facade dist lives, most specific first.
+
+    The operator override (``AEVAL_FACADE_DIST``) wins; otherwise the
+    sibling ``deepagents-eval-control/dist`` of the aeval checkout — the
+    same layout the lab uses for the neutral control package.
+    """
+    import os
+
+    candidates: list[Path] = []
+    override = os.environ.get("AEVAL_FACADE_DIST", "").strip()
+    if override:
+        candidates.append(Path(override))
+    anchor = Path(start) if start is not None else Path(__file__).resolve()
+    for parent in [anchor, *anchor.parents]:
+        sibling = parent / "deepagents-eval-control" / "dist"
+        if sibling not in candidates:
+            candidates.append(sibling)
+    return candidates
+
+
+def resolve_facade_dist(start: Path | None = None) -> Path:
+    """First facade dist candidate that actually holds the built entry."""
+    for candidate in facade_dist_candidates(start):
+        if (candidate / "facade_main.js").is_file():
+            return candidate
+    raise BootstrapError(
+        "no built deepagent facade dist found — build deepagents-eval-control "
+        "(npm run build) or point AEVAL_FACADE_DIST at its dist/ directory"
+    )
+
+
+def _facade_runtime_files(facade_dist: Path) -> list[tuple[Path, str]]:
+    """The (host path, sandbox-relative path) pairs the facade needs to run.
+
+    Flat dist ``.js`` files plus the pinned runtime ``node_modules`` closure;
+    development-only trees (typescript, @types, .bin) never ship.
+    """
+    files: list[tuple[Path, str]] = []
+    for source in sorted(facade_dist.glob("*.js")):
+        files.append((source, f"dist/{source.name}"))
+    package_json = facade_dist.parent / "package.json"
+    if package_json.is_file():
+        files.append((package_json, "package.json"))
+    modules_root = facade_dist.parent / "node_modules"
+    if modules_root.is_dir():
+        for source in sorted(modules_root.rglob("*")):
+            if not source.is_file() or source.is_symlink():
+                continue
+            relative = source.relative_to(modules_root)
+            parts = relative.parts
+            if any(part in FACADE_NODE_MODULES_EXCLUDE for part in parts):
+                continue
+            if "@types" in parts or parts[0].startswith("@types"):
+                continue
+            files.append((source, f"node_modules/{relative.as_posix()}"))
+    return files
+
+
+async def deploy_generic_facade(
+    *,
+    environment: Any,
+    facade_dist: Path,
+    gateway_url: str,
+    token_file: str = SANDBOX_TOKEN_PATH.as_posix(),
+    port: int = DEFAULT_FACADE_PORT,
+    session_id: str | None = None,
+    node_bin: str = "node",
+    health_timeout_sec: float = 30.0,
+) -> str:
+    """Deploy and start the OpenAI-compatible facade inside the sandbox.
+
+    The generic flavor the deepagent control stack uses (P2-5b): unlike the
+    DSH flavor there is no plugin tree to graft into and no patch to apply —
+    the agent process is launched by its own runner, so the ONLY mechanism
+    fully in our control is: upload a self-contained tree, start it in the
+    background, and health-check it before the run is allowed to continue.
+    Returns the facade's base URL (``http://127.0.0.1:<port>``).
+    """
+    root = FACADE_SANDBOX_ROOT
+    upload = getattr(environment, "upload_file", None)
+    exec_fn = getattr(environment, "exec", None)
+    if not callable(upload) or not callable(exec_fn):
+        raise BootstrapError("environment exposes no upload_file/exec for the facade")
+
+    files = _facade_runtime_files(Path(facade_dist))
+    if not any(rel == "dist/facade_main.js" for _, rel in files):
+        raise BootstrapError(f"facade dist has no built facade_main.js: {facade_dist}")
+
+    # One tarball, one upload, one extract: the runtime closure is dozens of
+    # files and per-file uploads would be both slow and partial-failure-prone.
+    import tarfile
+    import tempfile
+
+    staging = Path(tempfile.mkdtemp(prefix="aeval-facade-"))
+    try:
+        await exec_fn(f"mkdir -p {shlex.quote(root.as_posix())}")
+        tar_path = staging / "facade.tar.gz"
+        with tarfile.open(tar_path, "w:gz") as tar:
+            for source, relative in files:
+                tar.add(source, arcname=relative)
+        sandbox_tar = "/tmp/aeval-facade.tar.gz"
+        await upload(str(tar_path), sandbox_tar)
+        extracted = await exec_fn(
+            f"tar -xzf {shlex.quote(sandbox_tar)} -C {shlex.quote(root.as_posix())}"
+            f" && rm -f {shlex.quote(sandbox_tar)}"
+        )
+        code = getattr(extracted, "return_code", getattr(extracted, "exit_code", None))
+        if code != 0:
+            raise BootstrapError(f"facade tree could not be extracted in the sandbox (exit {code})")
+
+        run_env = (
+            f"AEVAL_GATEWAY_URL={shlex.quote(gateway_url)} "
+            f"AEVAL_TRIAL_TOKEN_FILE={shlex.quote(token_file)} "
+            f"AEVAL_FACADE_PORT={port} "
+            + (f"AEVAL_FACADE_SESSION_ID={shlex.quote(session_id)} " if session_id else "")
+        )
+        log = "/tmp/aeval-facade.log"
+        started = await exec_fn(
+            f"cd {shlex.quote(root.as_posix())} && {run_env}"
+            f"setsid nohup {shlex.quote(node_bin)} dist/facade_main.js"
+            f" >{log} 2>&1 < /dev/null &"
+            f" echo facade-pid=$!"
+        )
+        code = getattr(started, "return_code", getattr(started, "exit_code", None))
+        if code != 0:
+            raise BootstrapError(f"facade could not be started in the sandbox (exit {code})")
+
+        # Health gate: the run must not reach the agent with a facade that is
+        # still starting (or already dead). Node is required anyway — the
+        # facade itself runs on it — so the probe needs nothing extra.
+        probe_js = (
+            'fetch("http://127.0.0.1:' + str(port) + '/healthz")'
+            ".then(r=>r.json()).then(j=>process.exit(j&&j.ok?0:1))"
+            ".catch(()=>process.exit(1))"
+        )
+        probe = f"{shlex.quote(node_bin)} -e {shlex.quote(probe_js)}"
+        deadline = time.monotonic() + health_timeout_sec
+        last_output = ""
+        while time.monotonic() < deadline:
+            result = await exec_fn(probe)
+            code = getattr(result, "return_code", getattr(result, "exit_code", None))
+            if code == 0:
+                return f"http://127.0.0.1:{port}"
+            last_output = str(getattr(result, "stdout", "") or "")[:200]
+            await asyncio.sleep(0.5)
+        log_result = await exec_fn(f"cat {shlex.quote(log)} 2>/dev/null || true")
+        log_text = str(getattr(log_result, "stdout", "") or "")[-400:]
+        raise BootstrapError(
+            f"facade did not become healthy on port {port} within "
+            f"{health_timeout_sec:.0f}s — probe: {last_output!r}; log tail: {log_text!r}"
+        )
+    finally:
+        shutil.rmtree(staging, ignore_errors=True)
+
+
+async def _deploy_declared_stack(
+    *,
+    environment: Any,
+    context: EvaluationContext,
+    agent: Any,
+    paths: TrialPaths,
+    config: dict[str, Any],
+    control_dist: Path | None,
+    control_ca: Path | None,
+    facade_dist: Path | None,
+    trial_id: str,
+) -> None:
+    """Deploy the control stack the adapter declared, by flavor.
+
+    Two flavors exist and they are NOT interchangeable:
+
+    - ``dsh``: the DSH plugin tree (transport + control plugin) is grafted
+      into the CLI's own ``node_modules`` and mounted through a Cordis patch,
+      because that is the only way a DSH-managed process loads it;
+    - ``deepagent-facade``: the agent's runner starts deepagents itself, so
+      there is nothing to graft — a self-contained facade tree is uploaded,
+      started in the background and health-gated.
+
+    A declared stack aeval cannot deploy is an error, never a silent skip:
+    that would run the trial looking metered while nothing measures it.
+    """
+    stack = control_stack_of(type(agent))
+    if stack is None:
+        return
+    if stack == "dsh":
+        if control_dist is None:
+            raise BootstrapError(
+                "the agent declares the dsh control stack but the broker spec "
+                "carries no controlDist — the trial would run unmetered"
+            )
+        driver = getattr(getattr(context.suite, "overlay", None), "driver", None)
+        await deploy_control_stack(
+            environment=environment, agent=agent, paths=paths, config=config,
+            control_dist=Path(control_dist), control_ca=control_ca, trial_id=trial_id,
+            sandbox_mode=getattr(driver, "sandbox_mode", None),
+        )
+        return
+    if stack == "deepagent-facade":
+        resolved = Path(facade_dist) if facade_dist is not None else resolve_facade_dist()
+        # The lock covers exactly the bytes that get uploaded: re-fingerprint
+        # against the recorded value so a dist edited after `aeval run` took
+        # the lock is refused instead of silently running uncovered code.
+        locked = getattr(getattr(context, "runtime_lock", None), "facade_dist", None)
+        if locked is not None:
+            from aeval.provenance import fingerprint_control_dist
+
+            actual = fingerprint_control_dist(resolved)
+            if actual.sha256 != locked.sha256:
+                raise BootstrapError(
+                    "facade dist changed after the run lock was taken: locked "
+                    f"{str(locked.sha256)[:12]}… but {resolved} now fingerprints to "
+                    f"{actual.sha256[:12]}… — refusing to deploy bytes the lock does not cover"
+                )
+        await deploy_generic_facade(
+            environment=environment,
+            facade_dist=resolved,
+            gateway_url=str(config["gatewayUrl"]),
+            token_file=str(config["jobTokenFile"]),
+        )
+        return
+    raise BootstrapError(
+        f"agent declares control stack {stack!r}, which aeval cannot deploy "
+        "(known flavors: 'dsh', 'deepagent-facade')"
+    )
+
+
 async def bootstrap_trial_control(
     *,
     environment: Any,
@@ -314,6 +560,7 @@ async def bootstrap_trial_control(
     agent: Any = None,
     control_dist: Path | None = None,
     control_ca: Path | None = None,
+    facade_dist: Path | None = None,
     reasoning_effort: str | None = None,
     limits: dict[str, int] | None = None,
 ) -> tuple[TrialBinding, dict[str, Any]]:
@@ -396,12 +643,17 @@ async def bootstrap_trial_control(
             reasoning_effort=reasoning_effort,
             limits=dict(limits or {}),
         )
-    if agent is not None and control_dist is not None and control_stack_of(type(agent)):
-        driver = getattr(getattr(context.suite, "overlay", None), "driver", None)
-        await deploy_control_stack(
-            environment=environment, agent=agent, paths=paths, config=config,
-            control_dist=Path(control_dist), control_ca=control_ca, trial_id=trial_id,
-            sandbox_mode=getattr(driver, "sandbox_mode", None),
+    if agent is not None:
+        await _deploy_declared_stack(
+            environment=environment,
+            context=context,
+            agent=agent,
+            paths=paths,
+            config=config,
+            control_dist=control_dist,
+            control_ca=control_ca,
+            facade_dist=facade_dist,
+            trial_id=trial_id,
         )
     try:
         binding = context.bind_control(trial_id, config, paths)

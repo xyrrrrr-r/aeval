@@ -251,6 +251,33 @@ def test_lock_digest_excludes_control_dist_while_none(tmp_path):
     assert lock.digest() == before
 
 
+def test_lock_digest_excludes_facade_dist_while_none(tmp_path):
+    """The generic facade section follows the same rule as control_dist:
+    ``None`` keeps older locks recomputing to their recorded digest."""
+    lock = build_runtime_lock(images={"task": _pinned_image()})
+    before = lock.digest()
+    assert lock.facade_dist is None
+
+    dist = tmp_path / "facade-dist"
+    dist.mkdir()
+    (dist / "facade_main.js").write_text("export {}", encoding="utf-8")
+    lock.facade_dist = provenance.fingerprint_control_dist(dist)
+
+    assert lock.digest() != before
+    lock.facade_dist = None
+    assert lock.digest() == before
+
+
+def test_build_runtime_lock_fingerprints_a_supplied_facade_dist(tmp_path):
+    dist = tmp_path / "facade-dist"
+    dist.mkdir()
+    (dist / "facade_main.js").write_text("export const a = 1;", encoding="utf-8")
+    lock = build_runtime_lock(images={"task": _pinned_image()}, facade_dist=dist)
+    assert lock.facade_dist is not None
+    assert lock.facade_dist.files == ["facade_main.js"]
+    assert lock.facade_dist == provenance.fingerprint_control_dist(dist)
+
+
 def test_fingerprint_control_dist_is_deterministic_and_content_sensitive(tmp_path):
     dist = tmp_path / "dist"
     dist.mkdir()
