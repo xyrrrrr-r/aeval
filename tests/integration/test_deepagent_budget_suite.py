@@ -109,6 +109,10 @@ def test_both_images_bake_the_cli_version_the_adapter_declares():
         dockerfile = (suite / "tasks" / "hello" / "environment" / "Dockerfile").read_text("utf-8")
         assert pinned in dockerfile, f"{suite.name} does not bake {pinned}"
         assert "ln -sf /opt/deepagents/bin/dcode /usr/local/bin/dcode" in dockerfile
+        # the install must be offline: the lab has no PyPI egress, and the
+        # wheelhouse it needs is prepared by tools/fetch_deepagent_wheelhouse.py
+        assert "COPY wheelhouse /opt/wheelhouse" in dockerfile
+        assert "pip install --no-index --find-links /opt/wheelhouse" in dockerfile
     # the entry runs the console script the image links, not a downloaded tool
     entry = default_deepagent_registry_entry()
     assert entry["distribution"]["local"]["cmd"] == "dcode"
