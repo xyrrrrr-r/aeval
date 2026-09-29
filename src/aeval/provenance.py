@@ -21,11 +21,13 @@ import platform
 import subprocess
 import sys
 from pathlib import Path
+from collections.abc import Iterable
 from typing import Any
 
 import yaml
 
 from aeval.contracts import (
+    AgentReleaseLock,
     DshReleaseLock,
     HarborLock,
     ImageIdentity,
@@ -207,6 +209,8 @@ def build_runtime_lock(
     images: dict[str, ImageIdentity] | None = None,
     harbor_source_repo: Path | None = None,
     dsh: DshReleaseLock | None = None,
+    agents: dict[str, AgentReleaseLock] | None = None,
+    agent_ids: Iterable[str] | None = None,
     harbor_lock_ref: str | None = None,
 ) -> RuntimeLock:
     """Assemble the RuntimeLock describing the live environment.
@@ -238,7 +242,12 @@ def build_runtime_lock(
         if uv_lock.exists():
             harbor.uv_lock_sha256 = sha256_file(uv_lock)
         harbor.commit = OFFICIAL_HARBOR_COMMIT
-    if dsh is None:
+    # The official DSH release is injected only for runs that actually select it.
+    # ``agent_ids=None`` keeps the historical behaviour (a DSH lock is always
+    # present); naming the selected agents is what lets a non-Node agent produce
+    # a runtime lock at all (it used to be impossible: a lock without a DSH
+    # section was rejected).
+    if dsh is None and (agent_ids is None or "dsh" in set(agent_ids)):
         dsh = build_official_dsh_lock()
     return RuntimeLock(
         harbor=harbor,
@@ -246,6 +255,7 @@ def build_runtime_lock(
         images=images or {},
         plugin=fingerprint_plugin_distribution(),
         dsh=dsh,
+        agents=agents or {},
         harbor_lock_ref=harbor_lock_ref,
     )
 

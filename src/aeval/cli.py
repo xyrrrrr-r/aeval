@@ -161,7 +161,10 @@ def run_cmd(
                     platform=sandbox_platform,
                 ),
             }
-        lock = build_runtime_lock(images=images)
+        # Which agents this run selects decides whether a DSH release belongs in
+        # the lock at all: without this a non-Node agent could not produce a lock
+        # (a lock without a DSH section used to be rejected outright).
+        lock = build_runtime_lock(images=images, agent_ids=[spec.id for spec in adapters])
         manifest = RunManifest(
             run_id=f"run-{run_dir.name}",
             runtime_lock=lock,

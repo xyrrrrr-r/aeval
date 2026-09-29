@@ -85,3 +85,18 @@ def test_different_agent_adapters_block_comparison():
     # a manifest sealed before the adapter contract carries no adapter: it stays
     # comparable with another adapter-less manifest (legacy tolerance)
     assert compare_manifests(_manifest(), _manifest()).comparable is True
+
+
+def test_a_second_agents_release_blocks_comparison():
+    """P1-1: release identity is per agent, not only DSH's."""
+    from aeval.contracts import AgentReleaseLock
+
+    right = _manifest()
+    left = _manifest()
+    assert compare_manifests(left, right).comparable is True
+    right.runtime_lock.agents["otheragent"] = AgentReleaseLock(
+        id="otheragent", version="1.0.0"
+    )
+    report = compare_manifests(left, right)
+    assert report.comparable is False
+    assert "agents" in report

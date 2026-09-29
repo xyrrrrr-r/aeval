@@ -719,6 +719,44 @@ class DshReleaseLock(BaseModel):
     experimental: bool = True
 
 
+class AgentReleaseLock(BaseModel):
+    """A pinned agent release in the shape every agent shares.
+
+    Agent-specific facts stay in ``extra`` (DSH's Cordis/ACP-SDK versions, an
+    SDK's transport versions) instead of becoming core fields: the framework must
+    not grow a field per agent. Legacy locks carry only ``dsh``; ``RuntimeLock``
+    projects it into this shape on read rather than storing it twice.
+    """
+
+    id: str
+    version: str
+    source: str | None = None
+    commit: str | None = None
+    runtime: str | None = None
+    runtime_versions: list[str] = Field(default_factory=list)
+    packages: list[NpmPackageLock] = Field(default_factory=list)
+    extra: dict[str, Any] = Field(default_factory=dict)
+
+    @classmethod
+    def from_dsh(cls, lock: DshReleaseLock) -> AgentReleaseLock:
+        """Project the legacy DSH release lock into the generic shape."""
+        extra: dict[str, Any] = {"experimental": lock.experimental}
+        for name in ("cordis_version", "acp_sdk_version", "lockfile_sha256"):
+            value = getattr(lock, name, None)
+            if value is not None:
+                extra[name] = value
+        return cls(
+            id="dsh",
+            version=lock.official_tag,
+            source=lock.commit,
+            commit=lock.commit,
+            runtime="node",
+            runtime_versions=list(lock.node_versions),
+            packages=list(lock.packages),
+            extra=extra,
+        )
+
+
 class ObservedIdentity(BaseModel):
     """Identity observed in a LIVE sandbox, bound to the expected lock.
 
@@ -751,10 +789,33 @@ class RuntimeLock(BaseModel):
     images: dict[str, ImageIdentity] = Field(default_factory=dict)
     plugin: PluginIdentity | None = None
     dsh: DshReleaseLock | None = None
+    # Every pinned agent release. ``dsh`` above stays the DSH-specific record
+    # (byte-identical to what earlier versions wrote) and is projected into this
+    # section on read; new agents only ever appear here.
+    agents: dict[str, AgentReleaseLock] = Field(default_factory=dict)
     harbor_lock_ref: str | None = None
 
     def digest(self) -> str:
-        return _digest(self.model_dump(mode="json", exclude={"created_at"}))
+        # ``agents`` is excluded while empty so a lock recorded before the
+        # generalisation still digests to its recorded value — sealed evidence
+        # must recompute identically.
+        exclude = {"created_at"} | ({"agents"} if not self.agents else set())
+        return _digest(self.model_dump(mode="json", exclude=exclude))
+
+    def agent_locks(self) -> dict[str, AgentReleaseLock]:
+        """Every agent release this lock pins, in the generic shape.
+
+        A lock written before the generalisation carries only ``dsh``; projecting
+        it here means there is exactly one shape to read an agent's release from,
+        and no second copy to drift.
+        """
+        locks = dict(self.agents)
+        if self.dsh is not None and "dsh" not in locks:
+            locks["dsh"] = AgentReleaseLock.from_dsh(self.dsh)
+        return locks
+
+    def agent_lock(self, agent_id: str) -> AgentReleaseLock | None:
+        return self.agent_locks().get(agent_id)
 
 
 class OverlayIdentity(BaseModel):

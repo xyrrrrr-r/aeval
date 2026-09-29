@@ -68,6 +68,17 @@ class ComparabilityReport(dict):
         return None
 
 
+
+
+def _agent_locks(manifest: RunManifest) -> dict[str, Any]:
+    """Agent releases in the generic shape (legacy ``dsh`` projected)."""
+    return {
+        agent_id: lock.model_dump(mode="json")
+        for agent_id, lock in manifest.runtime_lock.agent_locks().items()
+    }
+
+
+
 def compare_manifests(left: RunManifest, right: RunManifest) -> ComparabilityReport:
     """Diff two run manifests across every comparability dimension.
 
@@ -82,6 +93,10 @@ def compare_manifests(left: RunManifest, right: RunManifest) -> ComparabilityRep
             report.setdefault(name, []).append(f"{l!r} != {r!r}")
 
     _dimension("runtime_lock", left.runtime_lock.digest(), right.runtime_lock.digest())
+    # Release identity per agent: a second agent's pinned release must block a
+    # comparison just as the DSH release does (the lock digest covers it too, but
+    # naming the dimension is what makes the difference readable).
+    _dimension("agents", _agent_locks(left), _agent_locks(right))
     _dimension("images", left.runtime_lock.images, right.runtime_lock.images)
     _dimension(
         "python_env",
