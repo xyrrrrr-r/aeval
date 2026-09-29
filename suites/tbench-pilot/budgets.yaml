@@ -27,8 +27,12 @@ broker:
   # ownership evidence, so the trial produced no store record and the run
   # refused to seal (a fail-closed gate doing its job — but over a budget
   # artifact, not an agent failure). 8192 lets a full analysis turn plus
-  # a file rewrite finish.
-  maxOutputTokens: 8192
+  # a file rewrite finish. MEASURED across the pilot's trials the normal
+  # peak is well under 8k (hello-world ~90, openssl ~0.8k, sqlite 2.7k-6.5k),
+  # but the sqlite task's byte-level page analysis reached exactly 8192 twice
+  # and killed the turn; 16384 keeps the declared cap far above real turns so
+  # a verbose-but-valid analysis cannot cost the run its seal (D52).
+  maxOutputTokens: 16384
   # D47: compaction is ALLOWED and ACCOUNTED. The dispatch is metered and
   # ledgered by the sandbox transport (gateway_aux_dispatches.jsonl), and
   # the mapper merges it into the trial's accounted token totals.
