@@ -29,6 +29,7 @@ import asyncio
 import json
 import os
 import shutil
+import ssl
 import subprocess
 import sys
 import threading
@@ -50,6 +51,7 @@ from aeval.contracts import (  # noqa: E402
 from aeval.control.bootstrap import (  # noqa: E402
     SANDBOX_TOKEN_PATH,
     bootstrap_trial_control,
+    deploy_generic_facade,
     resolve_facade_dist,
 )
 from aeval.control.broker import ModelBrokerProcess, write_broker_config  # noqa: E402
@@ -208,6 +210,34 @@ async def _run(args) -> dict:
     )
     trial_id, session_id = "facade-smoke", "facade-smoke-session"
     broker_port = args.broker_port
+    # The lab pins the broker listener to a public address behind a private
+    # signer (listenTls + controlCa in the operator's spec). ``--tls`` runs the
+    # broker that way against a throwaway self-signed certificate: that is the
+    # only difference that matters for the facade's outbound trust.
+    listen_host = args.listen_host
+    listen_tls = None
+    ca_path: Path | None = None
+    if args.tls:
+        # The broker refuses TLS on a loopback listener ("the sandbox could not
+        # trust it"), which is exactly why the operator's spec pins a public
+        # address: a remote sandbox can only reach the host that way.
+        if listen_host in ("127.0.0.1", "localhost", "::1"):
+            raise SystemExit(
+                "the broker refuses TLS on a loopback listener — pass "
+                "--listen-host with the address the sandbox must reach"
+            )
+        tls_dir = work_dir / "tls"
+        tls_dir.mkdir(parents=True, exist_ok=True)
+        ca_path, key_path = tls_dir / "cert.pem", tls_dir / "key.pem"
+        subprocess.run(  # noqa: S603 - fixed argv, throwaway self-signed cert
+            ["openssl", "req", "-x509", "-newkey", "rsa:2048", "-nodes",
+             "-keyout", str(key_path), "-out", str(ca_path), "-days", "2",
+             "-subj", f"/CN={listen_host}",
+             "-addext", f"subjectAltName=IP:{listen_host},IP:127.0.0.1"],
+            check=True, capture_output=True,
+        )
+        listen_tls = {"cert": str(ca_path), "key": str(key_path)}
+    scheme = "https" if listen_tls else "http"
     identity = {"provider": "stub", "model": "stub-model"}
     limits = {"maxSteps": args.max_steps, "maxTokens": args.max_tokens}
     paths = TrialPaths(
@@ -225,7 +255,7 @@ async def _run(args) -> dict:
         "run": run_binding.model_dump(mode="json"), "trialId": trial_id,
         "sessionId": session_id, "sessionRoot": paths.session_root,
         "bundlePath": paths.bundle_path,
-        "gatewayUrl": f"http://127.0.0.1:{broker_port}",
+        "gatewayUrl": f"{scheme}://{listen_host}:{broker_port}",
         "jobTokenFile": token_path, "provider": identity["provider"],
         "model": identity["model"], "refuseAuxiliaryCalls": True, **limits,
     }
@@ -234,13 +264,14 @@ async def _run(args) -> dict:
         trial_dir / "broker.json",
         run=run_binding.model_dump(mode="json"), trial_id=trial_id, session_id=session_id,
         config_digest=control_config["configDigest"], identity=identity, limits=limits,
-        max_output_tokens=args.max_output_tokens, listen_host="127.0.0.1",
+        max_output_tokens=args.max_output_tokens, listen_host=listen_host,
         listen_port=broker_port, token_out=trial_dir / "job-token",
         upstream={"provider": "stub", "model": "stub-model",
                   "baseUrl": f"http://127.0.0.1:{stub_port}/v1",
                   "apiKeyEnv": "STUB_UPSTREAM_KEY"},
         token_count={"endpoint": f"http://127.0.0.1:{stub_port}/v1/tokens/count",
                      "margin": 8},
+        listen_tls=listen_tls,
     )
     os.environ["STUB_UPSTREAM_KEY"] = "stub-key-not-a-secret"
     broker = ModelBrokerProcess(
@@ -285,9 +316,28 @@ async def _run(args) -> dict:
             broker=broker, provider=identity["provider"], model=identity["model"],
             job_token_file=token_path, agent=_FacadeAgent(), facade_dist=facade_dist,
             facade_root=facade_root.as_posix() if facade_root else None,
+            control_ca=ca_path,
         )
         health = _get(f"{facade_url}/healthz")
-        info_limits = _lease_limits(broker.url, token_path)
+        info_limits = _lease_limits(broker.url, token_path, ca_path)
+
+        # The CA is load-bearing, not decoration: the same deployment against
+        # the same TLS listener without control_ca must fail its health gate
+        # (node cannot verify the self-signed broker certificate).
+        untrusted_outcome = "not_attempted"
+        if args.tls:
+            try:
+                await deploy_generic_facade(
+                    environment=LocalSandbox(work_dir), facade_dist=facade_dist,
+                    gateway_url=config["gatewayUrl"], token_file=token_path,
+                    port=args.facade_port + 1,
+                    root=(Path(args.facade_root) / "untrusted" if args.facade_root
+                          else Path("/opt/aeval-facade-untrusted")).as_posix(),
+                    health_timeout_sec=8.0,
+                )
+                untrusted_outcome = "deployed_without_the_ca"
+            except Exception as exc:  # noqa: BLE001 - the refusal is the assertion
+                untrusted_outcome = f"{type(exc).__name__}"
 
         # ── the chain: OpenAI in, metered completion out ──
         attempts: list[dict] = []
@@ -318,6 +368,8 @@ async def _run(args) -> dict:
             "stub_count_calls": _StubUpstream.counts,
             "health": health,
             "lease_limits": info_limits,
+            "tls": bool(args.tls),
+            "tls_without_ca_outcome": untrusted_outcome,
             "lock_facade_digest": lock.facade_dist.sha256[:16],
             "stale_lock_refused_with": stale_refused,
             "stale_lock_uploaded_anything": stale_uploaded,
@@ -346,6 +398,7 @@ async def _run(args) -> dict:
                 # here the suite's own budget is deliberately not the cap the
                 # harness exercises.
                 "info_limits_mirror_the_lease": info_limits == limits,
+                "the_ca_is_load_bearing": (not args.tls) or untrusted_outcome != "deployed_without_the_ca",
             },
         }
     finally:
@@ -396,13 +449,16 @@ def _get(url: str) -> dict:
         return json.loads(response.read().decode("utf-8"))
 
 
-def _lease_limits(broker_url: str, token_path: str) -> dict:
+def _lease_limits(broker_url: str, token_path: str, ca_path: Path | None = None) -> dict:
     """The lease limits the broker publishes on /info (bearer-authenticated)."""
     token = Path(token_path).read_text(encoding="utf-8").strip()
     request = urllib.request.Request(
         f"{broker_url}/info", headers={"authorization": f"Bearer {token}"}, method="GET"
     )
-    with urllib.request.urlopen(request, timeout=10) as response:  # noqa: S310 - localhost
+    context = None
+    if broker_url.startswith("https") and ca_path is not None:
+        context = ssl.create_default_context(cafile=str(ca_path))
+    with urllib.request.urlopen(request, timeout=10, context=context) as response:  # noqa: S310
         return dict(json.loads(response.read().decode("utf-8")).get("limits", {}))
 
 
@@ -431,6 +487,10 @@ def main() -> int:
     parser.add_argument("--max-tokens", type=int, default=250)
     parser.add_argument("--max-output-tokens", type=int, default=200)
     parser.add_argument("--max-calls", type=int, default=5)
+    parser.add_argument("--listen-host", default="127.0.0.1",
+                        help="the broker listener the sandbox must reach (TLS needs a non-loopback one)")
+    parser.add_argument("--tls", action="store_true",
+                        help="run the broker behind a private signer, as the lab spec does")
     args = parser.parse_args()
 
     result = asyncio.run(_run(args))

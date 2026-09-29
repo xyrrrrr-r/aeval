@@ -80,6 +80,35 @@ def _built_dist(root: Path, names=("facade_main.js", "gateway_lease.js")) -> Pat
     return dist
 
 
+def test_a_privately_signed_broker_ships_its_ca_and_points_node_at_it(tmp_path):
+    """The lab pins the broker listener to a public address with a private
+    signer, so the facade's outbound TLS needs the trust anchor — exactly what
+    the DSH control tree does with NODE_EXTRA_CA_CERTS."""
+    dist = _built_dist(tmp_path)
+    ca = tmp_path / "ca.crt"
+    ca.write_text("-----BEGIN CERTIFICATE-----\nfake\n-----END CERTIFICATE-----\n", encoding="utf-8")
+    env = _FakeExecEnvironment()
+    asyncio.run(deploy_generic_facade(
+        environment=env, facade_dist=dist, gateway_url="https://10.0.0.1:8447",
+        token_file="/run/aeval/trial-token", control_ca=ca,
+    ))
+    with tarfile.open(fileobj=io.BytesIO(env.blobs["/tmp/aeval-facade.tar.gz"]), mode="r:gz") as tar:
+        assert "ca.crt" in tar.getnames()
+    start = next(cmd for cmd in env.commands if "facade_main.js" in cmd)
+    assert "NODE_EXTRA_CA_CERTS=/opt/aeval-facade/ca.crt" in start
+
+
+def test_a_loopback_broker_needs_no_extra_ca(tmp_path):
+    dist = _built_dist(tmp_path)
+    env = _FakeExecEnvironment()
+    asyncio.run(deploy_generic_facade(
+        environment=env, facade_dist=dist, gateway_url="http://127.0.0.1:5000",
+        token_file="/run/aeval/trial-token",
+    ))
+    start = next(cmd for cmd in env.commands if "facade_main.js" in cmd)
+    assert "NODE_EXTRA_CA_CERTS" not in start
+
+
 def test_a_dist_without_its_closure_is_refused_before_any_upload(tmp_path):
     """example-lab found this the hard way: a dist shipped without node_modules
     uploads fine, starts, and then dies inside the sandbox with

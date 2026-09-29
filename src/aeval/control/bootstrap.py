@@ -394,6 +394,7 @@ async def deploy_generic_facade(
     node_bin: str = "node",
     health_timeout_sec: float = 30.0,
     root: PurePosixPath | None = None,
+    control_ca: Path | None = None,
 ) -> str:
     """Deploy and start the OpenAI-compatible facade inside the sandbox.
 
@@ -443,6 +444,13 @@ async def deploy_generic_facade(
         with tarfile.open(tar_path, "w:gz") as tar:
             for source, relative in files:
                 tar.add(source, arcname=relative)
+            if control_ca is not None:
+                # A privately signed broker listener is the production
+                # topology (example-lab pins listenHost to a public address), so the
+                # facade's outbound TLS needs the same trust anchor the DSH
+                # control tree ships as ca.crt — without it every model call
+                # dies on certificate verification inside the sandbox.
+                tar.add(Path(control_ca), arcname="ca.crt")
         sandbox_tar = "/tmp/aeval-facade.tar.gz"
         await upload(str(tar_path), sandbox_tar)
         extracted = await exec_fn(
@@ -457,6 +465,11 @@ async def deploy_generic_facade(
             f"AEVAL_GATEWAY_URL={shlex.quote(gateway_url)} "
             f"AEVAL_TRIAL_TOKEN_FILE={shlex.quote(token_file)} "
             f"AEVAL_FACADE_PORT={port} "
+            + (
+                f"NODE_EXTRA_CA_CERTS={shlex.quote((root / 'ca.crt').as_posix())} "
+                if control_ca is not None
+                else ""
+            )
             + (f"AEVAL_FACADE_SESSION_ID={shlex.quote(session_id)} " if session_id else "")
         )
         log = "/tmp/aeval-facade.log"
@@ -566,6 +579,7 @@ async def _deploy_declared_stack(
             gateway_url=str(config["gatewayUrl"]),
             token_file=str(config["jobTokenFile"]),
             root=facade_root,
+            control_ca=control_ca,
         )
         return
     raise BootstrapError(
