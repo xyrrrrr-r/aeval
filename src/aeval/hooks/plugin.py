@@ -223,6 +223,10 @@ def register_trial_hooks(job: Any, context: EvaluationContext) -> None:
         except (LifecycleError, EvidenceIntegrityError) as exc:
             state.evidence_ok = False
             state.mark_infra_invalid(str(exc))
+            # D52: block the verifier (score validity is unchanged) but
+            # still leave an explicit, reasoned exclusion record — a trial
+            # with no record at all makes the whole run unsealable.
+            await _record_unjudgeable_exclusion(event, context, state, str(exc))
             raise EvidenceIntegrityError(str(exc)) from exc
 
     async def _finish(event: Any, *, cancelled: bool = False) -> None:
@@ -240,6 +244,14 @@ def register_trial_hooks(job: Any, context: EvaluationContext) -> None:
         if state.finish(exception, cancelled=cancelled):
             await finalize_trial_record(event, context)
             await _grade_and_record(event, context, state)
+            # D52: an observed trial must never vanish from the store — the
+            # sealer refuses to seal a run holding a record-less trial and
+            # every other trial's evidence is lost with it. No-op when
+            # grading already recorded the trial.
+            reason = "; ".join(
+                state.infra_invalid_reasons or state.evidence_issues
+            ) or "trial ended without a verified evidence bundle"
+            await _record_unjudgeable_exclusion(event, context, state, reason)
         if context.environments is not None:
             context.environments.forget(state.trial_id)
 
@@ -373,6 +385,67 @@ async def _grade_and_record(event: Any, context: EvaluationContext, state: Any) 
         )
     except GradingPipelineError as exc:
         state.mark_infra_invalid(f"grading failed: {exc}")
+    finally:
+        store.close()
+
+
+async def _record_unjudgeable_exclusion(
+    event: Any, context: EvaluationContext, state: Any, reason: str
+) -> bool:
+    """Persist an explicit, reasoned exclusion for an unverifiable trial.
+
+    D52 (found on the real chain): a trial whose agent died before the
+    official session record existed — e.g. the DSH run hit the
+    single-response token cap mid-turn — left no store record at all,
+    because only a trial that passed the evidence gate is graded. The run
+    then refused to seal ("trial(s) without a store record") and the
+    evidence of every *other* trial was lost with it.
+
+    The score-validity invariant is unchanged: the verifier still never
+    runs for this trial (the gate keeps raising), so it can never enter
+    the valid denominator. What changes is that the trial is *recorded*
+    as ``cannot_judge`` with the reason attached, so the seal reports an
+    explicit exclusion instead of an unexplained gap.
+
+    Returns True when a record for the trial now exists in the store.
+    """
+    from aeval.contracts import TrialCoordinates, TrialRecord
+    from aeval.store.sqlite import TrialStore
+
+    store = TrialStore(context.store_path)
+    try:
+        try:
+            store.load_trial(state.trial_id)
+            return True  # already graded and recorded
+        except KeyError:
+            pass
+        record = TrialRecord(
+            trial_id=state.trial_id,
+            coordinates=TrialCoordinates(
+                run_id=context.run_id,
+                suite_id=context.suite.id,
+                suite_version=context.suite.version,
+                task_id=str(getattr(event, "task_name", "unknown")),
+                trial_index=context.next_trial_index(),
+            ),
+            stop_reason=state.stop_reason or "crashed",
+            baseline_ok=state.baseline_ok,
+            verdict="cannot_judge",
+            transcript_extra={
+                "aeval": {
+                    "exclusion_reason": reason,
+                    "evidence_issues": list(state.evidence_issues),
+                    "infra_invalid_reasons": list(state.infra_invalid_reasons),
+                }
+            },
+        )
+        store.persist_trial_with_grades(record, [])
+        return True
+    except Exception as exc:  # a recording gap must never crash the hook
+        state.evidence_issues.append(
+            f"explicit exclusion record could not be written: {exc}"
+        )
+        return False
     finally:
         store.close()
 
