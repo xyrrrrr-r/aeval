@@ -92,3 +92,4 @@ control/.test-dist/
 !control/dist/
 suites/*/tasks/*/environment/wheelhouse/*.whl
 suites/*/tasks/*/environment/wheelhouse/*.tar.gz
+.qwen/
