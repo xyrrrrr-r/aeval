@@ -9,8 +9,9 @@ from pathlib import Path
 from typing import Any
 
 from aeval.bundle.manifest import _atomic_write_json
-from aeval.contracts import RunBinding, RunManifest, RuntimeLock, job_config_hash
+from aeval.contracts import OverlayIdentity, RunBinding, RunManifest, RuntimeLock, job_config_hash
 from aeval.hooks.baseline_arrival import on_environment_started
+from aeval.suite_models import ResolvedSuite
 from aeval.hooks.collection import CollectionError, collect_trial_evidence
 from aeval.control.bootstrap import BootstrapError, bootstrap_trial_control
 from aeval.hooks.broker_lifecycle import (
@@ -38,6 +39,25 @@ __all__ = ["AevalPlugin", "create_run_context", "register_trial_hooks"]
 
 class HookRegistrationError(RuntimeError):
     pass
+
+
+def suite_identity_matches(manifest_overlay: OverlayIdentity, suite: ResolvedSuite) -> bool:
+    """Fail-closed suite identity gate: raw bytes AND (when recorded) the chain.
+
+    Inherited content is part of identity, so a base edited between writing
+    the intent manifest and starting the job must fail registration rather
+    than run silently. Manifests sealed before inheritance existed carry no
+    chain digest; for those the raw-bytes check alone still applies.
+    """
+    if (
+        manifest_overlay.suite_id != suite.id
+        or manifest_overlay.suite_version != suite.version
+        or manifest_overlay.overlay_digest != suite.suite_yaml_digest
+    ):
+        return False
+    if manifest_overlay.overlay_chain_digest is None:
+        return True
+    return manifest_overlay.overlay_chain_digest == suite.identity_digest
 
 
 def create_run_context(job: Any) -> EvaluationContext:
@@ -76,12 +96,7 @@ def create_run_context(job: Any) -> EvaluationContext:
     declared_dir = Path(declared_config["jobs_dir"]) / declared_config["job_name"]
     if Path(job.job_dir).resolve() != declared_dir.resolve():
         raise HookRegistrationError("Job output directory differs from intent config")
-    if (manifest.overlay.suite_id != suite.id or manifest.overlay.suite_version != suite.version
-            or manifest.overlay.overlay_digest != suite.suite_yaml_digest
-            # Inherited content is part of identity: a base edited between
-            # intent and job start must fail registration, not run silently.
-            or (manifest.overlay.overlay_chain_digest is not None
-                and manifest.overlay.overlay_chain_digest != suite.identity_digest)):
+    if not suite_identity_matches(manifest.overlay, suite):
         raise HookRegistrationError("suite identity differs from intent manifest")
     trials_dir = Path(job.job_dir).resolve()
     if trials_dir == root or not trials_dir.is_relative_to(root):

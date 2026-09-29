@@ -289,3 +289,46 @@ def test_transfer_refuses_a_suite_with_inherited_bases(suites_root, tmp_path):
     suite_dir = _child(suites_root).parent
     with pytest.raises(SuiteError, match="inherits"):
         _transfer(suite_dir, tmp_path / "exported", format="harbor-task", version="0.2.0")
+
+
+# --- the fail-closed gate the manifest/plugin path relies on -----------------
+
+def _manifest_overlay(suite, **overrides):
+    from aeval.contracts import OverlayIdentity
+
+    values = {
+        "suite_id": suite.id,
+        "suite_version": suite.version,
+        "overlay_digest": suite.suite_yaml_digest,
+        "overlay_chain_digest": suite.identity_digest,
+        "source_commit": "a" * 40,
+    }
+    values.update(overrides)
+    return OverlayIdentity(**values)
+
+
+def test_gate_accepts_the_same_chain_and_rejects_a_base_edit(suites_root):
+    from aeval.hooks.plugin import suite_identity_matches
+
+    suite_yaml = _child(suites_root)
+    suite = load_suite(suite_yaml.parent)
+    assert suite_identity_matches(_manifest_overlay(suite), suite) is True
+
+    # A base edited after the intent manifest was written: the child file is
+    # byte-identical, so only the chain digest can catch it.
+    _write(suites_root / "_base" / "harbor.base.yaml", {**BASE_CONVENTIONS, "driver": {"require": ["sdk_jsonrpc"]}})
+    edited = load_suite(suite_yaml.parent)
+    assert edited.suite_yaml_digest == suite.suite_yaml_digest
+    assert suite_identity_matches(_manifest_overlay(suite), edited) is False
+
+
+def test_gate_still_accepts_legacy_manifests_without_a_chain_digest(suites_root):
+    from aeval.hooks.plugin import suite_identity_matches
+
+    suite = load_suite(_child(suites_root).parent)
+    legacy = _manifest_overlay(suite, overlay_chain_digest=None)
+    assert suite_identity_matches(legacy, suite) is True
+    # ...but the raw-bytes check still bites
+    assert suite_identity_matches(_manifest_overlay(suite, overlay_digest="0" * 64), suite) is False
+    assert suite_identity_matches(_manifest_overlay(suite, overlay_chain_digest="0" * 64), suite) is False
+    assert suite_identity_matches(_manifest_overlay(suite, suite_version="9.9.9"), suite) is False
