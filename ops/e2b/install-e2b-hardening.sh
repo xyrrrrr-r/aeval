@@ -38,13 +38,20 @@ WATCH_SRC=${WATCH_SRC:-$SRC_DIR/e2b-leak-watch.sh}
 UNIT_SRC=${UNIT_SRC:-$SRC_DIR/systemd}
 GUARD_DST=${GUARD_DST:-/usr/local/bin/e2b-leak-guard.sh}
 WATCH_DST=${WATCH_DST:-/usr/local/bin/e2b-leak-watch.sh}
+SYNC_SRC=${SYNC_SRC:-$SRC_DIR/e2b-hardening-sync.sh}
+SYNC_DST=${SYNC_DST:-/usr/local/bin/e2b-hardening-sync.sh}
 UNIT_DST=/etc/systemd/system
 CACHE_DIR=${CACHE_DIR:-/orchestrator/template-cache}
 TMP_DIR=${TMP_DIR:-/orchestrator/tmp}
 SCRATCH_DIR=${SCRATCH_DIR:-/orchestrator/template-scratch}
 TM_MEMORY_MB=${TM_MEMORY_MB:-32768}
 E2B_INFRA_DIR=${E2B_INFRA_DIR:-/opt/e2b-infra}
-UNITS=(e2b-hardening-boot.service e2b-leak-guard.service e2b-leak-guard.timer e2b-leak-watch.service e2b-leak-watch.timer)
+UNITS=(e2b-hardening-boot.service e2b-hardening-sync.service e2b-hardening-sync.timer \
+       e2b-leak-guard.service e2b-leak-guard.timer e2b-leak-watch.service e2b-leak-watch.timer)
+GIT_MIRROR=${GIT_MIRROR:-/srv/git/aeval.git}
+GIT_BRANCH=${GIT_BRANCH:-eval0923}       # 只影响 B 路径（服务器自主 fetch）的分支名
+SYNC_CONF=${SYNC_CONF:-/etc/e2b-hardening/sync.conf}
+GIT_REMOTE_URL=${GIT_REMOTE_URL:-https://gitcode.com/open_kunpeng_agentic_infra/aeval.git}
 
 drift=()
 say(){ [ "$QUIET" = 1 ] || echo "[e2b-hardening] $*"; }
@@ -162,16 +169,19 @@ say "3) 自包含副本 $HW_DIR（开机自举不依赖仓库在场）"
 same_path(){ [ -n "$1" ] && [ "$(realpath "$1" 2>/dev/null)" = "$(realpath "$2" 2>/dev/null)" ]; }
 copy_to(){ same_path "$1" "$2" && return 0; install -m "${3:-0755}" "$1" "$2"; }
 if [ "$DRY_RUN" = 1 ]; then
-  for f in "$(basename "$GUARD_SRC")" "$(basename "$WATCH_SRC")" "$(basename "${BASH_SOURCE[0]}")"; do
+  for f in "$(basename "$GUARD_SRC")" "$(basename "$WATCH_SRC")" "$(basename "$SYNC_SRC")" "$(basename "${BASH_SOURCE[0]}")"; do
     [ -e "$HW_DIR/$f" ] || bad "副本缺 $HW_DIR/$f"
   done
   for u in "${UNITS[@]}"; do [ -e "$HW_DIR/systemd/$u" ] || bad "副本缺 $HW_DIR/systemd/$u"; done
+  [ -e "$HW_DIR/git/post-receive" ] || bad "副本缺 $HW_DIR/git/post-receive"
 else
-  act install -d -m 0755 "$HW_DIR" "$HW_DIR/systemd"
+  act install -d -m 0755 "$HW_DIR" "$HW_DIR/systemd" "$HW_DIR/git"
   copy_to "$GUARD_SRC" "$HW_DIR/e2b-leak-guard.sh" 0755
   copy_to "$WATCH_SRC" "$HW_DIR/e2b-leak-watch.sh" 0755
+  copy_to "$SYNC_SRC" "$HW_DIR/e2b-hardening-sync.sh" 0755
   copy_to "${BASH_SOURCE[0]}" "$HW_DIR/install-e2b-hardening.sh" 0755
   for u in "${UNITS[@]}"; do copy_to "$UNIT_SRC/$u" "$HW_DIR/systemd/$u" 0644; done
+  copy_to "$SRC_DIR/git/post-receive" "$HW_DIR/git/post-receive" 0755
   ok "副本已同步"
 fi
 
@@ -189,6 +199,12 @@ if [ -f "$WATCH_DST" ] && cmp -s "$WATCH_SRC" "$WATCH_DST"; then
 else
   if [ "$DRY_RUN" = 1 ]; then bad "watchdog 运行副本缺失或与部署源不一致"
   else act install -m 0755 -o root -g root "$WATCH_SRC" "$WATCH_DST"; ok "已安装 watchdog"; fi
+fi
+if [ -f "$SYNC_DST" ] && cmp -s "$SYNC_SRC" "$SYNC_DST"; then
+  ok "同步器运行副本已是最新"
+else
+  if [ "$DRY_RUN" = 1 ]; then bad "同步器运行副本缺失或与部署源不一致"
+  else act install -m 0755 -o root -g root "$SYNC_SRC" "$SYNC_DST"; ok "已安装同步器"; fi
 fi
 for u in "${UNITS[@]}"; do
   if [ -f "$UNIT_DST/$u" ] && cmp -s "$UNIT_SRC/$u" "$UNIT_DST/$u"; then
@@ -210,11 +226,46 @@ if [ "$DRY_RUN" != 1 ]; then
   esac
   act systemctl enable --now e2b-leak-guard.timer
   act systemctl enable --now e2b-leak-watch.timer
+  act systemctl enable --now e2b-hardening-sync.timer
 else
-  for u in e2b-hardening-boot.service e2b-leak-guard.timer e2b-leak-watch.timer; do
+  for u in e2b-hardening-boot.service e2b-leak-guard.timer e2b-leak-watch.timer e2b-hardening-sync.timer; do
     systemctl is-enabled --quiet "$u" 2>/dev/null || bad "$u 未启用"
     [ "$u" = "e2b-hardening-boot.service" ] || systemctl is-active --quiet "$u" 2>/dev/null || bad "$u 未运行"
   done
+fi
+
+# ---------- 5) git 源：裸镜像 + 推送钩子 + 同步配置 ----------
+say "5) git 源：镜像 $GIT_MIRROR（推送触发）+ $SYNC_CONF（自主拉取）"
+if [ -d "$GIT_MIRROR" ]; then ok "裸镜像已存在"
+elif [ "$DRY_RUN" = 1 ]; then bad "裸镜像 $GIT_MIRROR 不存在（开发机还没推送过）"
+else act git init --bare --quiet "$GIT_MIRROR" && ok "已初始化裸镜像"; fi
+
+hook="$GIT_MIRROR/hooks/post-receive"
+if [ -f "$hook" ] && cmp -s "$SRC_DIR/git/post-receive" "$hook"; then ok "post-receive 钩子已就位"
+elif [ "$DRY_RUN" = 1 ]; then bad "post-receive 钩子缺失或过期"
+else act install -d -m 0755 "$GIT_MIRROR/hooks"; act install -m 0755 "$SRC_DIR/git/post-receive" "$hook"; ok "已安装 post-receive 钩子（推送即生效）"; fi
+
+if [ -f "$SYNC_CONF" ]; then ok "$SYNC_CONF 已存在（不覆盖）"
+elif [ "$DRY_RUN" = 1 ]; then bad "缺 $SYNC_CONF"
+else
+  act install -d -m 0755 /etc/e2b-hardening
+  if [ "$DRY_RUN" != 1 ]; then
+    cat > "$SYNC_CONF" <<EOF
+# e2b 加固同步配置
+# A 路径（推送触发）不需要这里任何凭据：开发机 push → 裸镜像 post-receive → 立即应用。
+# B 路径（服务器自主拉取）需要私有仓库的访问令牌：把令牌写进 TOKEN_FILE（0600）即可，
+# 凭据经 credential store 读取，不会出现在命令行或日志里。
+MIRROR=$GIT_MIRROR
+BRANCH=$GIT_BRANCH
+REMOTE_URL=$GIT_REMOTE_URL
+TOKEN_FILE=/etc/e2b-hardening/git-token
+CHECKOUT=/var/lib/e2b-hardening/checkout
+SUBDIR=ops/e2b
+DEST=/opt/e2b-hardening
+EOF
+    chmod 0600 "$SYNC_CONF"
+  fi
+  ok "已写入默认 $SYNC_CONF"
 fi
 
 # ---------- 结论 ----------
@@ -225,5 +276,6 @@ if [ ${#drift[@]} -gt 0 ]; then
   [ "$MODE" = check ] && exit 1
 fi
 say "加固就绪：部署源 sha256 ${guard_dst_sum:0:12}… / 运行副本已核对；"
-say "  护栏 e2b-leak-guard.timer（每 5 分钟）、探测 e2b-leak-watch.timer（每 60 秒）、开机自举 e2b-hardening-boot.service"
+say "  护栏 e2b-leak-guard.timer（每 5 分钟）、探测 e2b-leak-watch.timer（每 60 秒）、"
+say "  同步 e2b-hardening-sync.timer（每 5 分钟，推送触发即生效）、开机自举 e2b-hardening-boot.service"
 exit 0

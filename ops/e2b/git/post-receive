@@ -1,0 +1,11 @@
+#!/bin/sh
+# post-receive（安装到裸镜像 hooks/post-receive）
+# 开发机一推送，就立刻把 ops/e2b 同步并应用到本机 —— "推送即生效"。
+# 输出会回显给推送方，所以能看到同步结论。
+while read -r _old _new ref; do
+  case "$ref" in
+    refs/heads/*) exec /usr/local/bin/e2b-hardening-sync.sh --force "--branch=${ref#refs/heads/}" ;;
+  esac
+done
+# 没有分支被推送（例如只推 tag）
+exit 0

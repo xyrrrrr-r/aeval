@@ -1,0 +1,11 @@
+[Unit]
+Description=Sync e2b hardening from git every 5 minutes
+
+[Timer]
+OnBootSec=4min
+OnCalendar=*:0/5
+AccuracySec=30s
+Persistent=true
+
+[Install]
+WantedBy=timers.target

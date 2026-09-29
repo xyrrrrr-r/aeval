@@ -1,0 +1,31 @@
+#!/bin/sh
+# dev-post-commit（安装到开发机 aeval 仓库的 .git/hooks/post-commit）
+#
+# 每次提交后把当前分支推送到实验机上的裸镜像；镜像的 post-receive 钩子会立即
+# 同步并应用 ops/e2b 加固 —— 于是"改仓库 → 服务器自动生效"，不需要人记得 rsync。
+#
+# 设计取向：推送在后台进行、失败不影响提交；结果写 .git/e2b-sync.log 便于排查。
+# 安装：
+#   cp ops/e2b/git/dev-post-commit .git/hooks/post-commit && chmod +x .git/hooks/post-commit
+set -u
+
+HOST=${E2B_SYNC_HOST:-example-lab}
+MIRROR=${E2B_SYNC_MIRROR:-/srv/git/aeval.git}
+BRANCH=$(git rev-parse --abbrev-ref HEAD 2>/dev/null || echo "")
+LOG=$(git rev-parse --git-dir)/e2b-sync.log
+
+[ -n "$BRANCH" ] || exit 0
+[ "$BRANCH" = "HEAD" ] && exit 0          # 分离头指针，不推
+
+(
+  {
+    echo "[$(date '+%F %T')] push $BRANCH -> $HOST:$MIRROR"
+    if git push --quiet "$HOST:$MIRROR" "refs/heads/$BRANCH:refs/heads/$BRANCH" 2>&1; then
+      echo "[$(date '+%F %T')] ok"
+    else
+      echo "[$(date '+%F %T')] 推送失败（服务器端可能未初始化镜像；见 ops/e2b/README.md）"
+    fi
+  } >> "$LOG"
+) &
+
+exit 0

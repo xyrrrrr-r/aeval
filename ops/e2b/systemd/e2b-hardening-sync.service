@@ -1,0 +1,11 @@
+[Unit]
+Description=E2B hardening: sync ops/e2b from git and apply (auto-pull)
+Documentation=file:/opt/e2b-hardening/README.md
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/e2b-hardening-sync.sh
+Nice=10
+IOSchedulingClass=idle
