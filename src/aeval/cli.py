@@ -236,7 +236,10 @@ def probe_cmd(
             f"extends={resolved.extends or '(none)'} "
             f"task-references={len(job.tasks)} remote-datasets={len(job.datasets)}"
         )
-        typer.echo("Configuration validated; remote task content and runtime capabilities are not probed.")
+        typer.echo(
+            "Configuration validated; the selected agent's declared capabilities were "
+            "checked. Remote task content and live runtime capabilities are not probed."
+        )
     except (SuiteError, ValueError, OSError) as exc:
         _die(str(exc), EXIT_VALIDATION_ERROR)
 

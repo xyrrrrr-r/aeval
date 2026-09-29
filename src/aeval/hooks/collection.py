@@ -245,7 +245,11 @@ def _read_session_record(agent: Any) -> bytes:
     paths_fn = getattr(agent, "paths", None)
     # DSH's own conversation session id — never Harbor's ``session_id``
     # attribute, which names the sandbox environment instead.
-    session_id = getattr(agent, "dsh_session_id", None)
+    # Contract member first (aeval.agents.contract); dsh_session_id kept as a
+    # deprecated fallback for adapters written before the contract existed.
+    session_id = getattr(agent, "agent_session_id", None)
+    if session_id is None:
+        session_id = getattr(agent, "dsh_session_id", None)
     if not callable(paths_fn) or not session_id:
         raise CollectionError(
             "the trial's agent exposes no DSH session — the official "

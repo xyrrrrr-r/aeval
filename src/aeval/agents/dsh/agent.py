@@ -308,6 +308,13 @@ class DshAgent(BaseInstalledAgent):
 
     MAPPER_VERSION = MAPPER_VERSION
 
+    # Capabilities this adapter offers, matched against a suite's
+    # driver.require before any trial starts (aeval.agents.contract).
+    # acp_stdio/sdk_jsonrpc: the channels DSH is driven through; shell and
+    # file_tools: what a task can ask the agent to do; resume: the run adopts a
+    # pre-minted session instead of starting a fresh one.
+    PROVIDES = frozenset({"acp_stdio", "sdk_jsonrpc", "shell", "file_tools", "resume"})
+
     capabilities = AgentCapabilities(
         atif=False,  # ATIF comes from the official session read, not from the CLI
         resume=False,
@@ -370,7 +377,13 @@ class DshAgent(BaseInstalledAgent):
         return OFFICIAL_DSH_TAG
 
     @property
+    def agent_session_id(self) -> str | None:
+        """Contract member: the agent's conversation session (see dsh_session_id)."""
+        return self._session_id
+
+    @property
     def dsh_session_id(self) -> str | None:
+        """Deprecated alias for ``agent_session_id``; kept for older callers."""
         """The DSH conversation session the last run drove.
 
         Deliberately NOT named ``session_id``: Harbor's ``BaseAgent``

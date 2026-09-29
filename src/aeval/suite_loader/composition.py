@@ -18,6 +18,7 @@ from harbor.models.trial.config import TaskConfig
 from harbor.utils.env import is_env_template, is_sensitive_env_key
 from pydantic import BaseModel, ValidationError
 
+from aeval.agents.contract import required_capability_gaps
 from aeval.suite_loader.loader import resolve_harbor_inputs
 from aeval.suite_loader.paths import suite_path
 from aeval.suite_loader.validation import (
@@ -158,6 +159,34 @@ def _validate_local_task(suite: ResolvedSuite, path: Path, job_data: dict[str, A
         raise SuiteError(f"Task {path} fails the evidence collect plan: {exc}") from exc
 
 
+def _check_agent_capabilities(agents: list[Any], required: list[str], job_path: Path) -> None:
+    """Refuse a pairing where the selected agent cannot serve the suite.
+
+    A suite states what it needs (``driver.require``); an aeval adapter states what
+    it offers (``PROVIDES``). Checking the intersection here means an unserviceable
+    pairing fails before any sandbox is built, instead of producing a run that
+    cannot be judged. Harbor-native ``name:`` agents are exempt: they are
+    placeholders for suite-shape validation and claim no capabilities.
+    """
+    import_paths = [
+        agent["import_path"].strip()
+        for agent in agents
+        if isinstance(agent, dict)
+        and isinstance(agent.get("import_path"), str)
+        and agent["import_path"].strip()
+    ]
+    if not import_paths or not required:
+        return
+    provided, missing = required_capability_gaps(import_paths, required)
+    if missing:
+        detail = "; ".join(f"{path} provides {sorted(caps)}" for path, caps in provided.items())
+        raise SuiteError(
+            f"{job_path}: the selected agent cannot serve this suite — "
+            f"driver.require={sorted({item.strip() for item in required if item.strip()})}, "
+            f"{detail}, missing {missing}"
+        )
+
+
 def compose_harbor_job(suite: ResolvedSuite) -> JobConfig:
     root = Path(suite.suite_dir).resolve()
     inputs = resolve_harbor_inputs(suite)
@@ -176,6 +205,7 @@ def compose_harbor_job(suite: ResolvedSuite) -> JobConfig:
         for agent in agents
     ):
         raise SuiteError("Harbor job must explicitly select at least one agent")
+    _check_agent_capabilities(agents, suite.overlay.driver.require, job_path)
     job = JobConfig.model_validate(deepcopy(job_data), extra="forbid")
     # P0-2: verifier log filters can silently drop required evidence
     # logs — an evaluation job must collect the full verifier log set.
