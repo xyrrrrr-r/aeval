@@ -73,6 +73,29 @@ def test_an_unmeterable_adapter_under_a_cap_fails_the_accounting_check():
     assert check_accounting(load_adapter_class(DSH), BudgetSnapshot(max_tokens=1000)).status == "pass"
 
 
+def test_a_supplied_instance_lets_the_transcript_check_run_for_real():
+    """DshAgent needs logs_dir; a real instance is how that check gets exercised."""
+    from aeval.agents.contract import load_adapter_class
+
+    # no instance: the check is honest about not having run
+    assert check_transcript(load_adapter_class(DSH)).status == "skipped"
+    # with one: it runs, and says which instance it used
+    report = run_conformance(
+        load_adapter_class(FAKE), import_path=FAKE, instance=FakeAtifAgent()
+    )
+    transcript = next(check for check in report.checks if check.name == "transcript")
+    assert transcript.status == "pass"
+    assert "supplied instance" in transcript.detail
+
+
+def test_a_supplied_instance_that_lies_still_fails():
+    class Liar:
+        def read_trial_session(self):
+            return {"ok": True}
+
+    assert check_transcript(Liar, Liar()).status == "fail"
+
+
 def test_a_check_that_cannot_run_is_skipped_not_passed():
     class Unbuildable:
         def __init__(self, logs_dir):  # noqa: ANN001 - a required arg is the point

@@ -167,15 +167,24 @@ def check_accounting(
     )
 
 
-def check_transcript(adapter: type) -> ConformanceCheck:
-    instance, error = _instantiate(adapter)
+def check_transcript(adapter: type, instance: object | None = None) -> ConformanceCheck:
+    """Exercise ``read_trial_session()`` for real when an instance is available.
+
+    A live instance is preferred over constructing one: an adapter that needs
+    constructor arguments (``DshAgent`` needs ``logs_dir``) can only be exercised
+    with one, and "could not run" must not be confused with "works". Callers with
+    a real instance — a run, a plugin, a fixture — pass it in.
+    """
+    supplied = instance is not None
     if instance is None:
-        return ConformanceCheck(
-            "transcript",
-            "skipped",
-            f"adapter is not instantiable without arguments ({error}); "
-            "transcript shape was not exercised",
-        )
+        instance, error = _instantiate(adapter)
+        if instance is None:
+            return ConformanceCheck(
+                "transcript",
+                "skipped",
+                f"adapter is not instantiable without arguments ({error}); "
+                "pass instance=... from a real run to exercise it",
+            )
     try:
         transcript = instance.read_trial_session()  # type: ignore[attr-defined]
     except Exception as exc:  # noqa: BLE001 - a fresh instance has no session yet
@@ -198,10 +207,11 @@ def check_transcript(adapter: type) -> ConformanceCheck:
             "fail",
             "transcript carries no completeness record — cannot_judge could never fire",
         )
+    source = "supplied instance" if supplied else "fresh instance"
     return ConformanceCheck(
         "transcript",
         "pass",
-        f"ATIF step count={len(transcript.atif.steps)} "
+        f"{source}: ATIF step count={len(transcript.atif.steps)} "
         f"fields={[item.field for item in transcript.completeness.fields]}",
     )
 
@@ -214,6 +224,7 @@ def run_conformance(
     agents_root: Path | None = None,
     required_capabilities: list[str] | None = None,
     budget: object | None = None,
+    instance: object | None = None,
 ) -> ConformanceReport:
     """Run every check and report, including what could not be exercised."""
     report = ConformanceReport(adapter=import_path)
@@ -237,7 +248,7 @@ def run_conformance(
     report.checks.append(check_contract(adapter))
     report.checks.append(check_capabilities(import_path, adapter, required_capabilities))
     report.checks.append(check_accounting(adapter, budget))
-    report.checks.append(check_transcript(adapter))
+    report.checks.append(check_transcript(adapter, instance))
     return report
 
 
