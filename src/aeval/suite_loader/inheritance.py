@@ -47,6 +47,7 @@ __all__ = [
     "MAX_INHERITANCE_DEPTH",
     "InheritanceResolution",
     "check_no_harbor_overlap",
+    "merge_declarations",
     "chain_digest_of",
     "default_suites_root",
     "read_declaration",
@@ -212,8 +213,19 @@ def _union(base_items: list[Any], child_items: list[Any], where: str) -> list[An
 
 
 def _merge_declarations(
-    base: dict[str, Any], child: dict[str, Any], path: tuple[str, ...] = ()
+    base: dict[str, Any],
+    child: dict[str, Any],
+    path: tuple[str, ...] = (),
+    *,
+    union_paths: frozenset[tuple[str, ...]] = UNION_PATHS,
+    keyed_lists: dict[str, str] = KEYED_LISTS,
 ) -> dict[str, Any]:
+    """Deep-merge one declaration onto another under an explicit policy.
+
+    Policy lives in the arguments (not in the code path) because two layers use
+    this engine: suite declarations and agent declarations. One engine means a
+    base file behaves the same way wherever it is inherited from.
+    """
     out = deepcopy(base)
     for key, value in child.items():
         if key in RESOLVER_KEYS:
@@ -221,17 +233,32 @@ def _merge_declarations(
         here = path + (key,)
         current = out.get(key)
         where = ".".join(here)
-        if here in UNION_PATHS and isinstance(current, list) and isinstance(value, list):
+        if here in union_paths and isinstance(current, list) and isinstance(value, list):
             out[key] = _union(current, value, where)
-        elif key in KEYED_LISTS and isinstance(current, list) and isinstance(value, list):
-            out[key] = _merge_keyed(current, value, KEYED_LISTS[key], where)
+        elif key in keyed_lists and isinstance(current, list) and isinstance(value, list):
+            out[key] = _merge_keyed(current, value, keyed_lists[key], where)
         elif isinstance(current, dict) and isinstance(value, dict):
-            out[key] = _merge_declarations(current, value, here)
+            out[key] = _merge_declarations(
+                current, value, here, union_paths=union_paths, keyed_lists=keyed_lists
+            )
         elif key == "graders" and isinstance(current, list) and isinstance(value, list):
             out[key] = [*deepcopy(current), *deepcopy(value)]
         else:
             out[key] = deepcopy(value)
     return out
+
+
+def merge_declarations(
+    base: dict[str, Any],
+    child: dict[str, Any],
+    *,
+    union_paths: frozenset[tuple[str, ...]] = UNION_PATHS,
+    keyed_lists: dict[str, str] = KEYED_LISTS,
+) -> dict[str, Any]:
+    """Merge two declarations with the shared inheritance engine."""
+    return _merge_declarations(
+        base, child, (), union_paths=union_paths, keyed_lists=keyed_lists
+    )
 
 
 def _apply_remove(merged: dict[str, Any], remove: dict[str, list[str]], path: Path) -> None:

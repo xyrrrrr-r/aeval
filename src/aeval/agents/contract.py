@@ -40,6 +40,7 @@ from aeval.suite_models import SuiteError
 __all__ = [
     "KNOWN_CAPABILITIES",
     "AgentAdapter",
+    "capabilities_of",
     "declared_capabilities",
     "load_adapter_class",
     "required_capability_gaps",
@@ -100,6 +101,30 @@ def load_adapter_class(import_path: str) -> type:
     return target
 
 
+def capabilities_of(adapter: type) -> frozenset[str]:
+    """Capabilities a resolved adapter class declares via ``PROVIDES``."""
+    declared = getattr(adapter, PROVIDES_ATTR, None)
+    if declared is None:
+        raise SuiteError(
+            f"Agent adapter {describe_adapter(adapter)} declares no {PROVIDES_ATTR}. Declare the "
+            f"capabilities it offers, e.g. {PROVIDES_ATTR} = frozenset({{\"shell\"}}), "
+            "so a suite's driver.require can be checked before a trial starts."
+        )
+    if isinstance(declared, str) or not isinstance(declared, (frozenset, set, tuple, list)):
+        raise SuiteError(
+            f"{describe_adapter(adapter)}.{PROVIDES_ATTR} must be a collection of capability names, "
+            f"got {type(declared).__name__}"
+        )
+    names = set()
+    for item in declared:
+        if not isinstance(item, str) or not item.strip():
+            raise SuiteError(
+                f"{describe_adapter(adapter)}.{PROVIDES_ATTR} entries must be non-empty strings"
+            )
+        names.add(item.strip())
+    return frozenset(names)
+
+
 def declared_capabilities(import_path: str) -> frozenset[str]:
     """Capabilities the adapter at ``import_path`` declares via ``PROVIDES``.
 
@@ -107,24 +132,7 @@ def declared_capabilities(import_path: str) -> frozenset[str]:
     it offers cannot be paired with a suite that states requirements.
     """
     adapter = load_adapter_class(import_path)
-    declared = getattr(adapter, PROVIDES_ATTR, None)
-    if declared is None:
-        raise SuiteError(
-            f"Agent adapter {import_path} declares no {PROVIDES_ATTR}. Declare the "
-            f"capabilities it offers, e.g. {PROVIDES_ATTR} = frozenset({{\"shell\"}}), "
-            "so a suite's driver.require can be checked before a trial starts."
-        )
-    if isinstance(declared, str) or not isinstance(declared, (frozenset, set, tuple, list)):
-        raise SuiteError(
-            f"{import_path}.{PROVIDES_ATTR} must be a collection of capability names, "
-            f"got {type(declared).__name__}"
-        )
-    names = set()
-    for item in declared:
-        if not isinstance(item, str) or not item.strip():
-            raise SuiteError(f"{import_path}.{PROVIDES_ATTR} entries must be non-empty strings")
-        names.add(item.strip())
-    return frozenset(names)
+    return capabilities_of(adapter)
 
 
 def required_capability_gaps(

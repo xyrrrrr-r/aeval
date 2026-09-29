@@ -279,6 +279,52 @@ def probe_cmd(
         _die(str(exc), EXIT_VALIDATION_ERROR)
 
 
+@app.command("agents")
+def agents_cmd(
+    agents_dir: Annotated[Path, typer.Option(help="Directory holding agents/<id>.yaml")] = Path("agents"),
+) -> None:
+    """List declared agent adapters and prove each agrees with its adapter class.
+
+    The declaration is the discoverable surface; the class is what the runtime
+    reads. Printing both here — and failing loudly on disagreement — is what keeps
+    them from drifting apart unnoticed.
+    """
+    from aeval.agents.contract import load_adapter_class
+    from aeval.agents.declaration import (
+        declaration_class_mismatches,
+        discover_agent_declarations,
+        resolve_agent_declaration,
+    )
+    from aeval.suite_loader.paths import suite_path
+
+    try:
+        ids = discover_agent_declarations(agents_dir)
+        if not ids:
+            _die(f"no agent declarations under {agents_dir}", EXIT_VALIDATION_ERROR)
+        for agent_id in ids:
+            resolved = resolve_agent_declaration(
+                suite_path(Path(agents_dir).resolve(), f"{agent_id}.yaml"), agents_root=agents_dir
+            )
+            declaration = resolved.declaration
+            adapter = load_adapter_class(declaration.import_path)
+            mismatches = declaration_class_mismatches(declaration, adapter)
+            if mismatches:
+                raise SuiteError(
+                    f"agent {agent_id}: declaration disagrees with {declaration.import_path}: "
+                    + "; ".join(mismatches)
+                )
+            typer.echo(
+                f"agent {declaration.id} v{declaration.version} "
+                f"mode={declaration.mode} budget={declaration.budget_enforcement} "
+                f"provides={sorted(declaration.provides)} "
+                f"observations={sorted(declaration.observations)} "
+                f"extends={[source.path for source in resolved.sources[:-1]] or '(none)'}"
+            )
+        typer.echo(f"{len(ids)} agent declaration(s) agree with their adapter classes.")
+    except (SuiteError, ValueError, OSError) as exc:
+        _die(str(exc), EXIT_VALIDATION_ERROR)
+
+
 @app.command("list")
 def list_cmd(
     suites_dir: Annotated[Path, typer.Option()],

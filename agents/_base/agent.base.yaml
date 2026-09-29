@@ -1,0 +1,25 @@
+# Conventions every aeval agent adapter declaration inherits.
+#
+# Same engine, same semantics as suite declarations (suite_loader/inheritance.py):
+# a child may override any of these, `remove:` an inherited entry (naming an
+# absent entry is an error), and mappings are deep-merged. This file is never an
+# agent itself (`_`-prefixed paths are skipped by discovery).
+schema_version: 1
+
+# An adapter that cannot be metered must say so here rather than leaving it
+# implicit: a suite that caps spend refuses it at run start.
+budget_enforcement: none
+
+# Where the adapter writes: the sandbox is disposable unless declared otherwise.
+write_surface: ephemeral_overlay
+
+# No agent may keep conversation state server-side unless it declares it.
+server_side_session: forbidden
+
+# Nothing is assumed to require observation; a lock that pins a runtime still
+# forces the matching observation regardless of this list.
+observations: []
+
+# No capabilities are offered by default: a suite's driver.require is checked
+# against exactly what the declaration names.
+provides: []

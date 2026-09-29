@@ -1,0 +1,35 @@
+# The shipped DSH adapter. Values agree with aeval/agents/dsh/agent.py — the
+# declaration is validated against the class (a disagreement is an error).
+extends: _base/agent.base.yaml
+
+id: dsh
+version: "1"
+import_path: "aeval.agents.dsh.agent:DshAgent"
+
+provides:
+  - acp_stdio
+  - sdk_jsonrpc
+  - shell
+  - file_tools
+  - resume
+
+mode: acp_stdio
+budget_enforcement: gateway_lease
+transcript:
+  source: native_session_via_bridge
+  reader: dsh-official-session-reader
+  capabilities:
+    - atif_via_bridge
+    - claim_check
+    - token_usage
+  fields_available:
+    events: ok
+    token_usage: ok
+
+# Observed in the live sandbox and bound to the lock: the Node runtime the DSH
+# release is pinned against.
+observations:
+  - node
+
+sandbox_home: /logs/agent/dsh-home
+session_artifact_dir: dsh-home

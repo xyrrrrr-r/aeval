@@ -67,6 +67,23 @@ def test_list_discovers_suites():
     assert "refund-policy" in result.output
 
 
+def test_agents_lists_declarations_and_proves_they_match_their_classes():
+    """The declaration is the discoverable surface; the class is what runs."""
+    from pathlib import Path as _Path
+
+    root = _Path(__file__).resolve().parents[2] / "agents"
+    result = runner.invoke(app, ["agents", "--agents-dir", str(root)])
+    assert result.exit_code == 0, result.output
+    assert "agent dsh" in result.output
+    assert "agree with their adapter classes" in result.output
+
+
+def test_agents_rejects_a_missing_directory(tmp_path):
+    result = runner.invoke(app, ["agents", "--agents-dir", str(tmp_path / "nowhere")])
+    assert result.exit_code != 0
+    assert "no agent declarations" in result.output
+
+
 def test_list_rejects_missing_root(tmp_path):
     result = runner.invoke(app, ["list", "--suites-dir", str(tmp_path / "nowhere")])
     assert result.exit_code == 3

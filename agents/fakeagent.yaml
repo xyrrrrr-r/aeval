@@ -1,0 +1,24 @@
+# The reference conformance adapter (aeval/agents/testing/fake_agent.py): non-Node,
+# ATIF-only. It exists so the framework's "onboarding costs one adapter" claim is
+# testable without a second real agent.
+extends: _base/agent.base.yaml
+
+id: fakeagent
+version: "1"
+import_path: "aeval.agents.testing.fake_agent:FakeAtifAgent"
+
+provides:
+  - shell
+  - atif_native
+
+mode: installed_cli
+budget_enforcement: none
+transcript:
+  source: atif_native
+  reader: fake-atif-reader
+  capabilities:
+    - atif_native
+  fields_available:
+    events: ok
+
+write_surface: persistent
