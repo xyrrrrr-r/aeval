@@ -54,6 +54,7 @@ from aeval.contracts import (
     StopReason,
     TranscriptCapability,
 )
+from aeval.suite_models import SuiteError
 
 # Pinned product version. The registry entry below must name exactly this
 # version so every launch is reproducible (DEEPAGENTS-FACTS.md: version pins
@@ -115,11 +116,11 @@ class DeepgentTrialPaths:
 def default_deepagent_registry_entry() -> dict[str, Any]:
     """Inline ACP registry entry: the pinned dcode CLI as an ACP server.
 
-    Harbor's launcher runs ``<runner-venv>/bin/uvx <package> <args...>``
-    (acp.py ``_build_launcher_script``), so ``package`` is the uvx tool spec
-    and the version pin is part of it. Model routing (``OPENAI_BASE_URL``,
-    ``OPENAI_API_KEY``, …) reaches the server through the distribution env —
-    see ``model_env`` on the adapter.
+    The distribution is ``local``: the task image ships the package pinned by
+    :data:`_DEEPAGENTS_CODE_VERSION` and this entry runs its console script, so
+    a PyPI fetch at agent setup never exists. Model routing
+    (``OPENAI_BASE_URL``, ``OPENAI_API_KEY``, …) reaches the server through the
+    distribution env — see ``model_env`` on the adapter.
     """
     return {
         "id": "deepagents-code",
@@ -129,8 +130,13 @@ def default_deepagent_registry_entry() -> dict[str, Any]:
             "deepagents-code (dcode) exposed as an ACP server (dcode --acp)"
         ),
         "distribution": {
-            "uvx": {
-                "package": f"deepagents-code=={_DEEPAGENTS_CODE_VERSION}",
+            # The pinned CLI is baked into the task image (see the deepagent
+            # suites' Dockerfiles), because every suite here runs with
+            # ``network_mode = "no-network"`` and a uvx distribution would need
+            # PyPI at agent setup time. The version pin therefore lives in two
+            # places on purpose, and a test keeps them equal.
+            "local": {
+                "cmd": "dcode",
                 "args": ["--acp"],
                 "env": {},
             },
@@ -161,14 +167,26 @@ def facade_routing_env() -> dict[str, str]:
 def _with_distribution_env(
     entry: Mapping[str, Any], env: Mapping[str, str]
 ) -> dict[str, Any]:
-    """Merge owner-supplied env (model routing) into the uvx launcher env."""
+    """Merge owner-supplied env (model routing) into the launcher env.
+
+    Whichever distribution kind the entry declares carries the env; the
+    adapter must not care whether that is the local console script or a uvx
+    launch, only that the routing reaches the process.
+    """
     merged = json.loads(json.dumps(dict(entry)))
     distribution = merged.get("distribution") or {}
-    uvx = distribution.get("uvx") or {}
-    combined = dict(uvx.get("env") or {})
+    kinds = [kind for kind in ("local", "binary", "uvx", "npx") if distribution.get(kind)]
+    if len(kinds) != 1:
+        raise SuiteError(
+            "the deepagent registry entry must declare exactly one ACP "
+            f"distribution kind, found {sorted(kinds)}"
+        )
+    kind = kinds[0]
+    target = dict(distribution[kind])
+    combined = dict(target.get("env") or {})
     combined.update({str(key): str(value) for key, value in env.items()})
-    uvx["env"] = combined
-    distribution["uvx"] = uvx
+    target["env"] = combined
+    distribution[kind] = target
     merged["distribution"] = distribution
     return merged
 

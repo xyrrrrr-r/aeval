@@ -66,7 +66,7 @@ def _agent(logs_dir: Path, **kwargs) -> DeepgentAgent:
 
 
 def _distribution_env(agent: DeepgentAgent) -> dict[str, str]:
-    """The uvx launcher env the adapter handed to Harbor.
+    """The launcher env the adapter handed to Harbor.
 
     AcpAgent parses whatever the adapter passed into its own
     ``AcpRegistryEntry``, so the assertion reads the model Harbor will
@@ -74,7 +74,8 @@ def _distribution_env(agent: DeepgentAgent) -> dict[str, str]:
     """
     entry = getattr(agent, "_registry_entry", None)
     assert entry is not None, "the adapter exposed no registry entry"
-    return dict(entry.distribution.uvx.env)
+    assert entry.distribution.local is not None, "the entry is not the local distribution"
+    return dict(entry.distribution.local.env)
 
 
 class TestContract:
@@ -128,10 +129,12 @@ class TestContract:
 
     def test_default_registry_entry_is_pinned(self) -> None:
         entry = default_deepagent_registry_entry()
-        uvx = entry["distribution"]["uvx"]
-        assert uvx["package"] == "deepagents-code==0.1.78"
-        assert uvx["args"] == ["--acp"]
-        assert entry["version"] == DeepgentAgent.DEEPAGENTS_CODE_VERSION
+        # local, not uvx: the suites run with no network, so the CLI is baked
+        # into the image and the entry only names its console script
+        local = entry["distribution"]["local"]
+        assert local["cmd"] == "dcode"
+        assert local["args"] == ["--acp"]
+        assert entry["version"] == DeepgentAgent.DEEPAGENTS_CODE_VERSION == "0.1.78"
 
     def test_identity(self, tmp_path: Path) -> None:
         agent = _agent(tmp_path)

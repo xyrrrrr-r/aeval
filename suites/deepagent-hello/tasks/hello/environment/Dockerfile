@@ -11,6 +11,17 @@ RUN apt-get update \
     && apt-get install -y --no-install-recommends nodejs ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 
+# The agent CLI is baked in at build time: every suite here runs with
+# network_mode = "no-network", so a uvx distribution would need PyPI at agent
+# setup. The version is pinned to the adapter's _DEEPAGENTS_CODE_VERSION —
+# tests/integration/test_deepagent_budget_suite.py keeps the two equal.
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends python3-pip python3-venv \
+    && python3 -m venv /opt/deepagents \
+    && /opt/deepagents/bin/pip install --no-cache-dir deepagents-code==0.1.78 \
+    && ln -sf /opt/deepagents/bin/dcode /usr/local/bin/dcode \
+    && rm -rf /var/lib/apt/lists/*
+
 # Baseline seed (suite.yaml: baselines.workspace_ready): the ready file
 # proves the seeded copy reached the sandbox before the agent starts.
 RUN mkdir -p /workspace \

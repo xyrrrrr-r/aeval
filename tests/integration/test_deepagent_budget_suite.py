@@ -95,6 +95,27 @@ def test_the_budget_suite_keeps_the_generic_session_slot(suite):
     assert "dsh_session" not in plan
 
 
+def test_both_images_bake_the_cli_version_the_adapter_declares():
+    """``network_mode = "no-network"`` rules out a PyPI fetch at agent setup,
+    so the pinned CLI ships in the image. The pin therefore exists twice, and
+    these assertions are what keep the two copies equal."""
+    from aeval.agents.deepagent.agent import (
+        _DEEPAGENTS_CODE_VERSION,
+        default_deepagent_registry_entry,
+    )
+
+    pinned = f"deepagents-code=={_DEEPAGENTS_CODE_VERSION}"
+    for suite in (SUITE, HELLO):
+        dockerfile = (suite / "tasks" / "hello" / "environment" / "Dockerfile").read_text("utf-8")
+        assert pinned in dockerfile, f"{suite.name} does not bake {pinned}"
+        assert "ln -sf /opt/deepagents/bin/dcode /usr/local/bin/dcode" in dockerfile
+    # the entry runs the console script the image links, not a downloaded tool
+    entry = default_deepagent_registry_entry()
+    assert entry["distribution"]["local"]["cmd"] == "dcode"
+    assert entry["distribution"]["local"]["args"] == ["--acp"]
+    assert "uvx" not in entry["distribution"]
+
+
 def test_the_image_ships_node_for_the_facade():
     """The declared control stack runs inside the sandbox: without node in the
     image, aeval's health gate would fail every trial after uploading."""
