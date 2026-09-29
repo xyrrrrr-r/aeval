@@ -68,6 +68,117 @@ class _FakeTranscript:
         return json.dumps({"events": [], "stop_reason": "agent_exit_0"}, indent=indent)
 
 
+def test_the_session_record_lands_in_the_declared_flavor_slot(tmp_path):
+    """A non-DSH adapter's record must go to ITS slot.
+
+    example-lab: the host-side read of the ACP record succeeded, but the producer
+    wrote the historical ``dsh_session`` slot, so the trial was refused for
+    "collect outcomes missing for required outputs: ['agent_session_record']".
+    """
+    trial_dir = tmp_path / "declared"
+    outcome, ref = produce_session_record(
+        trial_dir, b"acp summary bytes", flavor="agent_session_record"
+    )
+    assert outcome.name == "agent_session_record"
+    assert outcome.output_path == output_path_for("agent_session_record")
+    assert outcome.output_path == "agent_session/record"
+    assert (trial_dir / "agent_session" / "record").read_bytes() == b"acp summary bytes"
+    assert ref.path == "agent_session/record"
+    # and the historical DSH slot was NOT written
+    assert not (trial_dir / FIXED_OUTPUT_PATHS["dsh_session"]).exists()
+
+
+def test_the_dsh_default_keeps_the_historical_plan_byte_identical(tmp_path):
+    """Sealed DSH runs must not move: same name, same path, same command."""
+    trial_dir = tmp_path / "dsh"
+    outcome, _ = produce_session_record(trial_dir, b"dsh bytes")
+    assert outcome.name == "dsh_session"
+    assert outcome.output_path == FIXED_OUTPUT_PATHS["dsh_session"]
+    assert outcome.command == "aeval: dsh_session download"
+
+
+def test_an_unknown_session_record_flavor_is_refused(tmp_path):
+    from aeval.hooks.collectors import CollectionProducerError
+
+    with pytest.raises(CollectionProducerError, match="unknown session-record flavor"):
+        produce_session_record(tmp_path, b"x", flavor="gpt_session")
+
+
+class _CannedExec:
+    """Harbor-shaped results for the runtime-dump probes."""
+
+    async def exec(self, command: str):
+        from types import SimpleNamespace
+
+        for key, value in (
+            ("uname -m", "aarch64"),
+            ("uname -sr", "Linux 6.6.0"),
+            ("node --version", "v24.20.0"),
+        ):
+            if key in command:
+                return SimpleNamespace(return_code=0, stdout=value, stderr="")
+        if command.startswith("cat /workspace/"):
+            name = command.rsplit("/", 1)[-1]
+            return SimpleNamespace(return_code=0, stdout=f"observed:{name}", stderr="")
+        return SimpleNamespace(return_code=127, stdout="", stderr="not found")
+
+
+class _FlavoredEnv:
+    async def exec(self, command: str):
+        return await _CannedExec().exec(command)
+
+
+class _FlavoredAgent:
+    """A non-DSH adapter: its own slot, its own record reader."""
+
+    SESSION_RECORD_OUTPUT = "agent_session_record"
+
+    def read_session_record(self) -> bytes:
+        return b"acp summary bytes"
+
+    def read_trial_session(self):
+        return _FakeTranscript()
+
+
+class _FlavoredDriver:
+    session_record = "agent_session_record"
+    workspace_dir = "/workspace"
+
+
+async def test_a_declared_flavor_is_what_the_collect_plan_collects(
+    tmp_path, runtime_lock
+):
+    """The collect plan follows the suite's declared flavor end to end.
+
+    The producer honors the flavor and ``collect_trial_evidence`` passes the
+    suite's declaration into it. example-lab found the two halves disagreeing only on
+    a real trial: the record was read host-side, landed in the DSH slot, and the
+    trial was refused for a missing required output.
+    """
+    from types import SimpleNamespace
+
+    from aeval.hooks.collection import collect_trial_evidence
+
+    trial_dir = tmp_path / "declared"
+    suite = SimpleNamespace(
+        overlay=SimpleNamespace(observables=[], driver=_FlavoredDriver())
+    )
+    manifest = await collect_trial_evidence(
+        trial_dir=trial_dir,
+        trial_id="t1",
+        suite=suite,
+        environment=_FlavoredEnv(),
+        agent=_FlavoredAgent(),
+        runtime_lock=runtime_lock,
+        session_id="sess-1",
+    )
+    names = {o.name for o in manifest.outcomes}
+    assert "agent_session_record" in names
+    assert "dsh_session" not in names
+    assert (trial_dir / output_path_for("agent_session_record")).is_file()
+    assert not (trial_dir / FIXED_OUTPUT_PATHS["dsh_session"]).exists()
+
+
 def _collect_everything(trial_dir: Path, runtime_lock: RuntimeLock, suite):
     outcomes, artifacts = [], []
     for producer, payload in (

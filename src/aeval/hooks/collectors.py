@@ -39,6 +39,7 @@ __all__ = [
     "produce_mock_call_log",
     "produce_session_record",
     "produce_canonical_transcript",
+    "produce_declared_artifact",
     "produce_observable",
     "write_collection_manifest",
 ]
@@ -157,12 +158,34 @@ def produce_mock_call_log(
 
 
 def produce_session_record(
-    trial_dir: Path, session_bytes: bytes
+    trial_dir: Path, session_bytes: bytes, flavor: str = "dsh_session"
 ) -> tuple[CollectOutcome, ArtifactRef]:
-    """The downloaded DSH session record, at its fixed path."""
+    """The agent's official session record, in the slot the suite declared.
+
+    The slot is agent-flavored (``driver.session_record``): ``dsh_session`` for
+    DSH, ``agent_session_record`` for the generalized flavor, whose fixed path is
+    ``agent_session/record``. Writing the historical DSH slot for a non-DSH
+    adapter leaves the trial's required output missing even though the read
+    succeeded — example-lab caught exactly that: the ACP record was read host-side,
+    landed in the DSH path, and the trial was refused for "collect outcomes
+    missing for required outputs: ['agent_session_record']". The default keeps
+    the historical DSH plan byte-identical (name, path and command).
+    """
+    from aeval.agents.contract import SESSION_RECORD_OUTPUTS
+
+    if flavor not in SESSION_RECORD_OUTPUTS:
+        raise CollectionProducerError(
+            f"unknown session-record flavor {flavor!r} — expected one of "
+            f"{sorted(SESSION_RECORD_OUTPUTS)}"
+        )
+    command = (
+        "aeval: dsh_session download"
+        if flavor == "dsh_session"
+        else f"aeval: {flavor} read"
+    )
     return _produce_bytes(
-        trial_dir, "dsh_session", session_bytes, "application/octet-stream",
-        command="aeval: dsh_session download",
+        trial_dir, flavor, session_bytes, "application/octet-stream",
+        command=command,
     )
 
 
@@ -178,6 +201,21 @@ def produce_canonical_transcript(
     return _produce_bytes(
         trial_dir, "canonical_transcript", content, "application/json",
         command="aeval: canonical_transcript build",
+    )
+
+
+def produce_declared_artifact(
+    trial_dir: Path, logical_name: str, content: bytes
+) -> tuple[CollectOutcome, ArtifactRef]:
+    """One adapter-declared evidence artifact, at its namespaced fixed path.
+
+    ``logical_name`` carries the ``agent_artifact:`` prefix; its path comes from
+    the same fixed table discipline as every other output, so a declaration names
+    evidence without being able to relocate or rename reserved slots.
+    """
+    return _produce_bytes(
+        trial_dir, logical_name, content, "application/octet-stream",
+        command=f"aeval: {logical_name} adapter artifact",
     )
 
 
