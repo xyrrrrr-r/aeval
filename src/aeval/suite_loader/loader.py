@@ -10,13 +10,17 @@ from __future__ import annotations
 from pathlib import Path, PurePosixPath, PureWindowsPath
 from typing import Sequence
 
+from aeval.suite_loader.inheritance import (
+    chain_digest_of,
+    check_no_harbor_overlap,
+    default_suites_root,
+    resolve_inheritance,
+)
 from aeval.suite_models import (
-    HARBOR_OWNED_TOP_KEYS,
     HarborInputs,
     ResolvedSuite,
     SuiteError,
     SuiteOverlay,
-    load_suite_yaml,
     overlay_digest_of,
 )
 from aeval.contracts import (
@@ -33,6 +37,7 @@ __all__ = [
     "load_suite",
     "resolve_harbor_inputs",
     "overlay_digest",
+    "inherited_source_paths",
     "assert_unique_suite_identity",
     "render_suite_explanation",
 ]
@@ -42,9 +47,11 @@ def discover_suites(suites_dirs: Sequence[Path]) -> list[Path]:
     """Return suite directories (containing suite.yaml), deepest-first stable.
 
     Every directory that has a suite.yaml counts; nested suites are
-    independent. A suites root that does not exist is an error — silent
-    empty discovery would let a run start with zero suites and look
-    successful.
+    independent. Any path segment starting with ``_`` is skipped: that is
+    where shared convention *bases* live (``_base/*.base.yaml``), and a base
+    must never be loaded or identity-checked as a suite. A suites root that
+    does not exist is an error — silent empty discovery would let a run
+    start with zero suites and look successful.
     """
     found: list[Path] = []
     for root in suites_dirs:
@@ -52,38 +59,39 @@ def discover_suites(suites_dirs: Sequence[Path]) -> list[Path]:
         if not root.is_dir():
             raise SuiteError(f"suites directory does not exist: {root}")
         for candidate in sorted(root.rglob("suite.yaml")):
+            if any(part.startswith("_") for part in candidate.relative_to(root).parts[:-1]):
+                continue
             found.append(candidate.parent)
     return found
 
 
-def _check_no_harbor_overlap(data: dict, path: Path) -> None:
-    overlap = sorted(set(data) & HARBOR_OWNED_TOP_KEYS)
-    if overlap:
-        raise SuiteError(
-            f"{path}: suite.yaml restates Harbor-owned facts {overlap}; "
-            "write them in the Harbor task/job files instead "
-            "(only image.pin/image.rebuild narrowing is allowed)"
-        )
+def load_suite(path: Path, suites_root: Path | None = None) -> ResolvedSuite:
+    """Load a suite: resolve its inheritance chain, then validate the overlay.
 
-
-def load_suite(path: Path) -> ResolvedSuite:
+    Every file in the chain goes through the Harbor-overlap check (a base
+    may not restate a Harbor-owned fact either), and the chain's digests
+    feed ``overlay_chain_digest`` so inherited content is part of run
+    identity — see ``aeval.suite_loader.inheritance``.
+    """
     path = Path(path)
     suite_yaml = path / "suite.yaml"
     if not suite_yaml.is_file():
         raise SuiteError(f"not a suite directory (missing suite.yaml): {path}")
-    data = load_suite_yaml(suite_yaml)
-    _check_no_harbor_overlap(data, suite_yaml)
+    resolution = resolve_inheritance(suite_yaml, suites_root)
     try:
-        overlay = SuiteOverlay.model_validate(data)
+        overlay = SuiteOverlay.model_validate(resolution.data)
     except SuiteError:
         raise
     except Exception as exc:
         raise SuiteError(f"{suite_yaml}: invalid suite overlay: {exc}") from exc
-    digest = overlay_digest_of(suite_yaml)
     return ResolvedSuite(
         overlay=overlay,
         suite_dir=path,
-        suite_yaml_digest=digest,
+        # Raw child bytes: unchanged meaning, so pre-inheritance evidence
+        # still recomputes.
+        suite_yaml_digest=overlay_digest_of(suite_yaml),
+        overlay_chain_digest=chain_digest_of(resolution.sources, resolution.data),
+        sources=list(resolution.sources),
     )
 
 
@@ -176,6 +184,23 @@ def resolve_harbor_inputs(suite: ResolvedSuite) -> HarborInputs:
     )
 
 
+def inherited_source_paths(suite: ResolvedSuite) -> list[Path]:
+    """Absolute paths of the base files this suite extends (chain order).
+
+    Provenance must cover them: with inheritance, part of a suite's
+    effective configuration lives outside its own directory.
+    """
+    root = default_suites_root(Path(suite.suite_dir))
+    paths: list[Path] = []
+    for source in suite.sources:
+        if source.role != "base":
+            continue
+        candidate = root / source.path
+        if candidate.is_file():
+            paths.append(candidate)
+    return paths
+
+
 def overlay_digest(suite_yaml: Path) -> str:
     suite_yaml = Path(suite_yaml)
     if not suite_yaml.is_file():
@@ -194,17 +219,17 @@ def assert_unique_suite_identity(suites: Sequence[ResolvedSuite]) -> None:
         key = suite.id
         if key in seen:
             prev_digest, prev = seen[key]
-            if prev_digest != suite.suite_yaml_digest:
+            if prev_digest != suite.identity_digest:
                 raise SuiteError(
                     f"duplicate suite identity {key!r} with different content:\n"
                     f"  {prev.suite_dir} (digest {prev_digest[:12]})\n"
-                    f"  {suite.suite_dir} (digest {suite.suite_yaml_digest[:12]})"
+                    f"  {suite.suite_dir} (digest {suite.identity_digest[:12]})"
                 )
             raise SuiteError(
                 f"duplicate suite identity {key!r} at {prev.suite_dir} and "
                 f"{suite.suite_dir}"
             )
-        seen[key] = (suite.suite_yaml_digest, suite)
+        seen[key] = (suite.identity_digest, suite)
 
 
 def render_suite_explanation(suite: ResolvedSuite) -> str:
@@ -219,6 +244,7 @@ def render_suite_explanation(suite: ResolvedSuite) -> str:
         f"# Suite {o.id} v{o.version}",
         "",
         f"- suite.yaml digest: {suite.suite_yaml_digest[:12]}…",
+        f"- overlay chain digest: {suite.identity_digest[:12]}…",
         f"- Harbor dataset: {o.harbor.dataset}",
         f"- Harbor job: {o.harbor.job}",
         f"- clock: {o.clock.mode}" + (f" epoch={o.clock.epoch}" if o.clock.epoch else ""),
@@ -226,7 +252,15 @@ def render_suite_explanation(suite: ResolvedSuite) -> str:
         f"- provenance: source={o.provenance.source} license={o.provenance.license}"
         f" data_imported={o.provenance.data_imported}",
         "",
-        "## Baselines (from suite.yaml overlay)",
+        "## Sources (inheritance chain, base first)",
+    ]
+    for source in suite.sources:
+        lines.append(f"- [{source.role}] {source.path} (sha256 {source.digest[:12]}…)")
+    if not suite.sources or len(suite.sources) == 1:
+        lines.append("- (no extends: this suite.yaml is the only source)")
+    lines += [
+        "",
+        "## Baselines (from the resolved overlay)",
     ]
     for b in o.baselines:
         if b.assert_expr is not None:
@@ -234,11 +268,11 @@ def render_suite_explanation(suite: ResolvedSuite) -> str:
         else:
             lines.append(f"- {b.id}: probe={b.probe!r} equals={b.equals!r}")
     lines.append("")
-    lines.append("## Observables (from suite.yaml overlay)")
+    lines.append("## Observables (from the resolved overlay)")
     for obs in o.observables:
         lines.append(f"- {obs.name}: {obs.type} <- {obs.source}")
     lines.append("")
-    lines.append("## Verdict (from suite.yaml overlay)")
+    lines.append("## Verdict (from the resolved overlay)")
     lines.append(f"- requirements: {', '.join(o.verdict.requirements)}")
     for g in o.verdict.resolved_graders():
         lines.append(
@@ -260,7 +294,8 @@ def render_suite_explanation(suite: ResolvedSuite) -> str:
     lines.append("")
     lines.append(
         "NOTE: environment image, seeds, egress, budget, k/parallel/retry "
-        "live in the Harbor task/job files referenced above — this page is "
+        "live in the Harbor task/job files referenced above; convention facts "
+        "may come from an extended base, listed under Sources — this page is "
         "a rendered artifact, not an input."
     )
     return "\n".join(lines)

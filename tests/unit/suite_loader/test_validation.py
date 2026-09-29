@@ -76,11 +76,16 @@ def test_demo_fixture_loads_and_digest_is_stable(tmp_path):
     suite = load_suite(suite_dir)
     assert suite.id == "refund-policy"
     assert suite.version == "1.4.0"
-    assert suite.identity() == (suite.id, suite.version, suite.suite_yaml_digest)
+    # identity() carries the chain digest (resolved overlay + source files);
+    # a suite without `extends` still has exactly one source.
+    assert suite.identity() == (suite.id, suite.version, suite.overlay_chain_digest)
+    assert suite.extends == [] and [s.role for s in suite.sources] == ["child"]
+    # the raw-bytes digest keeps its old meaning, so sealed evidence recomputes
     assert overlay_digest(suite_dir / "suite.yaml") == suite.suite_yaml_digest
-    # same bytes → same digest (reproducibility)
+    # same bytes → same digests (reproducibility)
     again = load_suite(suite_dir)
     assert again.suite_yaml_digest == suite.suite_yaml_digest
+    assert again.overlay_chain_digest == suite.overlay_chain_digest
 
 
 def test_discover_missing_root_is_error(tmp_path):

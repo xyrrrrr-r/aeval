@@ -1,30 +1,22 @@
 schema_version: 2
 id: e2e-hello
 version: 0.1.0
+# 时钟、ready 观测点与 baseline、六项 requirements、驱动能力、指标种类、
+# datasets 路径约定都来自环境级基座；这里只写本套件特有的事实。
+# （套件与基座都会被 Harbor-overlap 检查：基座不得复述 Harbor 事实。）
+extends: _base/harbor.base.yaml
 harbor:
-  dataset: datasets/local.yaml
   job: jobs/e2e-hello.yaml
-baselines:
-  # The baseline proves the seeded copy arrived: the environment image
-  # ships /workspace/ready containing "true" (see environment/Dockerfile).
-  # The probe goes through the SUITE-DECLARED observable (P0-2: probes
-  # resolve suite specs; raw file:/db: probes fail closed).
-  - id: workspace_ready
-    probe: "observable:ready"
-    equals: "true"
-clock:
-  mode: real
 observables:
   # file: sources only — P0-2 made db:/screenshot:/dom: probes explicitly
   # unsupported (fail closed); the e2e chain reads files out-of-band.
-  - { name: ready, type: string, source: "file:/workspace/ready" }
   - { name: result, type: string, source: "file:/workspace/result" }
+# 基座提供的 baseline（id: ready）断言 /workspace/ready == "true"：证明种子
+# 拷贝确实到位（环境镜像 ship 了该文件，见 environment/Dockerfile），且 probe
+# 走的是套件声明的 observable（P0-2：裸 file:/db: probe 一律 fail closed）。
 verdict:
-  requirements: [input_complete, agent_finished, integration_valid, render_valid, judge_finished, artifact_schema_ok]
   graders:
     default: { impl: "graders/hello_outcome.py@v1", layer: outcome }
 metrics:
   - { id: reliability, kind: pass_pow_k, k: 5 }
-driver:
-  require: [acp_stdio, sdk_jsonrpc]
 provenance: { source: authored-internally, license: MIT }

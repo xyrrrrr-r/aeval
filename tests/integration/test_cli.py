@@ -45,7 +45,7 @@ def harbor_calls(monkeypatch, runtime_lock):
 
     monkeypatch.setattr(subprocess, "run", run)
     monkeypatch.setattr("aeval.provenance.build_runtime_lock", lambda **kwargs: runtime_lock)
-    monkeypatch.setattr("aeval.suite_loader.composition.suite_source_commit", lambda path: "a" * 40)
+    monkeypatch.setattr("aeval.suite_loader.composition.suite_source_commit", lambda path, extra=(): "a" * 40)
     return calls
 
 
@@ -219,7 +219,7 @@ def test_malformed_suite_yaml_is_a_validation_error(native_suite_dir):
 def test_uncommitted_suite_never_reaches_harbor(native_suite_dir, tmp_path, harbor_calls, monkeypatch):
     from aeval.suite_models import SuiteError
 
-    def missing_commit(path):
+    def missing_commit(path, extra=()):
         raise SuiteError("Suite has uncommitted changes")
 
     monkeypatch.setattr("aeval.suite_loader.composition.suite_source_commit", missing_commit)
@@ -383,7 +383,7 @@ def test_run_final_gate_requires_complete_chain(tmp_path, native_suite_dir, monk
 
     monkeypatch.setattr(subprocess, "run", harbor_without_summary)
     monkeypatch.setattr("aeval.provenance.build_runtime_lock", lambda **kwargs: runtime_lock)
-    monkeypatch.setattr("aeval.suite_loader.composition.suite_source_commit", lambda path: "a" * 40)
+    monkeypatch.setattr("aeval.suite_loader.composition.suite_source_commit", lambda path, extra=(): "a" * 40)
 
     run_dir = tmp_path / "gate"
     result = runner.invoke(app, [
@@ -402,7 +402,7 @@ def test_run_seals_when_chain_is_whole(tmp_path, native_suite_dir, monkeypatch, 
 
     monkeypatch.setattr(subprocess, "run", _fake_harbor(returncode=0))
     monkeypatch.setattr("aeval.provenance.build_runtime_lock", lambda **kwargs: runtime_lock)
-    monkeypatch.setattr("aeval.suite_loader.composition.suite_source_commit", lambda path: "a" * 40)
+    monkeypatch.setattr("aeval.suite_loader.composition.suite_source_commit", lambda path, extra=(): "a" * 40)
 
     run_dir = tmp_path / "whole"
     result = runner.invoke(app, [
@@ -518,7 +518,7 @@ def test_run_pins_sandbox_image_in_runtime_lock(tmp_path, native_suite_dir, monk
         subprocess, "run",
         lambda args, **kwargs: SimpleNamespace(returncode=7),
     )
-    monkeypatch.setattr("aeval.suite_loader.composition.suite_source_commit", lambda path: "a" * 40)
+    monkeypatch.setattr("aeval.suite_loader.composition.suite_source_commit", lambda path, extra=(): "a" * 40)
     run_dir = tmp_path / "myrun"
     result = runner.invoke(app, [
         "run", "--suite", str(native_suite_dir), "--run-dir", str(run_dir),

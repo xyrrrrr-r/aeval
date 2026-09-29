@@ -1,0 +1,48 @@
+# 共享约定基座（aeval 自己那一层）
+#
+# 这里只放"每个套件都要写、且写法必须一致"的约定：时钟、seed 观测点及其
+# baseline、固定的六项 requirements、驱动能力、指标种类、datasets 路径约定。
+#
+# 不在这里放的东西（有意为之）：
+#   * Harbor 的事实 —— 环境镜像、attempts/k、并发、重试、timeout、budget、
+#     egress 等一律留在 Harbor 的 task/job 文件里。基座与套件一样会被
+#     `check_no_harbor_overlap` 检查，基座不能成为复述 Harbor 事实的后门。
+#   * 身份 —— id / version / harbor.job 禁止出现在基座里，每个套件自己声明，
+#     因为它们决定"跑的是哪一个套件"。
+#   * provenance —— 默认不继承：套件必须自己声明来源，或显式写
+#     `provenance: inherit`。静默继承别人的许可证声明等于洗白来源。
+#
+# 套件按 `extends: _base/harbor.base.yaml` 引用；同键覆盖、新键追加，
+# 删除用 `remove:`。合并语义见 src/aeval/suite_loader/inheritance.py。
+schema_version: 2
+
+clock:
+  mode: real
+
+# 每个任务镜像都要在 /workspace/ready 里写入 "true"（见各套件的
+# environment/base-image Dockerfile）。它同时是"镜像/seed 确实就位"的
+# baseline：没有它，套件不会开始跑。
+observables:
+  - { name: ready, type: string, source: "file:/workspace/ready" }
+baselines:
+  - id: ready
+    probe: "observable:ready"
+    equals: "true"
+
+verdict:
+  # 固定的六项：判定"这一次 trial 是否可判"的口径，跨套件必须一致。
+  # Harbor job 文件里若出现同名键会被拒（aeval 事实只写在 suite.yaml 侧）。
+  requirements: [input_complete, agent_finished, integration_valid, render_valid, judge_finished, artifact_schema_ok]
+  graders: {}
+
+driver:
+  # 驱动能力要求：DSH 的 ACP stdio 通道 + SDK JSON-RPC。
+  require: [acp_stdio, sdk_jsonrpc]
+
+metrics:
+  # 只有 kind 是约定；k（几次尝试算过）按套件的尝试次数覆盖。
+  - { id: reliability, kind: pass_pow_k }
+
+harbor:
+  # 套件目录内的数据集引用约定；具体选哪个 job 由套件自己声明。
+  dataset: datasets/local.yaml

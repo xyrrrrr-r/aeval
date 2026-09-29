@@ -7,7 +7,8 @@ e2b/DSH 前置条件（见下）。
 ## 布局
 
 ```
-suite.yaml                    # schema 2 覆盖层（基线/观测/verdict/metrics）
+suite.yaml                    # schema 2 覆盖层；extends _base/harbor.base.yaml，
+                              # 本文件只写身份 + 特有观测/grader/metric/provenance
 datasets/local.yaml           # path: tasks
 jobs/e2e-hello.yaml           # n_attempts=5, 顺序并发 1, agent: nop
 graders/hello_outcome.py      # GRADER_ID="hello-outcome"@v1, layer=outcome

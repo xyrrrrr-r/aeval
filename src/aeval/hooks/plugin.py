@@ -77,7 +77,11 @@ def create_run_context(job: Any) -> EvaluationContext:
     if Path(job.job_dir).resolve() != declared_dir.resolve():
         raise HookRegistrationError("Job output directory differs from intent config")
     if (manifest.overlay.suite_id != suite.id or manifest.overlay.suite_version != suite.version
-            or manifest.overlay.overlay_digest != suite.suite_yaml_digest):
+            or manifest.overlay.overlay_digest != suite.suite_yaml_digest
+            # Inherited content is part of identity: a base edited between
+            # intent and job start must fail registration, not run silently.
+            or (manifest.overlay.overlay_chain_digest is not None
+                and manifest.overlay.overlay_chain_digest != suite.identity_digest)):
         raise HookRegistrationError("suite identity differs from intent manifest")
     trials_dir = Path(job.job_dir).resolve()
     if trials_dir == root or not trials_dir.is_relative_to(root):
@@ -535,6 +539,8 @@ class AevalPlugin:
                 "id": context.suite.id,
                 "version": context.suite.version,
                 "overlay_digest": context.suite.suite_yaml_digest,
+                "overlay_chain_digest": context.suite.identity_digest,
+                "sources": [source.model_dump() for source in context.suite.sources],
             },
             "unobserved_trials": unobserved,
             "exclusions": context.exclusion_lines(),

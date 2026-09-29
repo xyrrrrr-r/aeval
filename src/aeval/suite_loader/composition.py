@@ -2,12 +2,13 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 import re
 import subprocess
 import tomllib
 from copy import deepcopy
 from pathlib import Path, PurePosixPath, PureWindowsPath
-from typing import Any
+from typing import Any, Sequence
 
 import yaml
 from harbor.models.dataset.manifest import DatasetManifest
@@ -18,42 +19,13 @@ from harbor.utils.env import is_env_template, is_sensitive_env_key
 from pydantic import BaseModel, ValidationError
 
 from aeval.suite_loader.loader import resolve_harbor_inputs
+from aeval.suite_loader.paths import suite_path
 from aeval.suite_loader.validation import (
     validate_harbor_job_shape,
     validate_task_provenance,
     validate_thin_overlay,
 )
 from aeval.suite_models import ResolvedSuite, SuiteError
-
-
-def suite_path(root: Path, reference: str | Path) -> Path:
-    reference = reference.as_posix() if isinstance(reference, Path) else reference
-    posix, windows = PurePosixPath(reference), PureWindowsPath(reference)
-    if (
-        not posix.parts
-        or posix.is_absolute()
-        or windows.drive
-        or windows.root
-        or ".." in posix.parts
-        or ".." in windows.parts
-        or any(c in '<>:"\\|?*' or ord(c) < 32 for c in reference)
-        or any(p.endswith((".", " ")) or PureWindowsPath(p).is_reserved() for p in posix.parts)
-    ):
-        raise SuiteError(f"Suite reference must be a portable relative path: {reference!r}")
-    root = root.resolve()
-    path = root / reference
-    try:
-        path.resolve().relative_to(root)
-        for candidate in (path, *path.parents):
-            if candidate == root:
-                break
-            if candidate.is_symlink() or candidate.is_junction():
-                raise SuiteError(f"Linked suite inputs are not supported: {candidate}")
-    except (OSError, ValueError, RuntimeError) as exc:
-        if isinstance(exc, SuiteError):
-            raise
-        raise SuiteError(f"Suite reference escapes its root: {reference!r}") from exc
-    return path
 
 
 def read_mapping(path: Path) -> dict[str, Any]:
@@ -280,11 +252,21 @@ def compose_harbor_job(suite: ResolvedSuite) -> JobConfig:
     return job
 
 
-def suite_source_commit(suite_dir: Path) -> str:
+def suite_source_commit(suite_dir: Path, extra_paths: Sequence[Path] = ()) -> str:
+    """The committed source of a run: the suite AND every extended base file.
+
+    Inheritance means part of a suite's effective configuration can live
+    outside its own directory, so the git evidence must cover the whole
+    chain — an untracked or dirty base would otherwise be reported as a
+    clean, committed source. All queries stay read-only.
+    """
+
+    suite_dir = Path(suite_dir).resolve()
+
     def git(*args: str) -> str:
         try:
             result = subprocess.run(
-                ["git", "-C", str(suite_dir.resolve()), *args],
+                ["git", "-C", str(suite_dir), *args],
                 capture_output=True, text=True, encoding="utf-8", errors="replace", check=False,
             )
         except OSError as exc:
@@ -293,9 +275,15 @@ def suite_source_commit(suite_dir: Path) -> str:
             raise SuiteError("Run provenance requires a committed suite directory; import/probe do not require Git")
         return result.stdout.strip()
 
-    git("ls-files", "--error-unmatch", "--", "suite.yaml")
-    if git("status", "--porcelain", "--untracked-files=normal", "--", "."):
-        raise SuiteError("Suite has uncommitted changes; commit the version before running")
+    # Pathspecs are resolved against the suite directory, so a base beside it
+    # is named `../_base/<name>.base.yaml` — still inside the repository, and
+    # anything outside it fails the tracked-file check below.
+    extra = [os.path.relpath(Path(path).resolve(), suite_dir).replace(os.sep, "/") for path in extra_paths]
+    git("ls-files", "--error-unmatch", "--", "suite.yaml", *extra)
+    if git("status", "--porcelain", "--untracked-files=normal", "--", ".", *extra):
+        raise SuiteError(
+            "Suite or an extended base has uncommitted changes; commit the version before running"
+        )
     if git("ls-files", "--others", "--ignored", "--exclude-standard", "--", "."):
         raise SuiteError("Suite contains ignored files absent from its source commit")
     commit = git("rev-parse", "HEAD")

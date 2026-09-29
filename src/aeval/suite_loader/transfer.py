@@ -66,6 +66,13 @@ def _transfer(src: Path, out: Path, *, format: str, version: str | None) -> Path
     if not out.parent.is_dir():
         raise SuiteError(f"Output parent directory does not exist: {out.parent}")
     suite = load_suite(src)
+    if suite.extends:
+        raise SuiteError(
+            f"{src}: suite inherits {suite.extends} — transfer copies only this "
+            "directory, so it would silently drop the base file(s). Refused. "
+            "Either move the bases inside this suite directory, or inline the "
+            "resolved facts (see `aeval explain`) before transferring."
+        )
     _license(suite.overlay.provenance, src)
     entries = _source_entries(src)
     for file in entries:

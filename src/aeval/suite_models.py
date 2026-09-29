@@ -10,6 +10,7 @@ error, not a merge.
 from __future__ import annotations
 
 from hashlib import sha256
+import json
 import re
 from typing import Any, Literal, Self
 
@@ -31,6 +32,7 @@ __all__ = [
     "DriverSpec",
     "ProvenanceInfo",
     "HarborInputs",
+    "SuiteSource",
     "SuiteOverlay",
     "ResolvedSuite",
     "load_suite_yaml",
@@ -276,12 +278,32 @@ class SuiteOverlay(_SuiteModel):
         return v
 
 
+class SuiteSource(_SuiteModel):
+    """One manifest in a suite's inheritance chain (base first, child last).
+
+    ``path`` is portable and relative to the suites root; ``digest`` is the
+    sha256 of that file's raw bytes. The chain is what makes an inherited
+    fact visible to run identity: editing a base changes every dependent
+    suite's ``overlay_chain_digest``.
+    """
+
+    path: str
+    digest: str
+    role: Literal["base", "child"]
+
+
 class ResolvedSuite(_SuiteModel):
     model_config = {"arbitrary_types_allowed": True}
 
     overlay: SuiteOverlay
     suite_dir: Any  # Path
+    # Raw bytes of THIS suite's suite.yaml. Kept unchanged (and still computed)
+    # so evidence sealed before inheritance existed can be recomputed.
     suite_yaml_digest: str
+    # Digest of the resolved overlay PLUS every source file in the chain.
+    # This is what identity and comparability use.
+    overlay_chain_digest: str = ""
+    sources: list[SuiteSource] = Field(default_factory=list)
 
     @property
     def id(self) -> str:
@@ -291,8 +313,31 @@ class ResolvedSuite(_SuiteModel):
     def version(self) -> str:
         return self.overlay.version
 
+    @property
+    def extends(self) -> list[str]:
+        """Base files this suite inherits from, in application order."""
+        return [source.path for source in self.sources if source.role == "base"]
+
     def identity(self) -> tuple[str, str, str]:
-        return (self.overlay.id, self.overlay.version, self.suite_yaml_digest)
+        return (self.overlay.id, self.overlay.version, self.identity_digest)
+
+    @property
+    def identity_digest(self) -> str:
+        """Chain digest, falling back to the raw file digest for legacy values."""
+        return self.overlay_chain_digest or self.suite_yaml_digest
+
+    def resolved_payload(self) -> str:
+        """Canonical JSON of the resolved overlay declaration.
+
+        Part of the chain digest; exposed so the explanation page can show
+        exactly what the merge produced.
+        """
+        return json.dumps(
+            self.overlay.model_dump(mode="json", exclude_none=True),
+            sort_keys=True,
+            separators=(",", ":"),
+            ensure_ascii=False,
+        )
 
 
 def load_suite_yaml(path) -> dict[str, Any]:

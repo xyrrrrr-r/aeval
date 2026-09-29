@@ -760,7 +760,12 @@ class RuntimeLock(BaseModel):
 class OverlayIdentity(BaseModel):
     suite_id: str
     suite_version: str
+    # Raw bytes of the suite's own suite.yaml (unchanged semantics).
     overlay_digest: str
+    # Digest of the resolved overlay plus every inherited base file. Optional
+    # so manifests sealed before inheritance existed still validate; when
+    # present the plugin gate enforces it too.
+    overlay_chain_digest: str | None = None
     source_commit: str
     source_url: str | None = None
 

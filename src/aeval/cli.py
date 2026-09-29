@@ -18,6 +18,7 @@ from aeval.contracts import ExclusionSummary, RunManifest
 from aeval.suite_loader.loader import (
     assert_unique_suite_identity,
     discover_suites,
+    inherited_source_paths,
     load_suite,
     render_suite_explanation,
 )
@@ -95,7 +96,7 @@ def run_cmd(
             # a stale image. `aeval run` delegates to Harbor, so the flag
             # must be carried in the composed job.
             job.environment.force_build = True
-        source_commit = suite_source_commit(suite)
+        source_commit = suite_source_commit(suite, inherited_source_paths(resolved))
         job.jobs_dir = run_dir / "harbor"
         if len(Path(job.job_name).parts) != 1 or job.job_name in ("", ".", ".."):
             raise SuiteError("Harbor job_name must be a single directory name")
@@ -143,6 +144,7 @@ def run_cmd(
                 suite_id=resolved.id,
                 suite_version=resolved.version,
                 overlay_digest=resolved.suite_yaml_digest,
+                overlay_chain_digest=resolved.identity_digest,
                 source_commit=source_commit,
             ),
             versions=VersionsBundle(
@@ -230,6 +232,8 @@ def probe_cmd(
         typer.echo(
             f"suite {resolved.id} v{resolved.version} "
             f"overlay-digest={resolved.suite_yaml_digest[:12]} "
+            f"chain-digest={resolved.identity_digest[:12]} "
+            f"extends={resolved.extends or '(none)'} "
             f"task-references={len(job.tasks)} remote-datasets={len(job.datasets)}"
         )
         typer.echo("Configuration validated; remote task content and runtime capabilities are not probed.")
