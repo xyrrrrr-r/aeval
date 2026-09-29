@@ -393,6 +393,7 @@ async def deploy_generic_facade(
     session_id: str | None = None,
     node_bin: str = "node",
     health_timeout_sec: float = 30.0,
+    root: PurePosixPath | None = None,
 ) -> str:
     """Deploy and start the OpenAI-compatible facade inside the sandbox.
 
@@ -403,15 +404,32 @@ async def deploy_generic_facade(
     background, and health-check it before the run is allowed to continue.
     Returns the facade's base URL (``http://127.0.0.1:<port>``).
     """
-    root = FACADE_SANDBOX_ROOT
+    # The production root is /opt/aeval-facade; the override exists so the
+    # whole flavor can be exercised on a host where /opt is not writable
+    # (the verification harness) without changing the production path. A
+    # string is accepted because the override travels through the same
+    # PurePosixPath-shaped call sites (fakered environments pass strings).
+    root = FACADE_SANDBOX_ROOT if root is None else PurePosixPath(root)
     upload = getattr(environment, "upload_file", None)
     exec_fn = getattr(environment, "exec", None)
     if not callable(upload) or not callable(exec_fn):
         raise BootstrapError("environment exposes no upload_file/exec for the facade")
 
     files = _facade_runtime_files(Path(facade_dist))
-    if not any(rel == "dist/facade_main.js" for _, rel in files):
+    shipped = {relative for _, relative in files}
+    if "dist/facade_main.js" not in shipped:
         raise BootstrapError(f"facade dist has no built facade_main.js: {facade_dist}")
+    # The neutral gateway-lease client imports the pinned @deepseek-ai packages
+    # (the FacadeOptions source does too). Shipping the dist without its closure
+    # uploads a tree that dies inside the sandbox with ERR_MODULE_NOT_FOUND —
+    # found on example-lab, where the checkout had no node_modules — so the missing
+    # closure is refused here, with the remedy, before anything is uploaded.
+    if "node_modules/@deepseek-ai/dsh-llm/package.json" not in shipped:
+        raise BootstrapError(
+            f"the facade runtime closure is not installed beside {facade_dist} — "
+            "run `npm ci` in deepagents-eval-control so the pinned packages ship "
+            "with the dist (the sandbox has no registry access)"
+        )
 
     # One tarball, one upload, one extract: the runtime closure is dozens of
     # files and per-file uploads would be both slow and partial-failure-prone.
@@ -442,11 +460,14 @@ async def deploy_generic_facade(
             + (f"AEVAL_FACADE_SESSION_ID={shlex.quote(session_id)} " if session_id else "")
         )
         log = "/tmp/aeval-facade.log"
+        # ``setsid --fork`` both detaches (new session, so no SIGHUP when the
+        # exec's shell goes away) and RETURNS: it forks the child and exits.
+        # A trailing ``&`` does not — the exec then waits on a shell that holds
+        # the command's pipes, which hung the real deployment on example-lab.
         started = await exec_fn(
             f"cd {shlex.quote(root.as_posix())} && {run_env}"
-            f"setsid nohup {shlex.quote(node_bin)} dist/facade_main.js"
-            f" >{log} 2>&1 < /dev/null &"
-            f" echo facade-pid=$!"
+            f"setsid --fork {shlex.quote(node_bin)} dist/facade_main.js"
+            f" >{log} 2>&1 < /dev/null"
         )
         code = getattr(started, "return_code", getattr(started, "exit_code", None))
         if code != 0:
@@ -491,6 +512,7 @@ async def _deploy_declared_stack(
     control_ca: Path | None,
     facade_dist: Path | None,
     trial_id: str,
+    facade_root: PurePosixPath | None = None,
 ) -> None:
     """Deploy the control stack the adapter declared, by flavor.
 
@@ -543,6 +565,7 @@ async def _deploy_declared_stack(
             facade_dist=resolved,
             gateway_url=str(config["gatewayUrl"]),
             token_file=str(config["jobTokenFile"]),
+            root=facade_root,
         )
         return
     raise BootstrapError(
@@ -565,6 +588,7 @@ async def bootstrap_trial_control(
     control_dist: Path | None = None,
     control_ca: Path | None = None,
     facade_dist: Path | None = None,
+    facade_root: PurePosixPath | None = None,
     reasoning_effort: str | None = None,
     limits: dict[str, int] | None = None,
 ) -> tuple[TrialBinding, dict[str, Any]]:
@@ -657,6 +681,7 @@ async def bootstrap_trial_control(
             control_dist=control_dist,
             control_ca=control_ca,
             facade_dist=facade_dist,
+            facade_root=facade_root,
             trial_id=trial_id,
         )
     try:

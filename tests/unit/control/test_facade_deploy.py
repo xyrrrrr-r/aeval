@@ -9,10 +9,13 @@ dispatch that decides which flavor runs.
 
 from __future__ import annotations
 
+import asyncio
 import io
 import tarfile
 from pathlib import Path
 from types import SimpleNamespace
+
+import shutil
 
 import pytest
 
@@ -77,6 +80,24 @@ def _built_dist(root: Path, names=("facade_main.js", "gateway_lease.js")) -> Pat
     return dist
 
 
+def test_a_dist_without_its_closure_is_refused_before_any_upload(tmp_path):
+    """example-lab found this the hard way: a dist shipped without node_modules
+    uploads fine, starts, and then dies inside the sandbox with
+    ERR_MODULE_NOT_FOUND while the health gate times out. The missing closure
+    is refused here, with the remedy, before the tar is built."""
+    dist = _built_dist(tmp_path)
+    shutil.rmtree(dist.parent / "node_modules")
+    env = _FakeExecEnvironment()
+    with pytest.raises(BootstrapError) as excinfo:
+        asyncio.run(deploy_generic_facade(
+            environment=env, facade_dist=dist, gateway_url="http://10.0.0.1:5000",
+            token_file="/run/aeval/trial-token",
+        ))
+    assert "npm ci" in str(excinfo.value)
+    assert env.uploads == []
+    assert env.commands == []
+
+
 def test_discovery_prefers_the_operator_override(tmp_path, monkeypatch):
     built = _built_dist(tmp_path)
     override = tmp_path / "elsewhere" / "dist"
@@ -131,13 +152,17 @@ async def test_deploy_generic_facade_uploads_starts_and_health_gates(tmp_path):
     with tarfile.open(fileobj=io.BytesIO(env.blobs["/tmp/aeval-facade.tar.gz"]), mode="r:gz") as tar:
         assert "dist/facade_main.js" in tar.getnames()
         assert "node_modules/@deepseek-ai/dsh-llm/package.json" in tar.getnames()
-    # the start contract: detached, env-pinned, logs captured
+    # the start contract: detached AND returning, env-pinned, logs captured.
+    # ``setsid --fork`` is the load-bearing part: a trailing ``&`` leaves the
+    # exec waiting on a shell that holds the pipes (hung on example-lab).
     start = next(cmd for cmd in env.commands if "facade_main.js" in cmd)
-    assert "setsid nohup" in start
+    assert "setsid --fork" in start
+    # no trailing background job: the command must RETURN (only the && chain)
+    assert " & " not in start and not start.rstrip().endswith("&")
     assert "AEVAL_GATEWAY_URL=http://10.0.0.1:5000" in start
     assert "AEVAL_TRIAL_TOKEN_FILE=/run/aeval/trial-token" in start
     assert "AEVAL_FACADE_PORT=8787" in start
-    assert ">/tmp/aeval-facade.log 2>&1 < /dev/null &" in start
+    assert ">/tmp/aeval-facade.log 2>&1 < /dev/null" in start
     # the gate waited for the second probe
     assert env.probes == 2
 
