@@ -324,6 +324,13 @@ class DshAgent(BaseInstalledAgent):
     # checked separately when the lock is verified.)
     REQUIRED_OBSERVATIONS = ("node",)
 
+    # Where the agent's own state lives inside the sandbox, and where its session
+    # artifact lands in the bundle. Declared rather than assumed by the framework:
+    # these were hardcoded for every agent, which quietly gave a second agent a
+    # DSH home it knows nothing about. The values are exactly what was hardcoded.
+    SANDBOX_HOME = "/logs/agent/dsh-home"
+    SESSION_ARTIFACT_DIR = "dsh-home"
+
     ADAPTER_ID = "dsh"
     ADAPTER_VERSION = "1"
     ADAPTER_MODE = "acp_stdio"

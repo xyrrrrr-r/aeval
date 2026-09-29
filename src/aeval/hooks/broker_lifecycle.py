@@ -59,6 +59,8 @@ BROKER_DIRNAME = "brokers"
 # Fixed sandbox-side conventions (bundle writer contract): the DSH home
 # layout Harbor syncs and the descriptor location inside it.
 SANDBOX_DSH_HOME = "/logs/agent/dsh-home"
+# Historical DSH convention, used when no live agent declares its own.
+SANDBOX_SESSION_DIR = "dsh-home"
 SANDBOX_BUNDLE_PATH = "/logs/agent/bundle_descriptor.json"
 
 
@@ -208,22 +210,28 @@ def parse_broker_spec(path_env: str | None = None) -> BrokerSpec | None:
 
 
 def trial_control_paths(
-    state: TrialState, run_dir: Path, driver: Any = None
+    state: TrialState, run_dir: Path, driver: Any = None, agent: Any = None
 ) -> TrialPaths:
     """The owner-side TrialPaths for one trial, from fixed conventions.
 
     ``sandbox_cwd`` is the suite's ``driver.workspace_dir`` (default
     ``/workspace``): the trial's session is minted there and the agent
     runs there, and the task's tests assume that same directory.
+
+    The agent home and session artifact directory come from the adapter's
+    declaration (``SANDBOX_HOME``/``SESSION_ARTIFACT_DIR``), falling back to the
+    historical DSH conventions when the live agent is not available.
     """
     if state.trial_dir is None:
         raise BrokerSpecError("trial has no directory — paths cannot be derived")
     download_root = (state.trial_dir / "agent").relative_to(run_dir).as_posix()
     return TrialPaths(
         sandbox_cwd=str(getattr(driver, "workspace_dir", None) or "/workspace"),
-        dsh_home=SANDBOX_DSH_HOME,
+        dsh_home=str(getattr(agent, "SANDBOX_HOME", None) or SANDBOX_DSH_HOME),
         bundle_path=SANDBOX_BUNDLE_PATH,
-        session_root="dsh-home",
+        session_root=str(
+            getattr(agent, "SESSION_ARTIFACT_DIR", None) or SANDBOX_SESSION_DIR
+        ),
         download_root=download_root,
     )
 
@@ -243,6 +251,11 @@ def start_trial_broker(
     paths = trial_control_paths(
         state, context.run_dir,
         getattr(getattr(context.suite, "overlay", None), "driver", None),
+        (
+            context.environments.agent(state.trial_id)
+            if context.environments is not None
+            else None
+        ),
     )
     config = compose_control_config(
         run_binding=context.run_binding.model_dump(),

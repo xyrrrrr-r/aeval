@@ -485,3 +485,41 @@ def test_audit_records_broker_diagnostics(tmp_path):
     summary = json.loads((tmp_path / "aeval_audit.json").read_text(encoding="utf-8"))
     assert summary["broker_diagnostics"] == state.broker_diagnostics
     assert summary["trial_id"] == "t1"
+
+
+# --- P1-4: the agent declares where its state and session live -----------------
+
+def test_agent_declared_paths_replace_the_dsh_convention(tmp_path):
+    """Every agent used to get a DSH home it knows nothing about."""
+    from types import SimpleNamespace
+
+    from aeval.hooks.broker_lifecycle import (
+        SANDBOX_DSH_HOME,
+        SANDBOX_SESSION_DIR,
+        trial_control_paths,
+    )
+
+    run_dir = tmp_path / "run"
+    (run_dir / "trial-1" / "agent").mkdir(parents=True)
+    state = SimpleNamespace(trial_dir=run_dir / "trial-1")
+
+    # no live agent: the historical DSH convention is kept verbatim
+    legacy = trial_control_paths(state, run_dir)
+    assert legacy.dsh_home == SANDBOX_DSH_HOME
+    assert legacy.session_root == SANDBOX_SESSION_DIR
+
+    # an adapter that declares its own home and session directory gets them
+    declared = trial_control_paths(
+        state,
+        run_dir,
+        agent=SimpleNamespace(
+            SANDBOX_HOME="/logs/agent/other-home", SESSION_ARTIFACT_DIR="other-home"
+        ),
+    )
+    assert declared.dsh_home == "/logs/agent/other-home"
+    assert declared.session_root == "other-home"
+    # the shipped adapter declares exactly the old constants, so DSH is unchanged
+    from aeval.agents.dsh.agent import DshAgent
+
+    dsh = trial_control_paths(state, run_dir, agent=DshAgent)
+    assert (dsh.dsh_home, dsh.session_root) == (SANDBOX_DSH_HOME, SANDBOX_SESSION_DIR)
