@@ -6,6 +6,7 @@ Wants=network-online.target
 
 [Service]
 Type=oneshot
+TimeoutStartSec=600
 ExecStart=/usr/local/bin/e2b-hardening-sync.sh
 Nice=10
 IOSchedulingClass=idle

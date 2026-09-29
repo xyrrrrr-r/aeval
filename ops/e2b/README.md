@@ -51,7 +51,7 @@ ssh <host> '/opt/e2b-hardening/install-e2b-hardening.sh'
 
 | 场景 | 机制 | 效果 |
 | --- | --- | --- |
-| 主机重启 / 镜像重建后加固丢失 | `e2b-hardening-boot.service`（`WantedBy=multi-user.target`）开机执行安装脚本 | bind mount、`/etc/fstab`、Nomad env 与限额、单元全部自动恢复 |
+| 主机重启 / 镜像重建后加固丢失 | `e2b-hardening-boot.service`（`WantedBy=multi-user.target`）开机执行安装脚本 | bind mount、`/etc/fstab`、Nomad env 与限额、单元、git 镜像与推送钩子全部自动恢复 |
 | 加固被改动/删除/降级 | `e2b-leak-watch.timer`（60 秒）跑 `install-e2b-hardening.sh --check`，`exit 1` 即漂移 | 自动重跑安装脚本把加固装回来（`AUTO_INSTALL=1`，可用环境变量关闭） |
 | 孤儿 VM / scratch 堆积 | `e2b-leak-guard.timer`（5 分钟）+ watchdog 发现异常时立即执行 | 资源自动回收，不等人工 |
 | API/cgroup 异常 | watchdog 落诊断快照到 `/var/log/e2b-hardening/`，并执行护栏 | 现场留存 + 资源侧自愈；需要重启 Nomad 作业的情况只记录、不擅自动手 |
@@ -83,7 +83,7 @@ ssh <host> '/opt/e2b-hardening/install-e2b-hardening.sh'
 - 仓库是本目录的**部署源**；主机上 `/opt/e2b-hardening/` 是**自包含副本**（开机自举与自愈都基于它），
   `/usr/local/bin/` 是被 systemd 调用的**运行副本**。
 - 改脚本 = 改仓库 → `rsync` 到 `/opt/e2b-hardening/` → 跑安装脚本（或等 watchdog 自动发现漂移）。
-- 基线校验：`sha256 e2b-leak-guard.sh = 300000cf5b3c73f084c172670d0c6bb2c5e649f6e69e59bbe9dbfb38963d5de7`
+- 基线校验：`sha256 e2b-leak-guard.sh = 907a02ac741bc76731f20771947aa9f63fb678bc409ca7b1a9c42dbf229d4654`（2026-09-29；改动护栏后请同步更新此处与加固文档 §4.1）
 - 安装脚本自身也会核对运行副本与部署源的哈希/内容，不一致会明确报告。
 
 ## 安全边界（为什么它敢自动动手）
@@ -94,3 +94,6 @@ ssh <host> '/opt/e2b-hardening/install-e2b-hardening.sh'
 - **不擅自重启服务**：需要重启 Nomad 作业的只有"漂移已确认"这一种情况（由安装脚本幂等处理）；API 不健康时
   watchdog 只记录诊断，不动手。
 - **失败不升级**：watchdog 永远 `exit 0`（避免单元刷红），结论写 journald 与日志文件。
+- **不会被外部卡死**：watchdog 的每个外部调用（curl / `docker exec psql` / 安装器 / 护栏）都套了 `timeout`，
+  三个单元也都设了 `TimeoutStartSec`（探测 120 s、护栏 240 s、同步 600 s）。这一点是实测踩出来的：
+  OOM 期间 `docker exec` 可能无限期阻塞，曾让 watchdog 卡在 `activating` 两分钟、1 分钟心跳全被吞掉。

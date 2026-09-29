@@ -81,7 +81,8 @@ for i in items:
 
 # ---------- oracle 2：构建记录（失败即放弃清理 scratch / 回收 VM）----------
 psql_q(){
-  docker exec "$PG_CONTAINER" psql -U "$PG_USER" -d "$PG_DB" -q -A -t -c "$1" 2>/dev/null
+  # timeout：docker exec 在 OOM/守护进程拥塞时可能无限期阻塞；拿不到构建状态就 fail-safe 不动作
+  timeout 20 docker exec "$PG_CONTAINER" psql -U "$PG_USER" -d "$PG_DB" -q -A -t -c "$1" 2>/dev/null
 }
 
 # ---------- 在途构建（近期仍在更新的非终态构建）----------

@@ -38,7 +38,7 @@ problems=()
 # ---------- 1) API 健康 ----------
 health_code=000
 for _ in $(seq 1 "$API_RETRIES"); do
-  health_code=$(curl -sS -o /dev/null -w '%{http_code}' --max-time 10 "$API/health" 2>/dev/null || echo 000)
+  health_code=$(timeout 15 curl -sS -o /dev/null -w '%{http_code}' --max-time 10 "$API/health" 2>/dev/null || echo 000)
   [ "$health_code" = "200" ] && break
   sleep 2
 done
@@ -63,7 +63,7 @@ fi
 # ---------- 3) 加固漂移（自动加载的判据）----------
 drift=0
 if [ -x "$INSTALL" ]; then
-  if ! "$INSTALL" --check --quiet >/dev/null 2>&1; then
+  if ! timeout 90 "$INSTALL" --check --quiet >/dev/null 2>&1; then
     drift=1
     problems+=("hardening_drift")
   fi
@@ -78,7 +78,7 @@ live_count=0
 if [ -f "$CONFIG" ]; then
   key=$(python3 -c "import json;print(json.load(open('$CONFIG'))['teamApiKey'])" 2>/dev/null || true)
   if [ -n "${key:-}" ]; then
-    live_count=$(curl -sS --max-time 15 -H "X-API-KEY: $key" "$API/sandboxes?limit=200" 2>/dev/null | python3 -c "
+    live_count=$(timeout 20 curl -sS --max-time 15 -H "X-API-KEY: $key" "$API/sandboxes?limit=200" 2>/dev/null | python3 -c "
 import json,sys
 try: d=json.load(sys.stdin)
 except Exception: sys.exit(0)
@@ -88,7 +88,7 @@ print(sum(1 for i in items if isinstance(i,dict)))
   fi
 fi
 live_count=${live_count//[^0-9]/}; live_count=${live_count:-0}
-inflight=$(docker exec "$PG_CONTAINER" psql -U "$PG_USER" -d "$PG_DB" -q -A -t \
+inflight=$(timeout 20 docker exec "$PG_CONTAINER" psql -U "$PG_USER" -d "$PG_DB" -q -A -t \
   -c "select count(*) from env_builds where status not in ('uploaded','failed') and updated_at > now() - interval '30 minutes';" 2>/dev/null | tr -d ' \r')
 inflight=${inflight//[^0-9]/}; inflight=${inflight:-0}
 expected=$(( live_count + inflight ))
@@ -140,6 +140,6 @@ fi
 # ---------- 自愈（资源异常）----------
 if [ "$DRY_RUN" != "1" ] && [ -x "$GUARD" ]; then
   log "执行护栏自愈: $GUARD"
-  "$GUARD" 2>&1 | tail -4
+  timeout 180 "$GUARD" 2>&1 | tail -4
 fi
 exit 0

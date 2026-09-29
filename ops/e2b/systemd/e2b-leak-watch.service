@@ -7,6 +7,7 @@ Wants=network-online.target
 [Service]
 Type=oneshot
 Environment=WARN_PCT=85 AUTO_INSTALL=1
+TimeoutStartSec=120
 ExecStart=/usr/local/bin/e2b-leak-watch.sh
 Nice=10
 IOSchedulingClass=idle

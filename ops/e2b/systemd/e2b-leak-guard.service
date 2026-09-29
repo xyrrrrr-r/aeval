@@ -8,6 +8,7 @@ OnFailure=e2b-leak-watch.service
 [Service]
 Type=oneshot
 Environment=MIN_AGE_MIN=15 INFLIGHT_MIN=30
+TimeoutStartSec=240
 ExecStart=/usr/local/bin/e2b-leak-guard.sh
 Nice=10
 IOSchedulingClass=idle
