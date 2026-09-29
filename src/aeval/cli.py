@@ -43,6 +43,14 @@ EXIT_SYSTEM_ERROR = 4
 EXIT_E2E_INCOMPLETE = 5
 
 
+def _declared_adapter(entry):
+    """The AdapterSpec an import_path agent entry declares (aeval.agents.contract)."""
+    from aeval.agents.contract import build_adapter_spec, load_adapter_class
+
+    import_path = str(entry.import_path)
+    return build_adapter_spec(load_adapter_class(import_path), import_path=import_path)
+
+
 def _die(message: str, code: int) -> int:
     typer.secho(f"error: {message}", fg=typer.colors.RED, err=True)
     raise typer.Exit(code=code)
@@ -89,6 +97,13 @@ def run_cmd(
             raise SuiteError("Run output must be outside the source suite directory")
         resolved = load_suite(suite)
         job = compose_harbor_job(resolved)
+        # Declared adapter identity, resolved before anything runs: a run whose
+        # records cannot name its agent is refused here, not discovered later.
+        adapters = [
+            _declared_adapter(entry)
+            for entry in job.agents
+            if getattr(entry, "import_path", None)
+        ]
         if force_build:
             # Doc §6.3: the first run (and every run after the base image
             # digest changes) must rebuild — Harbor reuses an existing
@@ -140,6 +155,7 @@ def run_cmd(
             lock_ref=lock_ref,
             config_hash=config_hash,
             config_file_sha256=sha256(config_json.encode("utf-8")).hexdigest(),
+            adapters=adapters,
             overlay=OverlayIdentity(
                 suite_id=resolved.id,
                 suite_version=resolved.version,

@@ -780,6 +780,10 @@ class RunManifest(BaseModel):
     runtime_lock_digest: str = ""
     lock_ref: str | None = None
     overlay: OverlayIdentity
+    # Which agent adapter(s) this run declares. Empty on manifests sealed before
+    # the adapter contract existed; a non-DSH adapter makes two otherwise
+    # comparable manifests incomparable instead of silently averageable.
+    adapters: list[AdapterSpec] = Field(default_factory=list)
     versions: VersionsBundle
     argv_hash: str = ""
     env_hash: str = ""

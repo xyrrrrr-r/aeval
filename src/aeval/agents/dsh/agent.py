@@ -22,6 +22,7 @@ from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 from typing import Any, ClassVar
 
+from aeval.contracts import TranscriptCapability
 from harbor.agents.capabilities import AgentCapabilities
 from harbor.agents.installed.base import BaseInstalledAgent
 from harbor.environments.base import BaseEnvironment
@@ -314,6 +315,25 @@ class DshAgent(BaseInstalledAgent):
     # file_tools: what a task can ask the agent to do; resume: the run adopts a
     # pre-minted session instead of starting a fresh one.
     PROVIDES = frozenset({"acp_stdio", "sdk_jsonrpc", "shell", "file_tools", "resume"})
+
+    # Recorded adapter identity (aeval.contracts.AdapterSpec). Without these a
+    # run cannot say which adapter produced its trials — a second agent would be
+    # indistinguishable from this one in the store and in comparability.
+    ADAPTER_ID = "dsh"
+    ADAPTER_VERSION = "1"
+    ADAPTER_MODE = "acp_stdio"
+    # Availability, not a per-run guarantee: a given run can still be downgraded
+    # to ``partial`` at grading time (e.g. an untrusted token counter, D48).
+    TRANSCRIPT_CAPABILITY = TranscriptCapability(
+        source="native_session_via_bridge",
+        reader="dsh-official-session-reader",
+        capabilities=["atif_via_bridge", "claim_check", "token_usage"],
+        fields_available={"events": "ok", "token_usage": "ok"},
+    )
+    # Model traffic goes through the aeval gateway lease, so budget enforcement
+    # is a real measurement rather than a wall-clock kill (D47 accounting).
+    BUDGET_ENFORCEMENT = "gateway_lease"
+    WRITE_SURFACE = "ephemeral_overlay"
 
     capabilities = AgentCapabilities(
         atif=False,  # ATIF comes from the official session read, not from the CLI

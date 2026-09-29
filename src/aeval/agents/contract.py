@@ -31,6 +31,7 @@ from __future__ import annotations
 from importlib import import_module
 from typing import Any, Protocol, runtime_checkable
 
+from aeval.contracts import AdapterSpec
 from aeval.suite_models import SuiteError
 
 __all__ = [
@@ -39,6 +40,9 @@ __all__ = [
     "declared_capabilities",
     "load_adapter_class",
     "required_capability_gaps",
+    "adapter_declaration_gap",
+    "build_adapter_spec",
+    "describe_adapter",
 ]
 
 #: Recommended capability vocabulary. Not enforced: an adapter may introduce a new
@@ -48,6 +52,16 @@ KNOWN_CAPABILITIES = frozenset(
 )
 
 PROVIDES_ATTR = "PROVIDES"
+#: Declarations required to build the recorded adapter identity (``AdapterSpec``).
+#: Missing any of these means a run whose records cannot say which agent produced
+#: them — refused at run start rather than discovered at comparison time.
+REQUIRED_DECLARATIONS = (
+    "ADAPTER_ID",
+    "ADAPTER_VERSION",
+    "ADAPTER_MODE",
+    "TRANSCRIPT_CAPABILITY",
+    "BUDGET_ENFORCEMENT",
+)
 SESSION_ID_ATTR = "agent_session_id"
 LEGACY_SESSION_ID_ATTR = "dsh_session_id"
 
@@ -135,3 +149,48 @@ class AgentAdapter(Protocol):
     def agent_session_id(self) -> str | None:
         """The agent's own conversation session id (never Harbor's sandbox session)."""
         ...
+
+
+def describe_adapter(adapter: type) -> str:
+    """Stable human name of an adapter class (used in error messages)."""
+    return f"{adapter.__module__}:{adapter.__qualname__}"
+
+
+def adapter_declaration_gap(adapter: type) -> list[str]:
+    """Required declarations this adapter is missing (empty = complete)."""
+    return [name for name in REQUIRED_DECLARATIONS if getattr(adapter, name, None) is None]
+
+
+def build_adapter_spec(
+    adapter: type | Any,
+    *,
+    import_path: str | None = None,
+    version: str | None = None,
+) -> AdapterSpec:
+    """Build the adapter identity recorded in the manifest and trial store.
+
+    ``version`` is the *observed* agent version when a live instance is available
+    (what actually ran); otherwise the declaration's version is used and the
+    record says so by omitting observation. Accepting either a class or an
+    instance keeps the run-start (declared) and trial-end (observed) call sites
+    on one code path.
+    """
+    adapter_class = adapter if isinstance(adapter, type) else type(adapter)
+    missing = adapter_declaration_gap(adapter_class)
+    if missing:
+        raise SuiteError(
+            f"Agent adapter {describe_adapter(adapter_class)} declares no {missing}. "
+            "A run must record which adapter produced its trials (AdapterSpec); "
+            "declare id/version/mode/transcript capability/budget enforcement."
+        )
+    return AdapterSpec(
+        id=str(adapter_class.ADAPTER_ID),
+        version=str(version or adapter_class.ADAPTER_VERSION),
+        impl=import_path or describe_adapter(adapter_class),
+        impl_version=str(adapter_class.ADAPTER_VERSION),
+        mode=adapter_class.ADAPTER_MODE,
+        transcript=adapter_class.TRANSCRIPT_CAPABILITY,
+        budget_enforcement=adapter_class.BUDGET_ENFORCEMENT,
+        write_surface=getattr(adapter_class, "WRITE_SURFACE", "ephemeral_overlay"),
+        server_side_session=getattr(adapter_class, "SERVER_SIDE_SESSION", "forbidden"),
+    )

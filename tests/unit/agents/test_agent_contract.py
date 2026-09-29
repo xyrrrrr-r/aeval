@@ -11,12 +11,19 @@ from __future__ import annotations
 import pytest
 import yaml
 
+from types import SimpleNamespace
+
 from aeval.agents.contract import (
     PROVIDES_ATTR,
+    adapter_declaration_gap,
+    build_adapter_spec,
     declared_capabilities,
     load_adapter_class,
     required_capability_gaps,
 )
+from aeval.agents.dsh.agent import DshAgent
+from aeval.hooks.plugin import HookRegistrationError
+from aeval.hooks.plugin import _require_adapter_declarations  # noqa: PLC2701
 from aeval.suite_loader.composition import _check_agent_capabilities  # noqa: PLC2701
 from aeval.suite_loader.composition import compose_harbor_job
 from aeval.suite_loader.loader import load_suite
@@ -116,3 +123,45 @@ def _job_path(relative: str):
     from pathlib import Path
 
     return Path(relative)
+
+
+# --- P0-2: recorded adapter identity -----------------------------------------
+
+def test_dsh_adapter_spec_is_built_from_declarations():
+    spec = build_adapter_spec(DshAgent, version="0.9.9-preview")
+    assert spec.id == "dsh"
+    assert spec.version == "0.9.9-preview"          # observed version wins
+    assert spec.mode == "acp_stdio"
+    assert spec.impl_version == "1"
+    assert spec.budget_enforcement == "gateway_lease"
+    assert spec.transcript.source == "native_session_via_bridge"
+    # falls back to the declared version when nothing was observed
+    assert build_adapter_spec(DshAgent).version == "1"
+
+
+def test_adapter_without_declarations_cannot_be_recorded(tmp_path, monkeypatch):
+    monkeypatch.syspath_prepend(str(tmp_path))
+    (tmp_path / "bare_adapter.py").write_text("class BareAgent:\n    pass\n", encoding="utf-8")
+    adapter = load_adapter_class("bare_adapter:BareAgent")
+    gap = adapter_declaration_gap(adapter)
+    assert "ADAPTER_ID" in gap and "BUDGET_ENFORCEMENT" in gap
+    with pytest.raises(SuiteError, match="declares no"):
+        build_adapter_spec(adapter)
+
+
+def test_run_start_refuses_an_adapter_that_cannot_describe_itself(tmp_path, monkeypatch):
+    monkeypatch.syspath_prepend(str(tmp_path))
+    (tmp_path / "bare_adapter.py").write_text("class BareAgent:\n    pass\n", encoding="utf-8")
+    job = SimpleNamespace(config=SimpleNamespace(
+        agents=[SimpleNamespace(import_path="bare_adapter:BareAgent")]
+    ))
+    with pytest.raises(HookRegistrationError, match="declares no"):
+        _require_adapter_declarations(job)
+    # a Harbor-native placeholder makes no claim and is exempt
+    _require_adapter_declarations(SimpleNamespace(
+        config=SimpleNamespace(agents=[SimpleNamespace(name="nop", import_path=None)])
+    ))
+    # the shipped adapter passes the gate
+    _require_adapter_declarations(SimpleNamespace(
+        config=SimpleNamespace(agents=[SimpleNamespace(import_path=DSH_IMPORT_PATH)])
+    ))

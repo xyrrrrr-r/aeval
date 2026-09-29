@@ -69,3 +69,19 @@ def test_dsh_slice_difference_blocks_comparison():
     report = compare_manifests(_manifest(), right)
     assert "dsh" in report
     assert OFFICIAL_DSH_TAG  # sanity: the left side stays on the locked tag
+
+
+def test_different_agent_adapters_block_comparison():
+    """Scores from two different agents are never averageable (P0-2)."""
+    from aeval.agents.contract import build_adapter_spec
+    from aeval.agents.dsh.agent import DshAgent
+
+    dsh = build_adapter_spec(DshAgent)
+    other = dsh.model_copy(update={"id": "otheragent", "impl": "somewhere:OtherAgent"})
+    assert compare_manifests(_manifest(adapters=[dsh]), _manifest(adapters=[dsh])).comparable is True
+    report = compare_manifests(_manifest(adapters=[dsh]), _manifest(adapters=[other]))
+    assert report.comparable is False
+    assert "adapters" in report
+    # a manifest sealed before the adapter contract carries no adapter: it stays
+    # comparable with another adapter-less manifest (legacy tolerance)
+    assert compare_manifests(_manifest(), _manifest()).comparable is True

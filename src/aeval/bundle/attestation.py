@@ -99,6 +99,9 @@ def compare_manifests(left: RunManifest, right: RunManifest) -> ComparabilityRep
         right.runtime_lock.dsh.model_dump(mode="json") if right.runtime_lock.dsh else None,
     )
     _dimension("overlay", left.overlay, right.overlay)
+    # The agent is part of the experiment: scores from two different adapters are
+    # never averageable, even when every other dimension matches.
+    _dimension("adapters", left.adapters, right.adapters)
     _dimension("versions", left.versions, right.versions)
     _dimension("budget", left.budget_enforcement_point, right.budget_enforcement_point)
     _dimension(

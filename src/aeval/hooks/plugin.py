@@ -98,6 +98,7 @@ def create_run_context(job: Any) -> EvaluationContext:
         raise HookRegistrationError("Job output directory differs from intent config")
     if not suite_identity_matches(manifest.overlay, suite):
         raise HookRegistrationError("suite identity differs from intent manifest")
+    _require_adapter_declarations(job)
     trials_dir = Path(job.job_dir).resolve()
     if trials_dir == root or not trials_dir.is_relative_to(root):
         raise HookRegistrationError("Harbor job directory must be inside the run directory")
@@ -396,6 +397,7 @@ async def _grade_and_record(event: Any, context: EvaluationContext, state: Any) 
             evidence=bundle,
             transcript_extra=transcript_extra,
             store=store,
+            adapter=_observed_adapter(context, state),
             # Runtime-only base for sealed artifact paths: trajectory
             # graders read the sealed canonical transcript from it.
             artifact_base=(
@@ -449,6 +451,7 @@ async def _record_unjudgeable_exclusion(
             ),
             stop_reason=state.stop_reason or "crashed",
             baseline_ok=state.baseline_ok,
+            adapter=_observed_adapter(context, state),
             verdict="cannot_judge",
             transcript_extra={
                 "aeval": {
@@ -467,6 +470,55 @@ async def _record_unjudgeable_exclusion(
         return False
     finally:
         store.close()
+
+
+def _require_adapter_declarations(job: Any) -> None:
+    """Refuse a run whose selected adapter cannot describe itself.
+
+    The recorded adapter identity (``AdapterSpec``) is what keeps a second agent
+    distinguishable from this one in the store and in comparability. Checked at
+    run-context creation so the failure is a refusal, not a gap discovered in the
+    evidence months later. Harbor-native ``name:`` agents (nop/oracle) make no
+    such declaration and are exempt — they never enter the evaluation chain.
+    """
+    from aeval.agents.contract import adapter_declaration_gap, load_adapter_class
+
+    for entry in getattr(job.config, "agents", None) or []:
+        import_path = getattr(entry, "import_path", None)
+        if not import_path:
+            continue
+        gap = adapter_declaration_gap(load_adapter_class(import_path))
+        if gap:
+            raise HookRegistrationError(
+                f"agent adapter {import_path} declares no {gap} — the run could not "
+                "record which adapter produced its trials; declare them on the class "
+                "(see aeval.agents.contract)"
+            )
+
+
+def _observed_adapter(context: EvaluationContext, state: Any) -> Any:
+    """AdapterSpec of the live agent that ran this trial (None when unreadable).
+
+    Observation, not declaration: the manifest records what the run *intended*
+    (resolved from the job), this records what actually produced the trial — the
+    agent's reported version included. A failure here is appended to the trial's
+    evidence issues rather than swallowed.
+    """
+    from aeval.agents.contract import build_adapter_spec
+
+    # Recording identity must never cost us the record itself (D52: a trial that
+    # vanishes from the store refuses the whole seal), so every failure here is
+    # appended to the trial's evidence issues and the record is still written.
+    try:
+        environments = getattr(context, "environments", None)
+        agent = environments.agent(state.trial_id) if environments is not None else None
+        if agent is None:
+            return None
+        version = agent.version() if callable(getattr(agent, "version", None)) else None
+        return build_adapter_spec(agent, version=version)
+    except Exception as exc:  # noqa: BLE001 - identity is best-effort, the record is not
+        state.evidence_issues.append(f"adapter identity could not be recorded: {exc}")
+        return None
 
 
 def _transcript_extra(context: EvaluationContext, state: Any) -> dict[str, Any] | None:

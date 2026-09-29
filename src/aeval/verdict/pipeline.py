@@ -22,6 +22,7 @@ from pathlib import Path
 from typing import Any
 
 from aeval.contracts import (
+    AdapterSpec,
     ArtifactRef,
     EvidenceBundle,
     GradeResult,
@@ -109,6 +110,7 @@ def build_trial_record(
     transcript_extra: dict[str, Any] | None,
     grader_versions: dict[str, str],
     artifact_base: str | None = None,
+    adapter: AdapterSpec | None = None,
 ) -> TrialRecord:
     """Assemble the sealed TrialRecord from verified stage facts.
 
@@ -118,6 +120,8 @@ def build_trial_record(
     ``artifact_base`` is the runtime-only directory the sealed artifact
     paths resolve against (trajectory graders read the sealed canonical
     transcript from it); the store never persists it.
+    ``adapter`` is the observed agent identity for this trial (which adapter
+    actually produced it); absent means the record cannot say.
     """
     return TrialRecord(
         trial_id=trial_id,
@@ -132,6 +136,7 @@ def build_trial_record(
             aeval_version=_dist_version("aeval"),
             grader_versions=dict(grader_versions),
         ),
+        adapter=adapter,
     )
 
 
@@ -147,6 +152,7 @@ async def grade_and_record(
     transcript_extra: dict[str, Any] | None,
     store: TrialStore,
     artifact_base: str | None = None,
+    adapter: AdapterSpec | None = None,
 ) -> TrialRecord:
     """Grade one sealed trial and atomically persist record + grades.
 
@@ -168,6 +174,7 @@ async def grade_and_record(
             transcript_extra=transcript_extra,
             grader_versions={},
             artifact_base=artifact_base,
+            adapter=adapter,
         )
         record.verdict = "infra_invalid"
         record.grades = []
@@ -184,6 +191,7 @@ async def grade_and_record(
         transcript_extra=transcript_extra,
         grader_versions={g.grader.id: g.grader.version for g in graders},
         artifact_base=artifact_base,
+        adapter=adapter,
     )
 
     try:
