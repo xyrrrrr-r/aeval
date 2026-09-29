@@ -18,16 +18,17 @@ Launch shape (source-backed facts in docs/TESTS/DEEPAGENTS-FACTS.md):
 
 Honest declarations (each one is a refusal to overclaim):
 
-- ``BUDGET_ENFORCEMENT = "none"``: our broker speaks ``aeval-model-broker/3``
-  (GET /info, POST /stream) and is not an OpenAI-compatible endpoint, while
-  dcode is. Metered runs need a dedicated control stack (P2-5b); until then
-  a capped suite refusing this agent is the P1-3 budget gate working as
-  designed.
+- ``BUDGET_ENFORCEMENT = "gateway_lease"``: dcode speaks OpenAI while our
+  broker speaks ``aeval-model-broker/3`` (GET /info, POST /stream), so the two
+  cannot talk directly — the in-sandbox facade (P2-5b, declared here as
+  ``CONTROL_STACK = "deepagent-facade"``) translates, and every model call is
+  then metered by the broker lease. The claim is only honest because the
+  declaration and the deployment move together: ``facade_routing_env()`` below
+  points the agent at that facade, so the claim cannot be silently unfulfilled.
 - ``REQUIRED_OBSERVATIONS = ()``: dcode is Python (uvx); the Node observation
   is DSH-specific.
 - no ``resume``: dcode persists sessions (``sessions.db``), but this adapter
   neither pins nor adopts a session, so the capability is not claimed.
-- no ``CONTROL_STACK``: nothing DSH-specific is deployed for this agent.
 - ``token_usage`` is ``partial``: Harbor fills usage from the ACP summary
   (``prompt_response.usage``) when the server provides it; live coverage of
   ``dcode --acp`` is not yet verified (DEEPAGENTS-FACTS.md 未核实项).
@@ -45,6 +46,8 @@ from harbor.agents.installed.acp import AcpAgent
 from harbor.models.trajectories import Trajectory
 
 from aeval.contracts import (
+    FACADE_API_KEY_PLACEHOLDER,
+    FACADE_BASE_URL,
     CanonicalTranscript,
     CompletenessRecord,
     FieldCompleteness,
@@ -135,6 +138,26 @@ def default_deepagent_registry_entry() -> dict[str, Any]:
     }
 
 
+def facade_routing_env() -> dict[str, str]:
+    """The env that points dcode at the in-sandbox facade.
+
+    Part of this adapter's control-stack contract, not an operator errand: an
+    operator who forgot it would get an agent talking to a vendor directly —
+    metered in the manifest and unmetered in reality, which is exactly the
+    overclaim the declaration exists to prevent. An explicit ``model_env``
+    still wins (an unmetered smoke deliberately points elsewhere).
+
+    Both base spellings are set because deepagents' ModelSpec reads
+    ``OPENAI_API_BASE`` for some providers and Harbor's integration forwards
+    ``OPENAI_BASE_URL`` (DEEPAGENTS-FACTS.md §6).
+    """
+    return {
+        "OPENAI_BASE_URL": FACADE_BASE_URL,
+        "OPENAI_API_BASE": FACADE_BASE_URL,
+        "OPENAI_API_KEY": FACADE_API_KEY_PLACEHOLDER,
+    }
+
+
 def _with_distribution_env(
     entry: Mapping[str, Any], env: Mapping[str, str]
 ) -> dict[str, Any]:
@@ -165,11 +188,15 @@ class DeepgentAgent(AcpAgent):
     # observation regardless of this tuple.
     REQUIRED_OBSERVATIONS: tuple[str, ...] = ()
 
+    # The in-sandbox control stack this adapter needs (P2-5b): NOT the DSH
+    # flavor (no plugin tree, no cordis patch — dcode is not DSH-managed), but
+    # the generic facade deployment aeval knows how to upload, start and
+    # health-gate. Without it the agent could not be metered at all.
+    CONTROL_STACK = "deepagent-facade"
+
     # Where the agent's own state lives inside the sandbox, and where its
     # session artifact would land in the bundle (P1-4: declared rather than
-    # inheriting the DSH default). No CONTROL_STACK: the DSH control stack
-    # (job token, session minting, cordis patch) must never deploy into
-    # another agent, and nothing here needs it.
+    # inheriting the DSH default).
     SANDBOX_HOME = _SANDBOX_HOME
     SESSION_ARTIFACT_DIR = _SESSION_ARTIFACT_DIR
 
@@ -187,10 +214,10 @@ class DeepgentAgent(AcpAgent):
         capabilities=["atif_via_bridge", "token_usage"],
         fields_available={"events": "ok", "token_usage": "partial"},
     )
-    # Honest: model traffic does NOT go through our broker (the broker is
-    # not OpenAI-compatible; DEEPAGENTS-FACTS.md §6). A suite that caps
-    # spend must refuse this agent until P2-5b's control stack exists.
-    BUDGET_ENFORCEMENT = "none"
+    # Model traffic goes through the gateway lease via the in-sandbox facade
+    # (CONTROL_STACK above): the broker meters and caps every call, so a suite
+    # that declares a spend cap is no longer refused — it is enforced.
+    BUDGET_ENFORCEMENT = "gateway_lease"
     WRITE_SURFACE = "ephemeral_overlay"
 
     DEEPAGENTS_CODE_VERSION = _DEEPAGENTS_CODE_VERSION
@@ -208,8 +235,11 @@ class DeepgentAgent(AcpAgent):
             if registry_entry is not None
             else default_deepagent_registry_entry()
         )
-        if model_env:
-            entry = _with_distribution_env(entry, model_env)
+        # The facade routing is the declared control stack's other half; an
+        # explicit model_env overrides it field by field.
+        routing: dict[str, str] = facade_routing_env()
+        routing.update({str(k): str(v) for k, v in (model_env or {}).items()})
+        entry = _with_distribution_env(entry, routing)
         self._transcript: CanonicalTranscript | None = None
         self._summary: dict[str, Any] | None = None
         # registry_entry is AcpAgent's first named parameter, BEFORE its

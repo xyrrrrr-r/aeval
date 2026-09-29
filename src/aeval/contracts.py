@@ -54,6 +54,9 @@ __all__ = [
     "CanonicalTranscript",
     "ObservedModel",
     "BudgetSnapshot",
+    "FACADE_PORT",
+    "FACADE_BASE_URL",
+    "FACADE_API_KEY_PLACEHOLDER",
     "ForkLineage",
     "RunBinding",
     "TrialBinding",
@@ -338,6 +341,19 @@ class ObservedModel(BaseModel):
     provider: str | None = None
     model: str | None = None
     source: Literal["gateway_lease", "session_header", "claim"] = "session_header"
+
+
+# The generic facade contract (P2-5b): the deployment binds this port inside
+# the sandbox and the adapter points the agent at the same URL, so the two
+# sides share one declaration instead of hard-coding a number twice.
+#: Fixed in-sandbox port the OpenAI-compatible facade listens on.
+FACADE_PORT = 8787
+#: The OpenAI-compatible base URL the agent is pointed at. ``/v1`` is part of
+#: it: langchain's ``init_chat_model`` appends ``/chat/completions``.
+FACADE_BASE_URL = f"http://127.0.0.1:{FACADE_PORT}/v1"
+#: Non-secret placeholder. The facade authenticates with the job token it
+#: reads itself; an OpenAI-shaped client still requires a key to be present.
+FACADE_API_KEY_PLACEHOLDER = "aeval-facade"
 
 
 class BudgetSnapshot(BaseModel):

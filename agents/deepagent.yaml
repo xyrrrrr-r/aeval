@@ -14,11 +14,20 @@ provides:
   - file_tools
 
 mode: acp_stdio
-# Honest: model traffic does not go through our broker (it is not
-# OpenAI-compatible), so this agent cannot be metered yet. A suite that caps
-# spend refuses it at run start — that refusal is the P1-3 gate working as
-# designed. Metering needs the P2-5b control stack.
-budget_enforcement: none
+# Metered through the gateway lease: dcode speaks OpenAI, our broker speaks
+# aeval-model-broker/3, and the in-sandbox facade (control_stack below)
+# translates between them under the trial's job token. The adapter points the
+# agent at that facade automatically (facade_routing_env), so this claim and
+# the deployment move together — a suite that declares a spend cap is now
+# enforced rather than refused.
+budget_enforcement: gateway_lease
+
+# The generic control stack (P2-5b): NOT the DSH flavor. dcode is started by
+# Harbor's own ACP runner, so there is no plugin tree to graft — aeval uploads
+# the self-contained facade, starts it in the background and health-gates it
+# before the run proceeds. The fixed port is a shared contract
+# (contracts.FACADE_BASE_URL) the adapter points the agent at.
+control_stack: deepagent-facade
 transcript:
   source: native_session_via_bridge
   reader: harbor-acp-runner
@@ -31,6 +40,7 @@ transcript:
 
 # dcode is a Python package run through uvx; the Node observation is
 # DSH-specific. (Inherited from the base as [] — restated for readability.)
+# The sandbox image must nevertheless ship node: the facade runs on it.
 observations: []
 
 sandbox_home: /root/.deepagents

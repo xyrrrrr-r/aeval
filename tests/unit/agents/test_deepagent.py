@@ -13,6 +13,11 @@ from pathlib import Path
 import pytest
 from harbor.models.trajectories import Agent, Step, Trajectory
 
+from aeval.contracts import (
+    FACADE_API_KEY_PLACEHOLDER,
+    FACADE_BASE_URL,
+    FACADE_PORT,
+)
 from aeval.agents.contract import adapter_member_gap
 from aeval.agents.declaration import (
     check_declaration_matches_adapter,
@@ -22,6 +27,7 @@ from aeval.agents.deepagent.agent import (
     DeepgentAgent,
     DeepgentRunError,
     default_deepagent_registry_entry,
+    facade_routing_env,
 )
 
 AGENTS_ROOT = Path(__file__).resolve().parents[3] / "agents"
@@ -55,8 +61,20 @@ def _write_trajectory(logs_dir: Path) -> None:
     )
 
 
-def _agent(logs_dir: Path) -> DeepgentAgent:
-    return DeepgentAgent(logs_dir)
+def _agent(logs_dir: Path, **kwargs) -> DeepgentAgent:
+    return DeepgentAgent(logs_dir, **kwargs)
+
+
+def _distribution_env(agent: DeepgentAgent) -> dict[str, str]:
+    """The uvx launcher env the adapter handed to Harbor.
+
+    AcpAgent parses whatever the adapter passed into its own
+    ``AcpRegistryEntry``, so the assertion reads the model Harbor will
+    actually launch from — not the dict the adapter built.
+    """
+    entry = getattr(agent, "_registry_entry", None)
+    assert entry is not None, "the adapter exposed no registry entry"
+    return dict(entry.distribution.uvx.env)
 
 
 class TestContract:
@@ -75,9 +93,38 @@ class TestContract:
             {"acp_stdio", "shell", "file_tools"}
         )
 
-    def test_budget_enforcement_is_none_and_no_control_stack(self) -> None:
-        assert DeepgentAgent.BUDGET_ENFORCEMENT == "none"
-        assert not hasattr(DeepgentAgent, "CONTROL_STACK")
+    def test_metering_is_declared_with_the_stack_that_delivers_it(self) -> None:
+        # The two declarations are one claim: the gateway lease can only be
+        # honoured because the generic facade stack is deployed for this agent.
+        assert DeepgentAgent.BUDGET_ENFORCEMENT == "gateway_lease"
+        assert DeepgentAgent.CONTROL_STACK == "deepagent-facade"
+
+    def test_facade_routing_env_points_the_agent_at_the_facade(self) -> None:
+        env = facade_routing_env()
+        assert env["OPENAI_BASE_URL"] == FACADE_BASE_URL
+        assert env["OPENAI_API_BASE"] == FACADE_BASE_URL
+        assert env["OPENAI_API_KEY"] == FACADE_API_KEY_PLACEHOLDER
+        assert FACADE_BASE_URL == f"http://127.0.0.1:{FACADE_PORT}/v1"
+
+    def test_the_adapter_injects_routing_and_lets_an_operator_override_it(
+        self, tmp_path: Path
+    ) -> None:
+        default = _agent(tmp_path)
+        env = _distribution_env(default)
+        assert env["OPENAI_BASE_URL"] == FACADE_BASE_URL
+        assert env["OPENAI_API_KEY"] == FACADE_API_KEY_PLACEHOLDER
+
+        # an explicit model_env wins field by field (unmetered smoke runs)
+        explicit = _agent(
+            tmp_path,
+            model_env={"OPENAI_BASE_URL": "https://vendor.example/v1",
+                       "OPENAI_API_KEY": "sk-real"},
+        )
+        overridden = _distribution_env(explicit)
+        assert overridden["OPENAI_BASE_URL"] == "https://vendor.example/v1"
+        assert overridden["OPENAI_API_KEY"] == "sk-real"
+        # the field the operator did not name still carries the facade routing
+        assert overridden["OPENAI_API_BASE"] == FACADE_BASE_URL
 
     def test_default_registry_entry_is_pinned(self) -> None:
         entry = default_deepagent_registry_entry()

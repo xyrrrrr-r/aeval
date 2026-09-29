@@ -34,6 +34,7 @@ from pathlib import Path, PurePosixPath
 from typing import TYPE_CHECKING, Any
 
 from aeval.contracts import (
+    FACADE_PORT,
     TrialBinding,
     TrialPaths,
     control_config_digest,
@@ -74,7 +75,10 @@ CONTROL_DIR_NAME = "aeval-control"
 # task image must ship node; the port is fixed so the suite's task env can
 # point the agent at http://127.0.0.1:<port>/v1 without per-trial plumbing.
 FACADE_SANDBOX_ROOT = PurePosixPath("/opt/aeval-facade")
-DEFAULT_FACADE_PORT = 8787
+# The port is a shared contract, not a private default: the adapter points the
+# agent at the same URL (contracts.FACADE_BASE_URL), so the two sides cannot
+# drift apart.
+DEFAULT_FACADE_PORT = FACADE_PORT
 
 # The runtime closure ships with the facade: the neutral gateway-lease client
 # imports the pinned @deepseek-ai packages, so the sandbox tree needs them

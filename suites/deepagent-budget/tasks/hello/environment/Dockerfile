@@ -2,7 +2,7 @@
 # builds for arm64, where this resolves to the arm64 image.
 FROM ubuntu@sha256:11dc1ccb427f0464a2369e645454c272bb0baece7357c892ba69d313b3a332cf
 
-# The sandbox must ship node: this adapter's declared control stack
+# The sandbox must ship node: the declared control stack
 # (control_stack: deepagent-facade) runs the OpenAI-compatible facade inside
 # this container, and aeval's bootstrap health-gates it before the run starts.
 # Ubuntu 24.04's nodejs is 18.x — the facade needs fetch/AbortSignal (>=18)
