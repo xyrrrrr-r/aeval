@@ -1,0 +1,35 @@
+{
+  "name": "aeval-control",
+  "version": "0.1.0",
+  "description": "Agent-neutral control plane for aeval: the host-side model broker (aeval-model-broker/3) and the gateway-lease surface every agent control stack shares. Moved byte-identical from dsh-eval-control@4bc6931; agent packages compose their deployment dists from here. Built on the pinned @deepseek-ai/dsh-llm library (decision: keep as pinned library dependency, do not vendor).",
+  "license": "Apache-2.0",
+  "type": "module",
+  "engines": {
+    "node": "^22.19.0 || >=24.0.0"
+  },
+  "main": "dist/host_broker.js",
+  "types": "dist/host_broker.d.ts",
+  "bin": {
+    "aeval-model-broker": "dist/broker_main.js"
+  },
+  "files": [
+    "dist",
+    "src",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "build": "tsc -p tsconfig.build.json",
+    "test": "npm run build && tsc -p tsconfig.test.json && node --test \".test-dist/test/*.test.js\""
+  },
+  "dependencies": {
+    "@deepseek-ai/dsh-llm": "0.1.7-alpha.1",
+    "@deepseek-ai/dsh-session": "0.1.7-alpha.1",
+    "@deepseek-ai/schemastery": "3.18.3"
+  },
+  "devDependencies": {
+    "@types/node": "24.13.6",
+    "typescript": "6.0.3"
+  }
+}

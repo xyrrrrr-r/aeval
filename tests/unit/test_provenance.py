@@ -184,6 +184,26 @@ def test_slice_pins_the_control_plugins_direct_imports():
     )
 
 
+def test_control_package_pins_match_the_dsh_slice():
+    """Defense 3: aeval/control's build pins and the trial lock live in ONE
+    repo — every @deepseek-ai/* version in the control package's manifest
+    must equal the DSH slice the lock records, or the build drifts from what
+    trials attest."""
+    import json
+
+    manifest_path = Path(__file__).resolve().parents[2] / "control" / "package.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    slice_versions = {name: version for name, version, _ in provenance.DSH_NPM_SLICE}
+    deps = {**manifest.get("dependencies", {}), **manifest.get("devDependencies", {})}
+    deepseek_deps = {n: v for n, v in deps.items() if n.startswith("@deepseek-ai/")}
+    assert deepseek_deps, "aeval/control lost its @deepseek-ai/* pins"
+    for name, pinned in deepseek_deps.items():
+        assert slice_versions.get(name) == pinned, (
+            f"aeval/control pins {name}@{pinned} but DSH_NPM_SLICE records "
+            f"{slice_versions.get(name)!r} — build pin and trial lock drifted"
+        )
+
+
 def test_control_plugin_import_surface_matches_recorded_list():
     """Re-measure the sibling checkout against the recorded import surface.
 

@@ -105,3 +105,10 @@ venv.bak/
 
 # IDE
 .idea/
+
+# aeval/control (Node package): ignore install artifacts, keep the built dist
+# (deploy_control_stack uploads dist/*.js; committing it keeps deployment
+# zero-build and binds the lock fingerprint to reviewed bytes)
+control/node_modules/
+control/.test-dist/
+!control/dist/
