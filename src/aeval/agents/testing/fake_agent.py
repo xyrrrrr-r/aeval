@@ -50,6 +50,10 @@ class FakeAtifAgent:
     observed_version: str = "0.0.1-fake"
     session_id_value: str = "fake-session-1"
 
+    # This adapter has no DSH session file (by design), so its official
+    # session record is its own ATIF document — the generic slot.
+    SESSION_RECORD_OUTPUT = "agent_session_record"
+
     def version(self) -> str:
         return self.observed_version
 
@@ -60,6 +64,10 @@ class FakeAtifAgent:
     def paths(self) -> Any:
         logs_dir = Path(self.trial_dir) / "agent" / "logs"
         return type("FakePaths", (), {"logs_dir": logs_dir, "session_root": logs_dir})()
+
+    def read_session_record(self) -> bytes:
+        """Its official session record: the ATIF document itself."""
+        return self.read_trial_session().atif.model_dump_json().encode("utf-8")
 
     def read_trial_session(self) -> CanonicalTranscript:
         from harbor.models.trajectories import Agent, Step, Trajectory

@@ -128,6 +128,31 @@ def _job_path(relative: str):
 
 # --- P0-2: recorded adapter identity -----------------------------------------
 
+def test_session_record_output_of_reads_the_declared_slot():
+    from aeval.agents.contract import session_record_output_of
+
+    class Slotted:
+        SESSION_RECORD_OUTPUT = "agent_session_record"
+
+    assert session_record_output_of(Slotted) == "agent_session_record"
+    assert session_record_output_of(DshAgent) == "dsh_session"
+
+
+def test_session_record_output_of_fails_closed_on_bad_declarations():
+    from aeval.agents.contract import session_record_output_of
+
+    class Undeclared:
+        pass
+
+    class WrongFlavor:
+        SESSION_RECORD_OUTPUT = "freeform"
+
+    with pytest.raises(SuiteError, match="declares no valid SESSION_RECORD_OUTPUT"):
+        session_record_output_of(Undeclared)
+    with pytest.raises(SuiteError, match="declares no valid SESSION_RECORD_OUTPUT"):
+        session_record_output_of(WrongFlavor)
+
+
 def test_dsh_adapter_spec_is_built_from_declarations():
     spec = build_adapter_spec(DshAgent, version="0.9.9-preview")
     assert spec.id == "dsh"

@@ -76,8 +76,17 @@ FIXED_OUTPUT_PATHS: dict[str, str] = {
     "runtime_dump": "runtime_dump.json",
     "mock_call_log": "mock_call_log.jsonl",
     "dsh_session": "sessions/session.v4.jsonl.zstd",
+    "agent_session_record": "agent_session/record",
     "canonical_transcript": "canonical_transcript.json",
 }
+
+#: The session-record slot: exactly ONE of these belongs in every plan, chosen
+#: by the suite (``driver.session_record``). ``dsh_session`` is the DSH record
+#: (zstd session file under the synced session root, byte-identical path to
+#: everything sealed before the slot generalised); ``agent_session_record`` is
+#: the adapter's own official session record at a generic path — the adapter
+#: documents what the bytes are.
+SESSION_RECORD_OUTPUTS = ("dsh_session", "agent_session_record")
 
 SESSION_ROOT = "sessions"
 
@@ -97,8 +106,24 @@ def build_required_collect_plan(suite: ResolvedSuite) -> list[str]:
     The collection manifest itself is NOT in this list: its identity is
     bound by the outer bundle attestation, and it must never be turned
     into a same-named placeholder artifact or a self-referential hash.
+
+    The session-record slot takes the suite's declared flavor
+    (``driver.session_record``); the default keeps the historical
+    ``dsh_session`` plan byte-identical.
     """
-    plan = list(FIXED_OUTPUT_PATHS)
+    flavor = getattr(getattr(suite.overlay, "driver", None), "session_record", None)
+    if flavor is None:
+        flavor = "dsh_session"
+    if flavor not in SESSION_RECORD_OUTPUTS:
+        raise EvidenceIntegrityError(
+            f"unknown session-record collect output: {flavor!r} "
+            f"(expected one of {list(SESSION_RECORD_OUTPUTS)})"
+        )
+    plan = [
+        name
+        for name in FIXED_OUTPUT_PATHS
+        if name not in SESSION_RECORD_OUTPUTS or name == flavor
+    ]
     plan.extend(f"observable:{o.name}" for o in suite.overlay.observables)
     return plan
 
@@ -123,7 +148,13 @@ def validate_collect_declarations(
     commands = " ".join(
         getattr(c, "command", str(c)) for c in verifier_collect
     )
-    for name in FIXED_OUTPUT_PATHS:
+    # Iterate the plan's FIXED outputs, not FIXED_OUTPUT_PATHS: the
+    # session-record slot is agent-flavored (exactly one of the two session
+    # names belongs in a plan), while observables are probed via the
+    # environment API and are deliberately not collect-command outputs.
+    for name in plan:
+        if name.startswith("observable:"):
+            continue
         if name not in commands:
             raise EvidenceIntegrityError(
                 f"collect plan output {name!r} is not produced by any "

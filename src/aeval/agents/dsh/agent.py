@@ -333,6 +333,11 @@ class DshAgent(BaseInstalledAgent):
     # what stops the framework from deploying it into a second agent.
     CONTROL_STACK = "dsh"
 
+    # The collect slot this adapter's official session record belongs to
+    # (aeval.agents.contract). DSH's record is the zstd session file under
+    # the synced session root — the historical slot, byte-identical path.
+    SESSION_RECORD_OUTPUT = "dsh_session"
+
     SANDBOX_HOME = "/logs/agent/dsh-home"
     SESSION_ARTIFACT_DIR = "dsh-home"
 
@@ -417,6 +422,32 @@ class DshAgent(BaseInstalledAgent):
     def agent_session_id(self) -> str | None:
         """Contract member: the agent's conversation session (see dsh_session_id)."""
         return self._session_id
+
+    def read_session_record(self) -> bytes:
+        """Contract member: bytes of the synced official session record.
+
+        Host-side copy, located under this trial's synced DSH session root
+        (``host_session_root``). Moved here from the collection hook when the
+        session-record slot generalised: each adapter knows its own record.
+        """
+        session_id = self.agent_session_id
+        if not session_id:
+            raise DshRunError(
+                "the trial's agent exposes no DSH session — the official "
+                "session record cannot be collected"
+            )
+        source_root = host_session_root(Path(self.paths().logs_dir))
+        try:
+            record = find_session_record(source_root, str(session_id))
+        except Exception as exc:  # noqa: BLE001 - reported, never guessed
+            raise DshRunError(f"official session record is ambiguous: {exc}") from exc
+        if record is None:
+            raise DshRunError(
+                f"official session record for {session_id} not found under "
+                f"{source_root} — the synced session must exist before evidence "
+                "can be collected"
+            )
+        return record.read_bytes()
 
     @property
     def dsh_session_id(self) -> str | None:

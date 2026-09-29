@@ -1,0 +1,15 @@
+schema_version = "1.4"
+
+[environment]
+# 同 e2e-hello：镜像在 environment/Dockerfile 的 FROM 里按 digest 钉死。
+network_mode = "no-network"
+
+[[verifier.collect]]
+# 会话记录槽位是 agent_session_record（本套件 driver.session_record），
+# 不是 DSH 的 dsh_session —— deepagent 的官方会话记录是 ACP runner 的
+# summary，由宿主侧 collection 经适配器的 read_session_record() 采集。
+command = "aeval-collect runtime_dump mock_call_log agent_session_record canonical_transcript"
+
+[metadata.provenance]
+source = "authored-internally"
+license = "MIT"

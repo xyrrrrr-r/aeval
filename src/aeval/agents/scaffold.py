@@ -77,6 +77,9 @@ class {class_name}:
     PROVIDES = frozenset({{{provides_src}}})
     BUDGET_ENFORCEMENT = "{budget}"
     WRITE_SURFACE = "ephemeral_overlay"
+    # The collect slot your official session record belongs to; must match
+    # the suite's driver.session_record.
+    SESSION_RECORD_OUTPUT = "agent_session_record"
     # Facts you must observe in the live sandbox and bind to the lock.
     REQUIRED_OBSERVATIONS = ()
 
@@ -87,6 +90,16 @@ class {class_name}:
     def __init__(self, **kwargs):
         self.kwargs = dict(kwargs)
         self.agent_session_id = None
+
+    def read_session_record(self) -> bytes:
+        """Bytes of this agent's official session record.
+
+        Until this works, collection fails closed with this message rather
+        than recording a fabricated record.
+        """
+        raise NotImplementedError(
+            "read the {agent_id} official session record and return its bytes"
+        )
 
     def read_trial_session(self) -> CanonicalTranscript:
         """Turn this agent's session artifact into ATIF.

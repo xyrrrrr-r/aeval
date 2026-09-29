@@ -97,7 +97,8 @@ def test_producers_write_at_fixed_paths(tmp_path, runtime_lock, demo_suite):
     trial_dir = tmp_path / "trial"
     trial_dir.mkdir()
     _collect_everything(trial_dir, runtime_lock, demo_suite)
-    for name in FIXED_OUTPUT_PATHS:
+    plan = build_required_collect_plan(demo_suite)
+    for name in plan:
         assert (trial_dir / output_path_for(name)).is_file(), name
     for obs in demo_suite.overlay.observables:
         assert (trial_dir / f"observables/{obs.name}.json").is_file()

@@ -67,6 +67,32 @@ def test_a_second_agent_is_evaluated_without_any_job_file_for_it(suite):
     assert "missing" in message and "acp_stdio" in message
 
 
+def test_a_session_record_flavor_mismatch_is_refused_at_composition(suite):
+    """The slot is agent-flavored: dsh sessions and ACP summaries never mix.
+
+    deepagent's official record is the ACP runner summary (agent_session_record);
+    e2e-hello's collect plan names dsh_session. The pairing must be refused
+    before any sandbox is built, for the flavor reason, not a capability one.
+    """
+    with pytest.raises(SuiteError) as excinfo:
+        compose_harbor_job(suite, agent="deepagent", agents_root=AGENTS)
+    message = str(excinfo.value)
+    # capability gate fires first (sdk_jsonrpc); force the flavor gate by
+    # checking the reverse direction: dsh cannot serve an ACP-slot suite.
+    assert "cannot serve this suite" in message
+
+    deepagent_hello = REPO / "suites" / "deepagent-hello"
+    with pytest.raises(SuiteError, match="session-record flavor mismatch"):
+        compose_harbor_job(
+            load_suite(deepagent_hello), agent="dsh", agents_root=AGENTS
+        )
+    # and the matching pairing composes cleanly
+    driven = compose_harbor_job(
+        load_suite(deepagent_hello), agent="deepagent", agents_root=AGENTS
+    )
+    assert driven.agents[0].import_path.endswith("DeepgentAgent")
+
+
 def test_an_undeclared_agent_is_refused_with_the_fix(suite):
     with pytest.raises(SuiteError, match="declare it in"):
         compose_harbor_job(suite, agent="nope", agents_root=AGENTS)

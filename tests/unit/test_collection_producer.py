@@ -24,6 +24,7 @@ from aeval.hooks.evidence import (
     FIXED_OUTPUT_PATHS,
     build_required_collect_plan,
     load_collection_manifest,
+    output_path_for,
 )
 
 
@@ -87,6 +88,29 @@ class FakeAgent:
     def paths(self):
         return SimpleNamespace(logs_dir=self._logs_dir)
 
+    # The collect slot this double's record belongs to (contract member).
+    SESSION_RECORD_OUTPUT = "dsh_session"
+
+    def read_session_record(self):
+        """Mimics DshAgent.read_session_record: fail closed when missing."""
+        from aeval.agents.dsh.agent import find_session_record, host_session_root
+
+        session_id = self.dsh_session_id
+        if not session_id:
+            raise RuntimeError(
+                "the trial's agent exposes no DSH session — the official "
+                "session record cannot be collected"
+            )
+        source_root = host_session_root(self._logs_dir)
+        record = find_session_record(source_root, str(session_id))
+        if record is None:
+            raise RuntimeError(
+                f"official session record for {session_id} not found under "
+                f"{source_root} — the synced session must exist before evidence "
+                "can be collected"
+            )
+        return record.read_bytes()
+
     def read_trial_session(self):
         return SimpleNamespace(
             model_dump_json=lambda indent=2: json.dumps({"session": self.dsh_session_id})
@@ -149,8 +173,8 @@ async def test_collects_every_planned_output_and_writes_manifest(
             "canonical_transcript", "observable:result"}
     assert {o.name for o in manifest.outcomes} == plan
     assert manifest.runtime_lock_digest == runtime_lock.digest()
-    for name, rel in FIXED_OUTPUT_PATHS.items():
-        assert (trial_dir / rel).is_file(), name
+    for name in sorted(plan):
+        assert (trial_dir / output_path_for(name)).is_file(), name
     assert (trial_dir / "observables" / "result.json").is_file()
 
     # the observable artifact carries the PROBED value, not a placeholder
@@ -233,6 +257,13 @@ async def test_agent_without_a_dsh_session_fails_closed(tmp_path, runtime_lock):
 
     class PlainAgent:
         dsh_session_id = None
+        SESSION_RECORD_OUTPUT = "dsh_session"
+
+        def read_session_record(self):
+            raise RuntimeError(
+                "the trial's agent exposes no DSH session — the official "
+                "session record cannot be collected"
+            )
 
     with pytest.raises(CollectionError, match="no DSH session"):
         await collect_trial_evidence(

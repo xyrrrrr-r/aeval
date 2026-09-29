@@ -182,6 +182,13 @@ class MetricDeclaration(_SuiteModel):
 
 class DriverSpec(_SuiteModel):
     require: list[str] = Field(default_factory=list)
+    # Which session-record collect output this suite's evidence bundles use.
+    # The slot generalised off the DSH-only hardcode: an adapter declares the
+    # flavor it can produce (contract ``SESSION_RECORD_OUTPUT``) and the suite
+    # declares the flavor its tasks' collect commands name — a pairing where
+    # the two disagree is refused at composition, not discovered mid-collection.
+    # The default keeps every pre-existing suite byte- and behavior-identical.
+    session_record: Literal["dsh_session", "agent_session_record"] = "dsh_session"
     # Stage the task's `tests/` directory into the sandbox right after the
     # agent ends and BEFORE evidence collection.
     #

@@ -31,7 +31,6 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from aeval.agents.dsh.agent import find_session_record, host_session_root
 from aeval.contracts import ArtifactRef, CollectionManifest, CollectOutcome, RuntimeLock
 from aeval.hooks.baseline_arrival import (
     _BaselineFailure,
@@ -189,7 +188,32 @@ async def collect_trial_evidence(
         outcomes.append(outcome)
         artifacts.append(ref)
 
-    session_bytes = _read_session_record(agent)
+    # The session-record slot is agent-flavored: the suite declares the flavor
+    # its collect plan uses, the adapter declares the one it produces. A
+    # mismatch here means composition's pairing gate was bypassed — fail
+    # closed rather than writing the record into the wrong slot.
+    suite_flavor = getattr(
+        getattr(suite.overlay, "driver", None), "session_record", "dsh_session"
+    )
+    adapter_flavor = getattr(agent, "SESSION_RECORD_OUTPUT", None)
+    if adapter_flavor != suite_flavor:
+        raise CollectionError(
+            f"session-record flavor mismatch: suite requires {suite_flavor!r}, "
+            f"adapter produces {adapter_flavor!r} — the pairing should have "
+            "been refused at composition"
+        )
+    reader = getattr(agent, "read_session_record", None)
+    if not callable(reader):
+        raise CollectionError(
+            "the trial's agent exposes no read_session_record() — the official "
+            "session record cannot be collected"
+        )
+    try:
+        session_bytes = reader()
+    except Exception as exc:  # noqa: BLE001 - the adapter's own fail-closed
+        raise CollectionError(
+            f"official session record could not be read: {exc}"
+        ) from exc
     outcome, ref = produce_session_record(trial_dir, session_bytes)
     outcomes.append(outcome)
     artifacts.append(ref)
@@ -238,36 +262,6 @@ async def collect_trial_evidence(
         runtime_lock=runtime_lock,
     )
     return manifest
-
-
-def _read_session_record(agent: Any) -> bytes:
-    """Bytes of the synced official session record (host-side copy)."""
-    paths_fn = getattr(agent, "paths", None)
-    # DSH's own conversation session id — never Harbor's ``session_id``
-    # attribute, which names the sandbox environment instead.
-    # Contract member first (aeval.agents.contract); dsh_session_id kept as a
-    # deprecated fallback for adapters written before the contract existed.
-    session_id = getattr(agent, "agent_session_id", None)
-    if session_id is None:
-        session_id = getattr(agent, "dsh_session_id", None)
-    if not callable(paths_fn) or not session_id:
-        raise CollectionError(
-            "the trial's agent exposes no DSH session — the official "
-            "session record cannot be collected"
-        )
-    logs_dir = paths_fn().logs_dir
-    source_root = host_session_root(Path(logs_dir))
-    try:
-        record = find_session_record(source_root, str(session_id))
-    except Exception as exc:
-        raise CollectionError(f"official session record is ambiguous: {exc}") from exc
-    if record is None:
-        raise CollectionError(
-            f"official session record for {session_id} not found under "
-            f"{source_root} — the synced session must exist before evidence "
-            "can be collected"
-        )
-    return record.read_bytes()
 
 
 def load_broker_calls(path: Path | None) -> list[dict[str, Any]]:

@@ -29,6 +29,7 @@ from typing import Callable, Literal
 from aeval.agents.contract import (
     adapter_declaration_gap,
     adapter_member_gap,
+    session_record_output_of,
     budget_gate_violation,
     build_adapter_spec,
     capabilities_of,
@@ -124,7 +125,10 @@ def check_contract(adapter: type) -> ConformanceCheck:
 
 
 def check_capabilities(
-    import_path: str, adapter: type, required: list[str] | None
+    import_path: str,
+    adapter: type,
+    required: list[str] | None,
+    session_record: str | None = None,
 ) -> ConformanceCheck:
     provided = capabilities_of(adapter)
     if required is None:
@@ -140,11 +144,22 @@ def check_capabilities(
             "fail",
             f"suite requires {sorted(required)}, adapter provides {sorted(provided)}, missing {missing}",
         )
-    return ConformanceCheck(
-        "capabilities",
-        "pass",
-        f"provides {sorted(required)} required by the suite",
-    )
+    if session_record is not None:
+        # The session-record slot pairing (refused at composition in a real
+        # run) is reported here too: a conformance pass must not stay silent
+        # about a pairing that would be refused the moment it is composed.
+        flavor = session_record_output_of(adapter)
+        if flavor != session_record:
+            return ConformanceCheck(
+                "capabilities",
+                "fail",
+                f"suite's session record is {session_record!r}, adapter "
+                f"produces {flavor!r} — the pairing is refused at composition",
+            )
+    detail = f"provides {sorted(required)} required by the suite"
+    if session_record is not None:
+        detail += f"; session record {session_record!r}"
+    return ConformanceCheck("capabilities", "pass", detail)
 
 
 def check_accounting(
@@ -223,6 +238,7 @@ def run_conformance(
     declaration_path: Path | None = None,
     agents_root: Path | None = None,
     required_capabilities: list[str] | None = None,
+    session_record: str | None = None,
     budget: object | None = None,
     instance: object | None = None,
 ) -> ConformanceReport:
@@ -246,7 +262,9 @@ def run_conformance(
             )
         )
     report.checks.append(check_contract(adapter))
-    report.checks.append(check_capabilities(import_path, adapter, required_capabilities))
+    report.checks.append(
+        check_capabilities(import_path, adapter, required_capabilities, session_record)
+    )
     report.checks.append(check_accounting(adapter, budget))
     report.checks.append(check_transcript(adapter, instance))
     return report
@@ -286,6 +304,9 @@ def run_conformance_for(
                 declaration_path=declaration_path,
                 agents_root=agents_root,
                 required_capabilities=list(suite.overlay.driver.require),
+                session_record=getattr(
+                    suite.overlay.driver, "session_record", "dsh_session"
+                ),
                 budget=suite.overlay.budget,
             )
         )

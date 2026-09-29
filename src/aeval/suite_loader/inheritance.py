@@ -275,7 +275,11 @@ def _apply_remove(merged: dict[str, Any], remove: dict[str, list[str]], path: Pa
                 del graders[slot]
             continue
         if section in ("requirements", "require"):
-            holder = merged if section == "require" else merged.get("verdict", None)
+            holder = (
+                merged.get("driver", None)
+                if section == "require"
+                else merged.get("verdict", None)
+            )
             section_key = "require" if section == "require" else "requirements"
             # driver.require is a union list; verdict.requirements is a union list.
             target = holder.get(section_key) if isinstance(holder, dict) else None

@@ -79,5 +79,5 @@ def test_identity_covers_the_shared_base():
 def test_bases_are_not_discovered_as_suites():
     discovered = discover_suites([SUITES])
     names = sorted(path.name for path in discovered)
-    assert names == ["e2e-hello", "tbench-pilot"]
+    assert names == ["deepagent-hello", "e2e-hello", "tbench-pilot"]
     assert all(path.name != "_base" for path in discovered)

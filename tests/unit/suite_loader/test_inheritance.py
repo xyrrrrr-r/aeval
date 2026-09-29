@@ -133,6 +133,22 @@ def test_remove_drops_an_inherited_entry(suites_root):
     assert suite.overlay.verdict.requirements == ["agent_finished"]
 
 
+def test_remove_require_drops_an_inherited_driver_requirement(suites_root):
+    """remove.require names DSH-only capabilities a non-DSH suite must drop.
+
+    The base pins the DSH driver contract; an ACP-only suite removes the DSH
+    bits instead of forking the whole convention base.
+    """
+    child = {
+        **CHILD_SPECIFIC,
+        "driver": {"require": ["shell"]},
+        "remove": {"require": ["acp_stdio"]},
+    }
+    _write(suites_root / "child-suite" / "suite.yaml", {**child, "extends": "_base/harbor.base.yaml"})
+    suite = load_suite(suites_root / "child-suite")
+    assert suite.overlay.driver.require == ["shell"]
+
+
 def test_removing_something_that_is_absent_is_refused(suites_root):
     child = {**CHILD_SPECIFIC, "remove": {"observables": ["nope"]}}
     _write(suites_root / "child-suite" / "suite.yaml", {**child, "extends": "_base/harbor.base.yaml"})

@@ -173,6 +173,11 @@ class DeepgentAgent(AcpAgent):
     SANDBOX_HOME = _SANDBOX_HOME
     SESSION_ARTIFACT_DIR = _SESSION_ARTIFACT_DIR
 
+    # The collect slot this adapter's official session record belongs to
+    # (aeval.agents.contract). deepagent's record is Harbor's ACP runner
+    # summary — not a DSH session file, so it takes the generic slot.
+    SESSION_RECORD_OUTPUT = "agent_session_record"
+
     ADAPTER_ID = "deepagent"
     ADAPTER_VERSION = "1"
     ADAPTER_MODE = "acp_stdio"
@@ -239,6 +244,28 @@ class DeepgentAgent(AcpAgent):
             if isinstance(value, str) and value:
                 return value
         return None
+
+    def read_session_record(self) -> bytes:
+        """Contract member: Harbor's official session record for the last run.
+
+        The ACP runner's ``acp-summary.json`` (session id, stop reason, token
+        usage, instruction) is the official per-session record; the full event
+        stream it summarizes reaches the evidence bundle as the canonical
+        transcript (Harbor's ATIF conversion). Fails closed: a missing or
+        unreadable summary means the run or its log sync did not complete.
+        """
+        path = self.logs_dir / _SUMMARY_FILENAME
+        if not path.is_file():
+            raise DeepgentRunError(
+                f"official session record {path} is missing — the ACP run or "
+                "its log sync did not complete"
+            )
+        try:
+            return path.read_bytes()
+        except OSError as exc:
+            raise DeepgentRunError(
+                f"official session record {path} could not be read: {exc}"
+            ) from exc
 
     def _load_summary(self) -> dict[str, Any] | None:
         """Read the runner's summary once; a missing or broken file is None."""

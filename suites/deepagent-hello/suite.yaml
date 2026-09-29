@@ -1,0 +1,26 @@
+schema_version: 2
+id: deepagent-hello
+version: 0.1.0
+# 与 e2e-hello 同一任务形态（写 hello 到 /workspace/result），但面向
+# ACP 适配器：驱动要求只有 deepagent 提供的三项；会话记录槽位走通用
+# agent_session_record（deepagent 的官方会话记录是 Harbor ACP runner 的
+# summary，不是 DSH 会话文件）。无预算 —— budget_enforcement=none 的
+# 适配器配带预算的套件会被 P1-3 门正确拒绝，计量等 P2-5b。
+extends: _base/harbor.base.yaml
+harbor:
+  job: jobs/deepagent-hello.yaml
+driver:
+  # 基座的 require 是并集语义且含 DSH 特有的 sdk_jsonrpc —— deepagent 不
+  # 提供、也不需要它；本套件面向 ACP 适配器，显式移除该能力要求。
+  require: [acp_stdio, shell, file_tools]
+  session_record: agent_session_record
+remove:
+  require: [sdk_jsonrpc]
+observables:
+  - { name: result, type: string, source: "file:/workspace/result" }
+verdict:
+  graders:
+    default: { impl: "graders/hello_outcome.py@v1", layer: outcome }
+metrics:
+  - { id: reliability, kind: pass_pow_k, k: 5 }
+provenance: { source: authored-internally, license: MIT }

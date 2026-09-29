@@ -1,0 +1,9 @@
+job_name: deepagent-hello
+n_attempts: 5
+n_concurrent_trials: 1
+# 占位 agent：真正的适配器由 aeval run --agent deepagent 注入（组合时用
+# 声明的 launch spec 替换此处），套件形态校验不需要真适配器。
+agents:
+  - name: nop
+environment:
+  type: e2b

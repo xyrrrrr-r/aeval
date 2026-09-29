@@ -187,6 +187,42 @@ def _check_agent_capabilities(agents: list[Any], required: list[str], job_path: 
         )
 
 
+def _check_session_record_pairing(
+    agents: list[Any], suite: Any, job_path: Path
+) -> None:
+    """Refuse a pairing whose session-record flavors disagree.
+
+    The session-record collect slot is agent-flavored: the suite declares the
+    flavor its tasks' collect commands name (``driver.session_record``) and the
+    adapter declares the one it produces (``SESSION_RECORD_OUTPUT``). A
+    mismatch caught here fails before any sandbox is built; caught later it
+    would be a mid-collection infra error. Harbor-native ``name:`` agents are
+    exempt (no import_path, no flavor to check).
+    """
+    from aeval.agents.contract import load_adapter_class, session_record_output_of
+
+    suite_flavor = getattr(
+        getattr(suite.overlay, "driver", None), "session_record", "dsh_session"
+    )
+    for agent in agents:
+        if not isinstance(agent, dict):
+            continue
+        import_path = agent.get("import_path")
+        if not isinstance(import_path, str) or not import_path.strip():
+            continue
+        adapter_flavor = session_record_output_of(
+            load_adapter_class(import_path.strip())
+        )
+        if adapter_flavor != suite_flavor:
+            raise SuiteError(
+                f"{job_path}: session-record flavor mismatch — the suite's "
+                f"collect plan uses {suite_flavor!r} but "
+                f"{import_path.strip()} produces {adapter_flavor!r}; align the "
+                "suite's driver.session_record with the adapter's "
+                "SESSION_RECORD_OUTPUT"
+            )
+
+
 def _declared_agent_entry(
     suite: ResolvedSuite,
     agent_id: str,
@@ -258,6 +294,7 @@ def compose_harbor_job(
     ):
         raise SuiteError("Harbor job must explicitly select at least one agent")
     _check_agent_capabilities(agents, suite.overlay.driver.require, job_path)
+    _check_session_record_pairing(agents, suite, job_path)
     job = JobConfig.model_validate(deepcopy(job_data), extra="forbid")
     # P0-2: verifier log filters can silently drop required evidence
     # logs — an evaluation job must collect the full verifier log set.

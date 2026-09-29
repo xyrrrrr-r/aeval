@@ -29,6 +29,7 @@ from aeval.hooks.evidence import (
     validate_collect_declarations,
     verify_artifact_hashes,
     verify_evidence_bundle,
+    SESSION_RECORD_OUTPUTS,
 )
 from aeval.suite_models import ResolvedSuite
 from tests.conftest import build_complete_trial_dir
@@ -387,7 +388,11 @@ async def test_gate_blocks_on_artifact_path_escape(tmp_path, demo_suite, runtime
 
 def test_collect_plan_lists_atomic_outputs(demo_suite):
     plan = build_required_collect_plan(demo_suite)
+    # Every FIXED output except the session-record slot's other flavor; the
+    # slot itself takes the suite's declared flavor (demo: dsh_session).
     for name in FIXED_OUTPUT_PATHS:
+        if name in SESSION_RECORD_OUTPUTS and name != "dsh_session":
+            continue
         assert name in plan
     # the manifest itself is NOT a collect output (P0-6): its identity
     # is bound by the outer bundle attestation, never self-hashed
@@ -408,21 +413,32 @@ def test_collect_declarations_require_every_output():
         def __init__(self, command):
             self.command = command
 
+    dsh_flavor_plan = [
+        n for n in FIXED_OUTPUT_PATHS
+        if n not in SESSION_RECORD_OUTPUTS or n == "dsh_session"
+    ]
+
     with pytest.raises(EvidenceIntegrityError, match="not produced"):
         validate_collect_declarations(
             [Cmd("snapshot runtime_dump")],
             ["runtime_dump", "mock_call_log"],
         )
+    # the session-record slot is flavor-exclusive: only the plan's flavor is
+    # required of the declared commands, the other slot name never is
+    validate_collect_declarations(
+        [Cmd("snapshot runtime_dump mock_call_log dsh_session canonical_transcript")],
+        ["runtime_dump", "mock_call_log", "dsh_session", "canonical_transcript"],
+    )
     validate_collect_declarations(
         [
             Cmd("snapshot runtime_dump && snapshot mock_call_log"),
             Cmd("cp sessions/session.v4.jsonl.zstd dsh_session"),
             Cmd("build canonical_transcript"),
         ],
-        list(FIXED_OUTPUT_PATHS),
+        dsh_flavor_plan,
     )
     with pytest.raises(EvidenceIntegrityError, match="no \\[\\[verifier.collect\\]\\]"):
-        validate_collect_declarations([], list(FIXED_OUTPUT_PATHS))
+        validate_collect_declarations([], dsh_flavor_plan)
 
 
 def test_bundle_descriptor_rejected_on_escape(tmp_path, runtime_lock, demo_suite):

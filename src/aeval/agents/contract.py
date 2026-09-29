@@ -42,6 +42,7 @@ __all__ = [
     "AgentAdapter",
     "capabilities_of",
     "declared_capabilities",
+    "session_record_output_of",
     "load_adapter_class",
     "required_capability_gaps",
     "adapter_declaration_gap",
@@ -64,11 +65,20 @@ PROVIDES_ATTR = "PROVIDES"
 #: Missing any of these means a run whose records cannot say which agent produced
 #: them — refused at run start rather than discovered at comparison time.
 #: Members the evidence chain actually reads (name/version for identity, paths()
-#: for artifact locations, read_trial_session() for grading) plus a conversation
-#: session id under either the contract name or the deprecated alias. Missing one
-#: used to mean an AttributeError in the middle of collection; now it is refused
-#: before the run starts.
-REQUIRED_MEMBERS = ("name", "version", "paths", "read_trial_session")
+#: for artifact locations, read_trial_session() for grading, read_session_record()
+#: for the official session record, SESSION_RECORD_OUTPUT for the collect slot
+#: that record belongs to) plus a conversation session id under either the
+#: contract name or the deprecated alias. Missing one used to mean an
+#: AttributeError in the middle of collection; now it is refused before the
+#: run starts.
+REQUIRED_MEMBERS = (
+    "name",
+    "version",
+    "paths",
+    "read_trial_session",
+    "read_session_record",
+    "SESSION_RECORD_OUTPUT",
+)
 REQUIRED_DECLARATIONS = (
     "ADAPTER_ID",
     "ADAPTER_VERSION",
@@ -79,6 +89,11 @@ REQUIRED_DECLARATIONS = (
 SESSION_ID_ATTR = "agent_session_id"
 LEGACY_SESSION_ID_ATTR = "dsh_session_id"
 SESSION_ID_MEMBERS = (SESSION_ID_ATTR, LEGACY_SESSION_ID_ATTR)
+
+SESSION_RECORD_OUTPUT_ATTR = "SESSION_RECORD_OUTPUT"
+#: The session-record collect outputs an adapter may declare. Must match the
+#: suite's ``driver.session_record`` — the pairing is refused at composition.
+SESSION_RECORD_OUTPUTS = frozenset({"dsh_session", "agent_session_record"})
 
 
 def load_adapter_class(import_path: str) -> type:
@@ -139,6 +154,25 @@ def capabilities_of(adapter: type) -> frozenset[str]:
             )
         names.add(item.strip())
     return frozenset(names)
+
+
+def session_record_output_of(adapter: type) -> str:
+    """The session-record collect output this adapter produces (fail closed).
+
+    Every adapter declares ``SESSION_RECORD_OUTPUT`` — the collect slot its
+    ``read_session_record()`` bytes belong to — and the suite declares the
+    matching flavor (``driver.session_record``). A missing or unknown value
+    is a configuration error, refused here rather than mid-collection.
+    """
+    value = getattr(adapter, SESSION_RECORD_OUTPUT_ATTR, None)
+    if not isinstance(value, str) or value not in SESSION_RECORD_OUTPUTS:
+        raise SuiteError(
+            f"Agent adapter {describe_adapter(adapter)} declares no valid "
+            f"{SESSION_RECORD_OUTPUT_ATTR}. Declare one of "
+            f"{sorted(SESSION_RECORD_OUTPUTS)} — the collect output your "
+            "read_session_record() bytes belong to."
+        )
+    return value
 
 
 def declared_capabilities(import_path: str) -> frozenset[str]:

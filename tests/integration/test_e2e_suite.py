@@ -14,7 +14,7 @@ from pathlib import Path
 import pytest
 
 from aeval.contracts import GradeResult
-from aeval.hooks.evidence import build_required_collect_plan, FIXED_OUTPUT_PATHS
+from aeval.hooks.evidence import build_required_collect_plan, FIXED_OUTPUT_PATHS, SESSION_RECORD_OUTPUTS
 from aeval.suite_loader.composition import compose_harbor_job
 from aeval.suite_loader.loader import load_suite
 from aeval.verdict.executor import grade_trial
@@ -94,13 +94,19 @@ def test_baselines_probe_only_declared_observables(suite):
 
 def test_collect_plan_and_task_declarations_agree(suite):
     plan = build_required_collect_plan(suite)
-    assert set(plan) == set(FIXED_OUTPUT_PATHS) | {
+    # The session-record slot takes the suite's flavor (dsh_session here):
+    # exactly one of the two slot names appears, never both.
+    fixed = {n for n in FIXED_OUTPUT_PATHS if n not in SESSION_RECORD_OUTPUTS}
+    flavor = suite.overlay.driver.session_record
+    assert set(plan) == fixed | {flavor} | {
         f"observable:{o.name}" for o in suite.overlay.observables
     }
     # compose_harbor_job already refuses tasks that do not declare the
     # fixed outputs; assert the declaration text explicitly.
     task_toml = (SUITE / "tasks" / "hello" / "task.toml").read_text("utf-8")
-    for name in FIXED_OUTPUT_PATHS:
+    for name in plan:
+        if name.startswith("observable:"):
+            continue
         assert name in task_toml, f"task.toml must declare collect output {name}"
 
 
