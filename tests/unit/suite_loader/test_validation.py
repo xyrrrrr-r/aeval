@@ -106,9 +106,12 @@ def test_load_suite_requires_suite_yaml(tmp_path):
 
 
 def test_restating_harbor_owned_fact_rejected(tmp_path):
+    """Harbor-owned facts stay Harbor's. NOTE: budget is deliberately not one of
+    them — Harbor's JobConfig has no budget field, so a spend cap is an aeval fact
+    declared in the suite overlay (see test_suite_budget_cap)."""
     suite_dir = _copy_demo(tmp_path)
-    _edit(suite_dir, lambda d: d.update(budget={"tokens": 1000}))
-    with pytest.raises(SuiteError, match="budget"):
+    _edit(suite_dir, lambda d: d.update(trials={"k": 3}))
+    with pytest.raises(SuiteError, match="trials"):
         load_suite(suite_dir)
 
 

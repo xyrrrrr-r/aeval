@@ -98,7 +98,7 @@ def create_run_context(job: Any) -> EvaluationContext:
         raise HookRegistrationError("Job output directory differs from intent config")
     if not suite_identity_matches(manifest.overlay, suite):
         raise HookRegistrationError("suite identity differs from intent manifest")
-    _require_adapter_contract(job)
+    _require_adapter_contract(job, suite.overlay.budget, accepted=manifest.accepted_unmetered_budget)
     trials_dir = Path(job.job_dir).resolve()
     if trials_dir == root or not trials_dir.is_relative_to(root):
         raise HookRegistrationError("Harbor job directory must be inside the run directory")
@@ -430,9 +430,10 @@ async def _record_unjudgeable_exclusion(
 
     Returns True when a record for the trial now exists in the store.
     """
-    from aeval.contracts import TrialCoordinates, TrialRecord
+    from aeval.contracts import BudgetSnapshot, TrialCoordinates, TrialRecord
     from aeval.store.sqlite import TrialStore
 
+    observed = _observed_adapter(context, state)
     store = TrialStore(context.store_path)
     try:
         try:
@@ -451,7 +452,12 @@ async def _record_unjudgeable_exclusion(
             ),
             stop_reason=state.stop_reason or "crashed",
             baseline_ok=state.baseline_ok,
-            adapter=_observed_adapter(context, state),
+            adapter=observed,
+            budget=(
+                BudgetSnapshot(enforcement_point=observed.budget_enforcement)
+                if observed is not None
+                else None
+            ),
             verdict="cannot_judge",
             transcript_extra={
                 "aeval": {
@@ -472,8 +478,8 @@ async def _record_unjudgeable_exclusion(
         store.close()
 
 
-def _require_adapter_contract(job: Any) -> None:
-    """Refuse a run whose selected adapter cannot describe itself or be read.
+def _require_adapter_contract(job: Any, budget: Any = None, *, accepted: bool = False) -> None:
+    """Refuse a run whose selected adapter cannot describe itself, be read, or be metered.
 
     The recorded adapter identity (``AdapterSpec``) is what keeps a second agent
     distinguishable from this one in the store and in comparability. Checked at
@@ -484,9 +490,12 @@ def _require_adapter_contract(job: Any) -> None:
     from aeval.agents.contract import (
         adapter_declaration_gap,
         adapter_member_gap,
+        budget_gate_violation,
+        build_adapter_spec,
         load_adapter_class,
     )
 
+    selected = []
     for entry in getattr(job.config, "agents", None) or []:
         import_path = getattr(entry, "import_path", None)
         if not import_path:
@@ -506,6 +515,12 @@ def _require_adapter_contract(job: Any) -> None:
                 "record which adapter produced its trials; declare them on the class "
                 "(see aeval.agents.contract)"
             )
+        selected.append(build_adapter_spec(adapter_class, import_path=import_path))
+
+    if selected:
+        violation = budget_gate_violation(selected, budget, accepted=accepted)
+        if violation:
+            raise HookRegistrationError(violation)
 
 
 def _observed_adapter(context: EvaluationContext, state: Any) -> Any:

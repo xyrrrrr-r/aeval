@@ -45,6 +45,8 @@ __all__ = [
     "required_capability_gaps",
     "adapter_declaration_gap",
     "adapter_member_gap",
+    "budget_enforcement_point",
+    "budget_gate_violation",
     "build_adapter_spec",
     "describe_adapter",
 ]
@@ -236,3 +238,52 @@ def adapter_member_gap(adapter: type) -> list[str]:
     if not any(hasattr(adapter, member) for member in SESSION_ID_MEMBERS):
         missing.append(f"{SESSION_ID_ATTR} (or legacy {LEGACY_SESSION_ID_ATTR})")
     return missing
+
+
+def budget_enforcement_point(specs: list[AdapterSpec]) -> str:
+    """The run-level place where spend is actually enforced.
+
+    Mirrors ``AdapterSpec.budget_enforcement`` when every selected adapter agrees,
+    ``"none"`` when none was selected, and ``"mixed"`` when a job selects adapters
+    with different guarantees — a run must not claim one point it does not have.
+    """
+    points = {spec.budget_enforcement for spec in specs}
+    if not points:
+        return "none"
+    if len(points) == 1:
+        return next(iter(points))
+    return "mixed"
+
+
+def budget_gate_violation(
+    specs: list[AdapterSpec], budget: Any, *, accepted: bool
+) -> str | None:
+    """Why a capped run must not start with these adapters (None = allowed).
+
+    An adapter that does not route model traffic through the gateway lease has no
+    measured spend: with a cap declared, the cap would never fire and the run
+    would silently overspend (only surfacing later as a partial verdict). The
+    refusal is the point — the alternative is an evaluation that cannot say what
+    it spent.
+    """
+    if budget is None:
+        return None
+    caps = {
+        name: getattr(budget, name, None)
+        for name in ("max_tokens", "max_seconds", "max_steps")
+    }
+    declared = {name: value for name, value in caps.items() if value is not None}
+    if not declared:
+        return None
+    offenders = [spec for spec in specs if spec.budget_enforcement != "gateway_lease"]
+    if not offenders or accepted:
+        return None
+    described = ", ".join(
+        f"{spec.id} declares budget_enforcement={spec.budget_enforcement!r}"
+        for spec in offenders
+    )
+    return (
+        f"suite caps spend ({declared}) but {described} — its model traffic is not metered "
+        "by the gateway lease, so the cap cannot fire and the run would overspend silently. "
+        "Run with --accept-unmetered-budget to record the gap explicitly instead."
+    )

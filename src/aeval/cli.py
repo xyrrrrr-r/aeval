@@ -68,6 +68,12 @@ def run_cmd(
     sandbox_platform: Annotated[
         str | None, typer.Option(help="Platform of the pinned sandbox image (e.g. arm64)")
     ] = None,
+    accept_unmetered_budget: Annotated[
+        bool,
+        typer.Option(
+            help="Run even though the selected adapter's spend is not metered by the gateway lease"
+        ),
+    ] = False,
     force_build: Annotated[
         bool, typer.Option(help="Rebuild the sandbox template instead of reusing a cached alias")
     ] = False,
@@ -104,6 +110,14 @@ def run_cmd(
             for entry in job.agents
             if getattr(entry, "import_path", None)
         ]
+        from aeval.agents.contract import budget_enforcement_point, budget_gate_violation
+
+        violation = budget_gate_violation(
+            adapters, resolved.overlay.budget, accepted=accept_unmetered_budget
+        )
+        if violation:
+            raise SuiteError(violation)
+        budget_point = budget_enforcement_point(adapters)
         if force_build:
             # Doc §6.3: the first run (and every run after the base image
             # digest changes) must rebuild — Harbor reuses an existing
@@ -156,6 +170,8 @@ def run_cmd(
             config_hash=config_hash,
             config_file_sha256=sha256(config_json.encode("utf-8")).hexdigest(),
             adapters=adapters,
+            budget_enforcement_point=budget_point,
+            accepted_unmetered_budget=accept_unmetered_budget,
             overlay=OverlayIdentity(
                 suite_id=resolved.id,
                 suite_version=resolved.version,

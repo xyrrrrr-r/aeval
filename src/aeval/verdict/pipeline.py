@@ -23,6 +23,7 @@ from typing import Any
 
 from aeval.contracts import (
     AdapterSpec,
+    BudgetSnapshot,
     ArtifactRef,
     EvidenceBundle,
     GradeResult,
@@ -123,7 +124,7 @@ def build_trial_record(
     ``adapter`` is the observed agent identity for this trial (which adapter
     actually produced it); absent means the record cannot say.
     """
-    return TrialRecord(
+    record = TrialRecord(
         trial_id=trial_id,
         coordinates=coordinates,
         stop_reason=stop_reason,  # type: ignore[arg-type]
@@ -138,6 +139,12 @@ def build_trial_record(
         ),
         adapter=adapter,
     )
+    # The enforcement point is a fact about this trial: where spend was actually
+    # enforced. Usage numbers stay None unless measured — an invented cost is
+    # worse than an unavailable one (reliability metrics skip such records).
+    if adapter is not None:
+        record.budget = BudgetSnapshot(enforcement_point=adapter.budget_enforcement)
+    return record
 
 
 async def grade_and_record(

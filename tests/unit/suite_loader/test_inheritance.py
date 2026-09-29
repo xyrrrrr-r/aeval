@@ -141,7 +141,7 @@ def test_removing_something_that_is_absent_is_refused(suites_root):
 
 
 def test_base_may_not_restate_a_harbor_owned_fact(suites_root):
-    _write(suites_root / "_base" / "bad.base.yaml", {**BASE_CONVENTIONS, "budget": {"usd": 5}})
+    _write(suites_root / "_base" / "bad.base.yaml", {**BASE_CONVENTIONS, "trials": {"k": 3}})
     _write(
         suites_root / "child-suite" / "suite.yaml",
         {**CHILD_SPECIFIC, "extends": "_base/bad.base.yaml"},
@@ -332,3 +332,29 @@ def test_gate_still_accepts_legacy_manifests_without_a_chain_digest(suites_root)
     assert suite_identity_matches(_manifest_overlay(suite, overlay_digest="0" * 64), suite) is False
     assert suite_identity_matches(_manifest_overlay(suite, overlay_chain_digest="0" * 64), suite) is False
     assert suite_identity_matches(_manifest_overlay(suite, suite_version="9.9.9"), suite) is False
+
+
+def test_suite_may_declare_a_spend_cap(suites_root):
+    """budget is an aeval fact (Harbor has no budget field), so a suite may cap it."""
+    _write(
+        suites_root / "_base" / "capped.base.yaml",
+        {**BASE_CONVENTIONS, "budget": {"max_tokens": 5000}},
+    )
+    _write(
+        suites_root / "capped-suite" / "suite.yaml",
+        {**CHILD_SPECIFIC, "extends": "_base/capped.base.yaml"},
+    )
+    inherited = load_suite(suites_root / "capped-suite")
+    assert inherited.overlay.budget is not None
+    assert inherited.overlay.budget.max_tokens == 5000
+
+    # a child adds a constraint by declaring its own: nested mappings are
+    # deep-merged, which for a spend cap is the fail-safe direction — inheriting
+    # cannot silently drop the base's cap (drop it with `remove: [budget]`).
+    _write(
+        suites_root / "narrowed-suite" / "suite.yaml",
+        {**CHILD_SPECIFIC, "extends": "_base/capped.base.yaml", "budget": {"max_seconds": 30}},
+    )
+    narrowed = load_suite(suites_root / "narrowed-suite")
+    assert narrowed.overlay.budget.max_seconds == 30
+    assert narrowed.overlay.budget.max_tokens == 5000

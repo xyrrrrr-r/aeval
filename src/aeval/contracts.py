@@ -790,6 +790,10 @@ class RunManifest(BaseModel):
     config_hash: str = ""
     config_file_sha256: str | None = None
     budget_enforcement_point: str = "none"
+    # Set only by --accept-unmetered-budget: the operator accepted that a spend
+    # cap cannot be enforced for this adapter. Recorded so the run is auditable
+    # rather than quietly exempt.
+    accepted_unmetered_budget: bool = False
     artifact_digest: str | None = None
     exclusions: ExclusionSummary | None = None
 

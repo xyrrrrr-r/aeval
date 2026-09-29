@@ -17,6 +17,8 @@ from typing import Any, Literal, Self
 import yaml
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
+from aeval.contracts import BudgetSnapshot
+
 __all__ = [
     "SuiteError",
     "OVERLAY_SCHEMA_VERSION",
@@ -49,7 +51,10 @@ HARBOR_OWNED_TOP_KEYS = frozenset(
         "egress",
         "writable_roots",
         "mocks",
-        "budget",
+        # "budget" is deliberately NOT here: Harbor's JobConfig has no budget
+        # field at all (verified), so there is nothing to defer to. A spend cap
+        # is an evaluation fact and belongs in the suite overlay as
+        # ``budget: {max_tokens: ...}``.
         "trials",
         "tasks",
         "parallel",
@@ -266,6 +271,10 @@ class SuiteOverlay(_SuiteModel):
     verdict: VerdictSpec
     metrics: list[MetricDeclaration] = Field(default_factory=list)
     driver: DriverSpec = Field(default_factory=DriverSpec)
+    # Optional spend cap for a trial (max_tokens/max_seconds/max_steps). Declaring
+    # one makes the enforcement point load-bearing: an adapter that cannot be
+    # metered is refused at run start (see aeval.agents.contract.budget_gate_violation).
+    budget: BudgetSnapshot | None = None
     provenance: ProvenanceInfo
 
     @field_validator("schema_version")
