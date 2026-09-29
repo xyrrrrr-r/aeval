@@ -20,16 +20,24 @@ from aeval.hooks.context import EvaluationContext
 
 
 class FakeUploadEnvironment:
-    def __init__(self, *, fail=False):
+    def __init__(self, *, fail=False, lose_token_mode=False):
         self.uploads: list[tuple[str, str]] = []
         self.uploaded_contents: list[str] = []
+        self.execs: list[str] = []
         self.fail = fail
+        # A real sandbox upload (e2b files.write) does not carry the host's
+        # 0600; the flag documents that the fake models that path.
+        self.lose_token_mode = lose_token_mode
 
     async def upload_file(self, source: str, target: str):
         if self.fail:
             raise OSError("upload failed")
         self.uploads.append((source, target))
         self.uploaded_contents.append(Path(source).read_text(encoding="utf-8"))
+
+    async def exec(self, command: str):
+        self.execs.append(command)
+        return None
 
 
 class _FakeBroker:
@@ -92,6 +100,10 @@ async def test_bootstrap_uploads_token_and_binds_control(
     source, target = env.uploads[0]
     assert target == SANDBOX_TOKEN_PATH.as_posix()
     assert env.uploaded_contents == ["job-token"]
+    # and the host's 0600 is restored in the sandbox: the upload API does not
+    # carry the mode (e2b files.write does not), and the control stack refuses
+    # a token that is not owned-by-me 0600 — see the lab run that found this.
+    assert env.execs and env.execs[0] == f"chmod 600 {SANDBOX_TOKEN_PATH.as_posix()}"
 
     # config carries the broker URL, pinned identity, no aux calls
     assert config["gatewayUrl"] == "http://127.0.0.1:4321"
@@ -173,6 +185,45 @@ async def test_bootstrap_rejects_environment_without_upload(demo_suite, runtime_
     with pytest.raises(BootstrapError, match="no upload_file"):
         await bootstrap_trial_control(
             environment=NoUpload(), context=ctx, trial_id="t",
+            paths=_paths(tmp_path), broker=_FakeBroker(tmp_path),
+            provider="p", model="m",
+        )
+
+
+async def test_a_sandbox_without_exec_cannot_pin_the_token_mode(
+    demo_suite, runtime_lock, tmp_path
+):
+    """Fail closed: an environment that can upload but not exec would leave the
+    token at the daemon's default mode, so the control stack would refuse to
+    start. Better to refuse the trial than to start a stack that cannot run."""
+    ctx = await _context(demo_suite, runtime_lock, tmp_path)
+
+    class UploadOnly:
+        async def upload_file(self, source: str, target: str):
+            return None
+
+    with pytest.raises(BootstrapError, match="no exec"):
+        await bootstrap_trial_control(
+            environment=UploadOnly(), context=ctx, trial_id="t",
+            paths=_paths(tmp_path), broker=_FakeBroker(tmp_path),
+            provider="p", model="m",
+        )
+
+
+async def test_a_failed_chmod_is_refused(demo_suite, runtime_lock, tmp_path):
+    """The exec result is checked, not assumed: a sandbox that cannot set the
+    mode must fail the bootstrap, not proceed to a facade that will not start."""
+    ctx = await _context(demo_suite, runtime_lock, tmp_path)
+
+    class BadChmod(FakeUploadEnvironment):
+        async def exec(self, command: str):
+            self.execs.append(command)
+            return SimpleNamespace(return_code=1)
+
+    env = BadChmod()
+    with pytest.raises(BootstrapError, match="could not pin the job token"):
+        await bootstrap_trial_control(
+            environment=env, context=ctx, trial_id="t",
             paths=_paths(tmp_path), broker=_FakeBroker(tmp_path),
             provider="p", model="m",
         )

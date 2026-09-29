@@ -660,6 +660,25 @@ async def bootstrap_trial_control(
     finally:
         Path(tmp).unlink(missing_ok=True)
 
+    # The upload surface does not carry the host's 0600: e2b's files.write lands
+    # the bytes as root with the daemon's default mode. The control stack
+    # refuses a job token that is not "owned by me, mode 0600", so without this
+    # the sandbox starts a facade that exits immediately — a failure only a real
+    # sandbox exposes, because a local copy preserves the mode. Restore the
+    # invariant through the same exec surface the deployment uses, and refuse
+    # when there is none rather than hand the agent a stack that cannot start.
+    exec_fn = getattr(environment, "exec", None)
+    if not callable(exec_fn):
+        raise BootstrapError(
+            "environment exposes no exec — cannot pin the job token to 0600"
+        )
+    pinned = await exec_fn(f"chmod 600 {shlex.quote(job_token_file)}")
+    code = getattr(pinned, "return_code", getattr(pinned, "exit_code", 0))
+    if code not in (0, None):
+        raise BootstrapError(
+            f"could not pin the job token to 0600 in the sandbox (exit {code})"
+        )
+
     # The plugin's broker lifecycle (hooks/broker_lifecycle.py) composes
     # the control config BEFORE the broker starts — that config, not a
     # recomposition, is the one the trial runs under. When present it is
