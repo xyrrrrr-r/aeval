@@ -84,6 +84,7 @@ if [ "$local_rev" = "$rev" ] && [ "$FORCE_APPLY" != "1" ]; then
   exit 0
 fi
 
+mkdir -p "$CHECKOUT"
 if ! git --git-dir="$MIRROR" --work-tree="$CHECKOUT" checkout -f --quiet "$rev" -- "$SUBDIR" 2>>"$LOG"; then
   log "checkout 失败: $BRANCH@${rev:0:12}"
   exit 1
