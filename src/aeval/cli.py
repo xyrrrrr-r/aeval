@@ -350,6 +350,44 @@ def conformance_cmd(
         _die(str(exc), EXIT_VALIDATION_ERROR)
 
 
+@app.command("new-agent")
+def new_agent_cmd(
+    agent_id: Annotated[str, typer.Option("--id", help="New agent id, e.g. deepagent")],
+    mode: Annotated[str, typer.Option(help="installed_cli | acp_stdio | sdk_jsonrpc")] = "installed_cli",
+    provides: Annotated[str, typer.Option(help="Comma-separated capabilities")] = "shell",
+    budget: Annotated[str, typer.Option(help="none | gateway_lease | wallclock_kill")] = "none",
+    agents_dir: Annotated[Path, typer.Option(help="Directory holding agents/<id>.yaml")] = Path("agents"),
+    package_dir: Annotated[Path | None, typer.Option(help="Where to write the adapter module")] = None,
+    import_path: Annotated[str | None, typer.Option(help="Override the generated import path")] = None,
+    transcript_source: Annotated[str, typer.Option(help="atif_native | native_session_via_bridge")] = "atif_native",
+    force: Annotated[bool, typer.Option(help="Overwrite an existing declaration")] = False,
+) -> None:
+    """Scaffold a conformant adapter skeleton + declaration for a new agent.
+
+    The generated reader raises NotImplementedError, so conformance reports the
+    transcript check as skipped with that reason — never as passed.
+    """
+    from aeval.agents.scaffold import scaffold_agent
+    from aeval.suite_models import SuiteError
+
+    try:
+        result = scaffold_agent(
+            agents_dir,
+            agent_id,
+            mode=mode,
+            provides=[item.strip() for item in provides.split(",") if item.strip()],
+            budget_enforcement=budget,
+            transcript_source=transcript_source,
+            package_dir=package_dir,
+            import_path=import_path,
+            force=force,
+        )
+    except (SuiteError, ValueError, OSError) as exc:
+        _die(str(exc), EXIT_VALIDATION_ERROR)
+        return
+    typer.echo(result.render())
+
+
 @app.command("agents")
 def agents_cmd(
     agents_dir: Annotated[Path, typer.Option(help="Directory holding agents/<id>.yaml")] = Path("agents"),
