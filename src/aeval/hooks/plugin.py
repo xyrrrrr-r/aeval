@@ -167,6 +167,19 @@ def register_trial_hooks(job: Any, context: EvaluationContext) -> None:
         if context.broker_spec is None or state.broker is None:
             return
         try:
+            # One agent handle, used twice: the adapter declares SANDBOX_HOME /
+            # SESSION_ARTIFACT_DIR, hooks/broker_lifecycle.py composes the
+            # authoritative control config from those paths, and the owner
+            # refuses a binding whose paths differ from them. Deriving the paths
+            # here WITHOUT the agent silently fell back to the historical DSH
+            # defaults, so any adapter declaring different ones (deepagent:
+            # /root/.deepagents, deepagent-home) got its binding refused on a
+            # real sandbox — a failure the local harness cannot show, because
+            # there the same paths are handed to both sides.
+            agent_handle = (
+                context.environments.agent(state.trial_id)
+                if context.environments is not None else None
+            )
             binding, config = await bootstrap_trial_control(
                 environment=env_handle,
                 context=context,
@@ -174,15 +187,13 @@ def register_trial_hooks(job: Any, context: EvaluationContext) -> None:
                 paths=trial_control_paths(
                     state, context.run_dir,
                     getattr(getattr(context.suite, "overlay", None), "driver", None),
+                    agent=agent_handle,
                 ),
                 broker=state.broker,
                 provider=str(context.broker_spec.identity.get("provider", "")),
                 model=str(context.broker_spec.identity.get("model", "")),
                 # in-sandbox control stack (verified deployment, §7.5/7.6)
-                agent=(
-                    context.environments.agent(state.trial_id)
-                    if context.environments is not None else None
-                ),
+                agent=agent_handle,
                 control_dist=getattr(context.broker_spec, "control_dist", None),
                 control_ca=getattr(context.broker_spec, "control_ca", None),
                 # The generic facade flavor resolves its own dist (env override,
@@ -403,6 +414,13 @@ async def _grade_and_record(event: Any, context: EvaluationContext, state: Any) 
             transcript_extra=transcript_extra,
             store=store,
             adapter=_observed_adapter(context, state),
+            claim=_claim_check(
+                context,
+                state,
+                context.environments.agent(state.trial_id)
+                if context.environments is not None
+                else None,
+            ),
             # Runtime-only base for sealed artifact paths: trajectory
             # graders read the sealed canonical transcript from it.
             artifact_base=(
@@ -583,6 +601,104 @@ def _transcript_extra(context: EvaluationContext, state: Any) -> dict[str, Any] 
         extra["aeval"]["completeness"] = completeness.model_dump(mode="json")
     extra["aeval"]["stop_reason"] = getattr(transcript, "stop_reason", None)
     return extra
+
+
+def _claim_check(
+    context: EvaluationContext, state: Any, agent: Any
+) -> Any | None:
+    """Cross-check the agent's own claims against independent evidence (None when not applicable).
+
+    The adapter owns the comparison because the shapes it reports are its own;
+    the core only supplies the two independent sources and asks. An adapter that
+    does not declare ``claim_check`` gets ``None`` — no claim record — rather than
+    a check built on another agent's assumptions.
+
+    Inputs are *evidence or nothing*: the lease model comes from the operator's
+    broker spec, and the recorder rows come from the sealed ``mock_call_log``.
+    When the broker was never started there is no gateway to compare against, so
+    every finding is unverifiable by construction and no record is written — an
+    all-unverifiable record would read as a completed check to anything that
+    counts records instead of reading statuses.
+    """
+    from aeval.agents.contract import claims_verification_gap
+
+    if agent is None or not hasattr(agent, "verify_claims"):
+        if agent is not None:
+            gap = claims_verification_gap(type(agent))
+            if gap is not None:
+                state.evidence_issues.append(gap)
+        return None
+    transcript = _transcript_for(state, agent)
+    if transcript is None:
+        return None
+    broker_model = None
+    if context.broker_spec is not None:
+        broker_model = str(
+            getattr(context.broker_spec, "identity", {}).get("model", "") or ""
+        ) or None
+    if broker_model is None:
+        state.evidence_issues.append(
+            "claims are not cross-checked: no broker lease model to compare "
+            "against (no controlled model routing for this run)"
+        )
+        return None
+    mock_calls = _sealed_mock_call_log(state)
+    try:
+        return agent.verify_claims(
+            transcript,
+            expected_model=broker_model,
+            lease_tokens=None,
+            mock_calls=mock_calls,
+        )
+    except Exception as exc:  # noqa: BLE001 - a failed check must not cost the record
+        state.evidence_issues.append(f"claim check could not be produced: {exc}")
+        return None
+
+
+def _transcript_for(state: Any, agent: Any) -> Any | None:
+    """The canonical transcript for this trial (the adapter caches its own read).
+
+    Both call sites — grading and the claim check — go through
+    ``read_trial_session()``, which every conformant adapter memoises on the
+    instance, so they cannot disagree about one trial. A failure here is recorded
+    on the trial instead of being swallowed.
+    """
+    try:
+        return agent.read_trial_session()
+    except Exception as exc:  # noqa: BLE001 - recorded, never swallowed
+        state.evidence_issues.append(
+            f"official session read failed for the claim check: {exc}"
+        )
+        return None
+
+
+def _sealed_mock_call_log(state: Any) -> list[dict[str, Any]] | None:
+    """The trial's sealed broker call rows, or None when unavailable.
+
+    Reads the artifact the collector already wrote (never re-derived), so the
+    checker compares the agent's account against the bytes that were sealed.
+    """
+    from aeval.hooks.evidence import FIXED_OUTPUT_PATHS
+
+    trial_dir = getattr(state, "trial_dir", None)
+    if trial_dir is None:
+        return None
+    path = Path(trial_dir) / FIXED_OUTPUT_PATHS["mock_call_log"]
+    if not path.is_file():
+        return None
+    rows: list[dict[str, Any]] = []
+    for line in path.read_text(encoding="utf-8").splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            parsed = json.loads(line)
+        except ValueError:
+            return None
+        if not isinstance(parsed, dict):
+            return None
+        rows.append(parsed)
+    return rows
 
 
 class AevalPlugin:

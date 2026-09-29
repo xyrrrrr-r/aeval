@@ -96,9 +96,9 @@ def test_the_budget_suite_keeps_the_generic_session_slot(suite):
 
 
 def test_both_images_bake_the_cli_version_the_adapter_declares():
-    """``network_mode = "no-network"`` rules out a PyPI fetch at agent setup,
-    so the pinned CLI ships in the image. The pin therefore exists twice, and
-    these assertions are what keep the two copies equal."""
+    """The sandbox egress allowlist carries only the broker host, so a PyPI
+    fetch at agent setup is impossible: the pinned CLI ships in the image. The
+    pin therefore exists twice, and these assertions keep the two copies equal."""
     from aeval.agents.deepagent.agent import (
         _DEEPAGENTS_CODE_VERSION,
         default_deepagent_registry_entry,

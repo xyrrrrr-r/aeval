@@ -100,10 +100,13 @@ async def test_bootstrap_uploads_token_and_binds_control(
     source, target = env.uploads[0]
     assert target == SANDBOX_TOKEN_PATH.as_posix()
     assert env.uploaded_contents == ["job-token"]
-    # and the host's 0600 is restored in the sandbox: the upload API does not
-    # carry the mode (e2b files.write does not), and the control stack refuses
-    # a token that is not owned-by-me 0600 — see the lab run that found this.
-    assert env.execs and env.execs[0] == f"chmod 600 {SANDBOX_TOKEN_PATH.as_posix()}"
+    # and the host's 0600 + owner are restored in the sandbox: the upload API
+    # carries neither (e2b files.write does not), and the control stack refuses
+    # a token that is not owned-by-me 0600 — see the lab runs that found this.
+    assert env.execs, "the token mode/owner must be pinned through exec"
+    pin = env.execs[0]
+    assert pin.startswith(f"chmod 600 {SANDBOX_TOKEN_PATH.as_posix()}")
+    assert "chown \"$(id -u):$(id -g)\"" in pin
 
     # config carries the broker URL, pinned identity, no aux calls
     assert config["gatewayUrl"] == "http://127.0.0.1:4321"

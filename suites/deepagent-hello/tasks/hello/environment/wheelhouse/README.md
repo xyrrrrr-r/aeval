@@ -2,8 +2,8 @@
 
 离线安装源：deepagent 任务镜像在构建期从这里装 `deepagents-code==<钉版>`。
 本 lab 主机**无法访问 PyPI**（`registry.npmjs.org` 可达、内网 docker registry
-可达），而所有套件都是 `network_mode = "no-network"`，所以镜像必须在构建期
-就把 CLI 装好，而构建期又要能在**不出网**的前提下拿到全部依赖。
+可达），而沙箱的出网白名单只放行 broker 主机（façade → broker），所以镜像必须
+在构建期就把 CLI 装好，而构建期又要能在**不出网**的前提下拿到全部依赖。
 
 ## 生成（在有 PyPI 的机器上，如开发机）
 

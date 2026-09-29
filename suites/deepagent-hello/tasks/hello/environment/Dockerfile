@@ -11,9 +11,10 @@ RUN apt-get update \
     && apt-get install -y --no-install-recommends nodejs ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 
-# The agent CLI is baked in at build time: every suite here runs with
-# network_mode = "no-network", so a uvx distribution would need PyPI at agent
-# setup. The version is pinned to the adapter's _DEEPAGENTS_CODE_VERSION —
+# The agent CLI is baked in at build time: the sandbox's only egress is the
+# broker host (façade -> broker), so a uvx distribution would need PyPI at agent
+# setup and never get it. The version is pinned to the adapter's
+# _DEEPAGENTS_CODE_VERSION —
 # tests/integration/test_deepagent_budget_suite.py keeps the two equal.
 #
 # Install is offline on purpose: the lab host has no PyPI egress, so the

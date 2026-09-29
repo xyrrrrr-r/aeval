@@ -660,23 +660,31 @@ async def bootstrap_trial_control(
     finally:
         Path(tmp).unlink(missing_ok=True)
 
-    # The upload surface does not carry the host's 0600: e2b's files.write lands
-    # the bytes as root with the daemon's default mode. The control stack
-    # refuses a job token that is not "owned by me, mode 0600", so without this
-    # the sandbox starts a facade that exits immediately — a failure only a real
-    # sandbox exposes, because a local copy preserves the mode. Restore the
-    # invariant through the same exec surface the deployment uses, and refuse
-    # when there is none rather than hand the agent a stack that cannot start.
+    # The upload surface carries neither the host's 0600 nor its owner: e2b's
+    # files.write lands the bytes with the daemon's default mode and identity.
+    # The control stack refuses a job token that is not "owned by me, mode
+    # 0600", so without this the sandbox starts a facade that exits immediately
+    # — a failure only a real sandbox exposes, because a local copy preserves
+    # both. Align the token with the identity the deployment executes as (the
+    # same exec surface, same user), and refuse when that cannot be done rather
+    # than hand the agent a stack that cannot start.
     exec_fn = getattr(environment, "exec", None)
     if not callable(exec_fn):
         raise BootstrapError(
             "environment exposes no exec — cannot pin the job token to 0600"
         )
-    pinned = await exec_fn(f"chmod 600 {shlex.quote(job_token_file)}")
+    quoted = shlex.quote(job_token_file)
+    pinned = await exec_fn(
+        f"chmod 600 {quoted} && chown \"$(id -u):$(id -g)\" {quoted}"
+    )
     code = getattr(pinned, "return_code", getattr(pinned, "exit_code", 0))
     if code not in (0, None):
+        detail = str(
+            getattr(pinned, "stderr", "") or getattr(pinned, "stdout", "") or ""
+        ).strip()
         raise BootstrapError(
-            f"could not pin the job token to 0600 in the sandbox (exit {code})"
+            f"could not pin the job token to 0600 for the sandbox user "
+            f"(exit {code})" + (f": {detail[:200]}" if detail else "")
         )
 
     # The plugin's broker lifecycle (hooks/broker_lifecycle.py) composes

@@ -470,15 +470,10 @@ async def test_agent_start_with_a_started_environment_passes_the_audit(owned_job
 
 
 class _FakeTrial:
-    def __init__(self, trial_id, environment):
+    def __init__(self, trial_id, environment, agent=None):
         self.id = trial_id
         self.agent_environment = environment
-
-
-class _FakeTrial:
-    def __init__(self, trial_id, environment):
-        self.id = trial_id
-        self.agent_environment = environment
+        self.agent = agent
 
 
 
@@ -585,6 +580,44 @@ async def test_agent_start_bootstraps_the_control_binding(owned_job, monkeypatch
     assert seen["broker"] is state.broker
     assert state.binding is not None and state.control_config == {"digest": "a" * 64}
     assert not any("control bootstrap failed" in r for r in state.infra_invalid_reasons)
+
+
+async def test_agent_start_derives_control_paths_from_the_adapter(owned_job, monkeypatch):
+    """The paths handed to the owner come from the ADAPTER, not the DSH defaults.
+
+    hooks/broker_lifecycle.py composes the authoritative control config from
+    ``trial_control_paths(..., agent=...)``, and the owner refuses a binding
+    whose paths differ. Omitting the agent here fell back to the historical DSH
+    defaults, so an adapter declaring different ones had its binding refused on
+    a real sandbox (example-lab: deepagent -> /root/.deepagents, deepagent-home).
+    """
+    plugin, context, event = await _agent_start_with_neutral_audit(
+        owned_job, monkeypatch, "declared-paths"
+    )
+    state = context.trials[str(event.trial_id)]
+    context.broker_spec = SimpleNamespace(identity={"provider": "offline", "model": "m"})
+    state.broker = SimpleNamespace(url="http://127.0.0.1:9", token_path=Path("/tmp/tok"))
+    agent_handle = SimpleNamespace(
+        SANDBOX_HOME="/root/.deepagents", SESSION_ARTIFACT_DIR="deepagent-home"
+    )
+    context.environments.capture(
+        _FakeTrial(state.trial_id, SimpleNamespace(), agent=agent_handle)
+    )
+    seen: dict[str, Any] = {}
+
+    async def fake_bootstrap(**kwargs):
+        seen.update(kwargs)
+        return SimpleNamespace(config_digest="a" * 64, trial_id=state.trial_id), {}
+
+    monkeypatch.setattr("aeval.hooks.plugin.bootstrap_trial_control", fake_bootstrap)
+    await emit(
+        owned_job, event.model_copy(update={"event": TrialEvent.AGENT_START}),
+        TrialEvent.AGENT_START,
+    )
+
+    assert seen["agent"] is agent_handle
+    assert seen["paths"].dsh_home == "/root/.deepagents"
+    assert seen["paths"].session_root == "deepagent-home"
 
 
 async def test_tainted_trial_never_receives_a_control_binding(owned_job, monkeypatch):
