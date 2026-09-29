@@ -33,3 +33,27 @@ observations:
 
 sandbox_home: /logs/agent/dsh-home
 session_artifact_dir: dsh-home
+
+# How this adapter is launched in a deployment. These paths are cluster facts
+# (install prefix, npm cache, where the official session reader is mounted), so
+# they bind to an environment rather than to the adapter's identity — which is
+# exactly why they live here instead of in every job file that runs DSH.
+launch:
+  # Verified on example-lab (openEuler 24.03 SP1 aarch64); matches the paths the
+  # hand-written jobs/e2e-hello/jobs/dsh.yaml used.
+  default:
+    override_setup_timeout_sec: 900
+    kwargs:
+      install_prefix: "/dev/shm/dshpkg"
+      npm_cache: "/dev/shm/npmcache"
+      session_reader: "/opt/aeval/session_reader.js"
+      run_timeout_sec: 600
+  # The TerminaBench cluster arm. npm_cache is pre-baked in the base image, and
+  # the session reader ships inside the control bundle mounted at /root/src.
+  lab:
+    override_setup_timeout_sec: 900
+    kwargs:
+      install_prefix: "/dev/shm/dshpkg"
+      npm_cache: "/root/.npm"
+      session_reader: "/root/src/dsh-eval-control/dist/session_reader.js"
+      run_timeout_sec: 900

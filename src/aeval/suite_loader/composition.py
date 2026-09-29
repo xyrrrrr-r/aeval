@@ -187,13 +187,65 @@ def _check_agent_capabilities(agents: list[Any], required: list[str], job_path: 
         )
 
 
-def compose_harbor_job(suite: ResolvedSuite) -> JobConfig:
+def _declared_agent_entry(
+    suite: ResolvedSuite,
+    agent_id: str,
+    *,
+    profile: str | None,
+    agents_root: Path | None,
+) -> dict:
+    """The Harbor agent entry for a declared adapter, proven against its class."""
+    from aeval.agents.contract import load_adapter_class
+    from aeval.agents.declaration import (
+        check_declaration_matches_adapter,
+        default_agents_root,
+        resolve_agent_declaration,
+    )
+
+    root = Path(agents_root).resolve() if agents_root else default_agents_root(suite.suite_dir)
+    path = root / f"{agent_id}.yaml"
+    if not path.is_file():
+        raise SuiteError(
+            f"no agent declaration for {agent_id!r} under {root} — declare it in "
+            f"{root.name}/{agent_id}.yaml so a job file never has to name an adapter"
+        )
+    resolved = resolve_agent_declaration(path, agents_root=root)
+    declaration = resolved.declaration
+    check_declaration_matches_adapter(declaration, load_adapter_class(declaration.import_path))
+    return declaration.launch_entry(profile)
+
+
+def compose_harbor_job(
+    suite: ResolvedSuite,
+    *,
+    agent: str | None = None,
+    agent_profile: str | None = None,
+    agents_root: Path | None = None,
+) -> JobConfig:
+    """Compose the suite's Harbor job, optionally for a named agent.
+
+    ``agent`` replaces the job file's inline ``agents:`` selection with the
+    adapter's declared launch spec. The job file keeps describing the task arm —
+    backend, attempts, setup budget — and stops encoding which agent runs it, so
+    pairing a suite with a new agent costs a declaration rather than a new job
+    file (and the suite x agent matrix stops being a matrix of files).
+    """
     root = Path(suite.suite_dir).resolve()
     inputs = resolve_harbor_inputs(suite)
     dataset_path = suite_path(root, inputs.dataset)
     job_path = suite_path(root, inputs.job)
     data = read_mapping(dataset_path)
     job_data = read_mapping(job_path)
+    if agent is not None:
+        # injected before shape validation so the composed job is validated exactly
+        # like a hand-written one: capability negotiation still applies
+        job_data = deepcopy(job_data)
+        job_data.pop("agents", None)
+        job_data["agents"] = [
+            _declared_agent_entry(
+                suite, agent, profile=agent_profile, agents_root=agents_root
+            )
+        ]
     _check_env_templates(job_data)
     validate_harbor_job_shape(job_data, job_path)
     if any(key in job_data for key in ("tasks", "datasets", "source_jobs")):

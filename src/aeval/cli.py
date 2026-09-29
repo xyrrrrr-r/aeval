@@ -279,6 +279,41 @@ def probe_cmd(
         _die(str(exc), EXIT_VALIDATION_ERROR)
 
 
+@app.command("job")
+def job_cmd(
+    suite: Annotated[Path, typer.Option(help="Suite directory")],
+    agent: Annotated[str, typer.Option(help="Declared agent id to drive the suite")],
+    profile: Annotated[str | None, typer.Option(help="Launch profile declared by the agent")] = None,
+    agents_dir: Annotated[Path, typer.Option(help="Directory holding agents/<id>.yaml")] = Path("agents"),
+) -> None:
+    """Compose a suite's Harbor job for a declared agent.
+
+    The job file describes the task arm; which agent drives it comes from the
+    declaration. Pairing therefore costs a declaration, not another job file.
+    """
+    from aeval.suite_loader.composition import compose_harbor_job
+    from aeval.suite_loader.loader import load_suite
+    from aeval.suite_models import SuiteError
+
+    try:
+        resolved = load_suite(suite)
+        job = compose_harbor_job(
+            resolved, agent=agent, agent_profile=profile, agents_root=agents_dir
+        )
+        entry = job.agents[0]
+        typer.echo(
+            f"job {job.job_name}: suite={resolved.id} agent={agent} "
+            f"profile={profile or 'default'} attempts={job.n_attempts} "
+            f"impl={entry.import_path}"
+        )
+        typer.echo(
+            "Composed for a pairing: the job file's task arm is unchanged and the "
+            "agent entry comes from the declaration. Nothing was executed."
+        )
+    except (SuiteError, ValueError, OSError) as exc:
+        _die(str(exc), EXIT_VALIDATION_ERROR)
+
+
 @app.command("conformance")
 def conformance_cmd(
     agent: Annotated[Path, typer.Option(help="agents/<id>.yaml declaration to check")],

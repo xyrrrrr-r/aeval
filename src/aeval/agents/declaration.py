@@ -17,6 +17,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from typing import Any
+
 from pydantic import BaseModel, ConfigDict, Field
 
 from aeval.contracts import AdapterSpec, TranscriptCapability
@@ -40,6 +42,20 @@ AGENT_UNION_PATHS = frozenset({("provides",), ("observations",)})
 AGENT_KEYED_LISTS = {"artifacts": "name"}
 
 
+class LaunchProfile(BaseModel):
+    """How this adapter is launched in a deployment (Harbor agent entry minus the id).
+
+    These are *deployment* facts, not framework facts: an install prefix or a
+    timeout binds to a cluster, not to an agent's identity. Keeping them in the
+    declaration is what lets a job file stop carrying an agent.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    override_setup_timeout_sec: int | None = None
+    kwargs: dict[str, Any] = Field(default_factory=dict)
+
+
 class AgentDeclaration(BaseModel):
     """The declared facts of one agent adapter (mirrors ``AdapterSpec``)."""
 
@@ -61,6 +77,30 @@ class AgentDeclaration(BaseModel):
     #: Evidence artifacts this adapter produces, declared rather than assumed by
     #: the framework's fixed logical-name table.
     artifacts: list[dict] = Field(default_factory=list)
+    #: Named launch profiles (``default`` is used when none is named).
+    launch: dict[str, LaunchProfile] = Field(default_factory=dict)
+
+    def launch_entry(self, profile: str | None = None) -> dict[str, Any]:
+        """The Harbor agent entry that selects this adapter.
+
+        A job file describes the task arm; which agent drives it is not part of
+        that description. This is the seam that removes a job file per pairing.
+        """
+        if not self.launch:
+            return {"import_path": self.import_path}
+        name = profile or ("default" if "default" in self.launch else next(iter(self.launch)))
+        if name not in self.launch:
+            raise SuiteError(
+                f"agent {self.id!r} declares no launch profile {name!r}; "
+                f"declared profiles: {sorted(self.launch)}"
+            )
+        chosen = self.launch[name]
+        entry: dict[str, Any] = {"import_path": self.import_path}
+        if chosen.override_setup_timeout_sec is not None:
+            entry["override_setup_timeout_sec"] = chosen.override_setup_timeout_sec
+        if chosen.kwargs:
+            entry["kwargs"] = dict(chosen.kwargs)
+        return entry
 
     def to_adapter_spec(self) -> AdapterSpec:
         """Validate and convert to the runtime spec (enforces the vocabularies)."""
