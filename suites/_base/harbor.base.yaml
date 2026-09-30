@@ -1,7 +1,12 @@
 # 共享约定基座（aeval 自己那一层）
 #
 # 这里只放"每个套件都要写、且写法必须一致"的约定：时钟、seed 观测点及其
-# baseline、固定的六项 requirements、驱动能力、指标种类、datasets 路径约定。
+# baseline、固定的六项 requirements、指标种类、datasets 路径约定。
+#
+# 不放"驱动能力要求"（driver.require）：那是**套件自己的事实**（这个评测集
+# 需要 agent 提供什么），不是跨套件的约定。写进基座等于把某个 agent 的能力
+# 当成全局默认——DSH 特有的 sdk_jsonrpc 曾经就在这儿，逼得其他 agent 家族靠
+# `remove.require` 打补丁。需要能力的套件在自己 suite.yaml 里显式声明。
 #
 # 不在这里放的东西（有意为之）：
 #   * Harbor 的事实 —— 环境镜像、attempts/k、并发、重试、timeout、budget、
@@ -34,10 +39,6 @@ verdict:
   # Harbor job 文件里若出现同名键会被拒（aeval 事实只写在 suite.yaml 侧）。
   requirements: [input_complete, agent_finished, integration_valid, render_valid, judge_finished, artifact_schema_ok]
   graders: {}
-
-driver:
-  # 驱动能力要求：DSH 的 ACP stdio 通道 + SDK JSON-RPC。
-  require: [acp_stdio, sdk_jsonrpc]
 
 metrics:
   # 只有 kind 是约定；k（几次尝试算过）按套件的尝试次数覆盖。

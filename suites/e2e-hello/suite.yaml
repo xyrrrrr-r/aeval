@@ -1,12 +1,17 @@
 schema_version: 2
 id: e2e-hello
 version: 0.1.0
-# 时钟、ready 观测点与 baseline、六项 requirements、驱动能力、指标种类、
-# datasets 路径约定都来自环境级基座；这里只写本套件特有的事实。
+# 时钟、ready 观测点与 baseline、六项 requirements、指标种类、datasets 路径
+# 约定都来自环境级基座；这里只写本套件特有的事实——包括**驱动能力要求**
+# （基座刻意不含：那是套件对 agent 的要求，不是跨套件的约定）。
 # （套件与基座都会被 Harbor-overlap 检查：基座不得复述 Harbor 事实。）
 extends: _base/harbor.base.yaml
 harbor:
   job: jobs/e2e-hello.yaml
+driver:
+  # 本套件用 DSH 的 ACP stdio 通道 + SDK JSON-RPC 驱动（DSH 适配器提供这两项）。
+  # 换成别的 agent 家族时，这里就是"是否接受该 agent"的显式门槛。
+  require: [acp_stdio, sdk_jsonrpc]
 observables:
   # file: sources only — P0-2 made db:/screenshot:/dom: probes explicitly
   # unsupported (fail closed); the e2e chain reads files out-of-band.

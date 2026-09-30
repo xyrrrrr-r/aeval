@@ -11,12 +11,10 @@ extends: _base/harbor.base.yaml
 harbor:
   job: jobs/deepagent-hello.yaml
 driver:
-  # 基座的 require 是并集语义且含 DSH 特有的 sdk_jsonrpc —— deepagent 不
-  # 提供、也不需要它；本套件面向 ACP 适配器，显式移除该能力要求。
+  # 驱动能力要求是本套件自己的事实（基座不含任何 agent 特性）：面向 ACP
+  # 适配器，只要求 deepagent 真正提供并能被验证的三项。
   require: [acp_stdio, shell, file_tools]
   session_record: agent_session_record
-remove:
-  require: [sdk_jsonrpc]
 observables:
   - { name: result, type: string, source: "file:/workspace/result" }
 verdict:
