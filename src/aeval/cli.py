@@ -156,8 +156,9 @@ def run_cmd(
             raise SuiteError("Harbor job_name must be a single directory name")
         suite_path(run_dir, job.job_name)
         job_path = run_dir / "harbor-job.json"
-        config_json = job.model_dump_json(indent=2, exclude_none=True)
-        from aeval.contracts import job_config_hash
+        from aeval.contracts import job_config_hash, job_config_json
+
+        config_json = job_config_json(job)
 
         config_hash = job_config_hash(job)
         lock_ref = f"harbor/{job.job_name}/lock.json"
@@ -632,7 +633,9 @@ def explain_cmd(
         job = compose_harbor_job(resolved)
         typer.echo(render_suite_explanation(resolved))
         typer.echo("\n## Native Harbor job (local paths resolved against the suite root)")
-        typer.echo(job.model_dump_json(indent=2, exclude_none=True))
+        from aeval.contracts import job_config_json
+
+        typer.echo(job_config_json(job))
     except (SuiteError, ValueError, OSError) as exc:
         _die(str(exc), EXIT_VALIDATION_ERROR)
 

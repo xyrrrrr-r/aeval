@@ -368,3 +368,58 @@ def test_job_config_hash_supports_null_retry_exception_sets():
     data = config.model_dump(mode="json", exclude={"job_name", "jobs_dir"})
     expected = sha256(json.dumps(data, sort_keys=True, ensure_ascii=False).encode("utf-8")).hexdigest()
     assert job_config_hash(config) == expected
+
+def test_the_job_file_is_byte_stable_across_processes():
+    """Same inputs ⇒ same bytes: Harbor keeps the retry exception lists as
+    sets, so a raw model dump reorders them per process (PYTHONHASHSEED) and
+    the run's config_file_sha256 drifted between identical runs. The canonical
+    dump sorts them, so the digest and the written file agree everywhere."""
+    import subprocess
+    import sys
+    from pathlib import Path
+
+    repo = Path(__file__).resolve().parents[2]
+    script = """
+import hashlib
+from pathlib import Path
+from aeval.contracts import job_config_json, job_config_hash
+from aeval.suite_loader.loader import load_suite
+from aeval.suite_loader.composition import compose_harbor_job
+r = load_suite(Path("suites/e2e-hello"))
+job = compose_harbor_job(r, agent="dsh", agents_root=Path("agents"), lease_model="deepseek/deepseek-chat")
+blob = job_config_json(job)
+print(hashlib.sha256(blob.encode()).hexdigest(), job_config_hash(job))
+"""
+    outputs = set()
+    for seed in ("0", "1", "12345"):
+        env = {"PATH": "/usr/bin:/bin", "PYTHONHASHSEED": seed}
+        result = subprocess.run(
+            [sys.executable, "-c", script],
+            cwd=repo, capture_output=True, text=True, env=env,
+        )
+        assert result.returncode == 0, result.stderr
+        outputs.add(result.stdout.strip())
+    assert len(outputs) == 1, f"job bytes differ across processes: {outputs}"
+
+
+def test_the_canonical_job_config_sorts_the_retry_exception_lists():
+    from aeval.contracts import canonical_job_config
+
+    class Retry:
+        def __init__(self, values):
+            self.include_exceptions = list(values)
+            self.exclude_exceptions = None
+
+    class Config:
+        retry = Retry({"B", "A", "C"})
+
+        def model_dump(self, **kwargs):
+            return {
+                "retry": {
+                    "include_exceptions": list(self.retry.include_exceptions),
+                    "exclude_exceptions": None,
+                }
+            }
+
+    assert canonical_job_config(Config())["retry"]["include_exceptions"] == ["A", "B", "C"]
+    assert canonical_job_config(Config())["retry"]["exclude_exceptions"] is None

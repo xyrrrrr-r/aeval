@@ -62,7 +62,9 @@ __all__ = [
     "TrialBinding",
     "TrialPaths",
     "BundleDescriptor",
+    "canonical_job_config",
     "job_config_hash",
+    "job_config_json",
     "control_config_digest",
     "CollectOutcome",
     "CollectionManifest",
@@ -371,14 +373,60 @@ class ForkLineage(BaseModel):
     fork_step: int | None = None
 
 
+def canonical_job_config(
+    config: Any, *, exclude: set[str] | None = None
+) -> dict[str, Any]:
+    """A Harbor job config as a canonical mapping — same input, same mapping.
+
+    Harbor keeps ``retry.include_exceptions`` / ``exclude_exceptions`` as
+    *sets*, so their serialization order is process-dependent (PYTHONHASHSEED):
+    two runs of the same inputs produced different job files, and therefore a
+    different ``config_file_sha256``. Both the digest and the file written to
+    the run directory go through here, so the rule lives in one place: sorted
+    lists, and (for the digest) sorted keys.
+
+    ``exclude`` names fields to drop. ``None`` means the digest's rule
+    (``job_name``/``jobs_dir`` are self-referential for a run digest); the
+    writer passes ``set()`` so the written file keeps every field Harbor reads
+    back — including ``jobs_dir``, which is what makes two runs into different
+    run directories differ in ``config_file_sha256``.
+    """
+    if exclude is None:
+        exclude = {"job_name", "jobs_dir"}
+    data = config.model_dump(mode="json", exclude=exclude)
+    retry = data.get("retry") or {}
+    for field in ("include_exceptions", "exclude_exceptions"):
+        if retry.get(field) is not None:
+            retry[field] = sorted(retry[field])
+    return data
+
+
+def job_config_json(config: Any, *, indent: int | None = 2) -> str:
+    """The canonical job JSON written to the run directory (stable bytes).
+
+    Key order is sorted so "same inputs ⇒ same bytes": the run's
+    ``config_file_sha256`` is taken from exactly these bytes and re-checked at
+    job start, and a file whose bytes depend on hash seed ordering cannot be
+    compared meaningfully between runs.
+    """
+    import json
+
+    return json.dumps(
+        canonical_job_config(config, exclude=set()),
+        indent=indent,
+        sort_keys=True,
+        ensure_ascii=False,
+    )
+
+
 def job_config_hash(config: Any) -> str:
     import json
 
-    data = config.model_dump(mode="json", exclude={"job_name", "jobs_dir"})
-    for field in ("include_exceptions", "exclude_exceptions"):
-        if data["retry"][field] is not None:
-            data["retry"][field].sort()
-    return sha256(json.dumps(data, sort_keys=True, ensure_ascii=False).encode("utf-8")).hexdigest()
+    return sha256(
+        json.dumps(
+            canonical_job_config(config), sort_keys=True, ensure_ascii=False
+        ).encode("utf-8")
+    ).hexdigest()
 
 
 def control_config_digest(resolved_config: dict[str, Any]) -> str:
