@@ -630,3 +630,63 @@ def test_run_force_build_reaches_the_composed_job(tmp_path, native_suite_dir, ha
     assert result.exit_code == 7, result.output
     job = _json.loads((run_dir / "harbor-job.json").read_text(encoding="utf-8"))
     assert job["environment"]["force_build"] is True
+
+
+def test_the_session_record_override_is_checked_and_recorded(
+    native_suite_dir, tmp_path, harbor_calls
+):
+    """B (recorded CLI override): an operator may pair a suite with another
+    agent's evidence shape for ONE run — explicitly, and recorded in the
+    manifest, instead of editing sealed suite bytes."""
+    # the fixture suite declares no slot (framework default dsh_session) while
+    # fakeagent produces agent_session_record: without the override the pairing
+    # is refused before Harbor is called
+    refused = runner.invoke(
+        app,
+        [
+            "run", "--suite", str(native_suite_dir),
+            "--run-dir", str(tmp_path / "refused"),
+            "--store", str(tmp_path / "refused.sqlite3"),
+            "--harbor-cli", "test-harbor", "--agent", "fakeagent",
+        ],
+    )
+    assert refused.exit_code == 3, refused.output
+    assert "session-record flavor mismatch" in refused.output
+    assert harbor_calls == []
+
+    # with the matching override the pairing composes, and the choice is
+    # RECORDED rather than silent
+    out = tmp_path / "overridden"
+    result = runner.invoke(
+        app,
+        [
+            "run", "--suite", str(native_suite_dir), "--run-dir", str(out),
+            "--store", str(tmp_path / "overridden.sqlite3"),
+            "--harbor-cli", "test-harbor",
+            "--agent", "fakeagent", "--session-record", "agent_session_record",
+        ],
+    )
+    assert result.exit_code == 7, result.output
+    assert "session-record override" in result.output
+    manifest = RunManifest.model_validate_json((out / "run_manifest.json").read_bytes())
+    assert manifest.session_record_override == "agent_session_record"
+
+
+def test_an_override_that_does_not_match_the_agent_is_refused(
+    native_suite_dir, tmp_path, harbor_calls
+):
+    """The override says "use this agent's shape" — it is not a way to bypass
+    the pairing rule."""
+    result = runner.invoke(
+        app,
+        [
+            "run", "--suite", str(native_suite_dir),
+            "--run-dir", str(tmp_path / "bad"),
+            "--store", str(tmp_path / "bad.sqlite3"),
+            "--harbor-cli", "test-harbor",
+            "--agent", "fakeagent", "--session-record", "dsh_session",
+        ],
+    )
+    assert result.exit_code == 3, result.output
+    assert "session-record flavor mismatch" in result.output
+    assert harbor_calls == []

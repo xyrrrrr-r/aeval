@@ -128,7 +128,9 @@ def slot_output_path(slot: str, adapter: Any) -> str:
     )
 
 
-def build_required_collect_plan(suite: ResolvedSuite) -> list[str]:
+def build_required_collect_plan(
+    suite: ResolvedSuite, session_record: str | None = None
+) -> list[str]:
     """Names of the collect outputs the evidence bundle must contain.
 
     The collection manifest itself is NOT in this list: its identity is
@@ -142,7 +144,14 @@ def build_required_collect_plan(suite: ResolvedSuite) -> list[str]:
     """
     from aeval.agents.contract import session_record_slot_well_formed
 
-    flavor = getattr(getattr(suite.overlay, "driver", None), "session_record", None)
+    # ``session_record`` is the run's RECORDED override (``--session-record``):
+    # the suite still declares its expectation, and an operator who paired it
+    # with a different agent says so explicitly instead of editing sealed bytes.
+    if session_record is None:
+        session_record = getattr(
+            getattr(suite.overlay, "driver", None), "session_record", None
+        )
+    flavor = session_record
     if flavor is None:
         flavor = "dsh_session"
     if not session_record_slot_well_formed(flavor):
@@ -571,7 +580,9 @@ async def gate_verification(event: Any, context: Any) -> None:
             "trial start — refusing to guess the evidence location"
         )
 
-    plan = build_required_collect_plan(context.suite)
+    plan = build_required_collect_plan(
+        context.suite, getattr(context, "session_record_override", None)
+    )
     try:
         bundle = verify_evidence_bundle(
             trial_dir, context.runtime_lock, plan, adapter=_live_adapter(context, trial_id)

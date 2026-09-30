@@ -83,6 +83,11 @@ class EvaluationContext:
     trials: dict[str, TrialState] = field(default_factory=dict)
     artifacts: dict[str, Any] = field(default_factory=dict)
     run_binding: RunBinding | None = None
+    # The run's recorded session-record override (``aeval run --session-record``).
+    # Read from the intent manifest at registration, NOT part of RunBinding: the
+    # binding is serialized into the control config the broker validates, and
+    # that contract is a closed vocabulary the broker does not need this in.
+    session_record_override: str | None = None
     job_id: str | None = None
     trials_dir: Path | None = None
     closed: bool = False

@@ -949,6 +949,9 @@ class RunManifest(BaseModel):
     # cap cannot be enforced for this adapter. Recorded so the run is auditable
     # rather than quietly exempt.
     accepted_unmetered_budget: bool = False
+    # ``--session-record``: use the selected adapter's slot instead of the
+    # suite's declared one, recorded so a run never silently changes shape.
+    session_record_override: str | None = None
     artifact_digest: str | None = None
     exclusions: ExclusionSummary | None = None
 

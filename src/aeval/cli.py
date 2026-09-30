@@ -91,6 +91,26 @@ def run_cmd(
             help="Run even though the selected adapter's spend is not metered by the gateway lease"
         ),
     ] = False,
+    agent: Annotated[
+        str | None,
+        typer.Option(help="Declared agent id to drive the suite (default: the job file's own entry)"),
+    ] = None,
+    profile: Annotated[
+        str | None, typer.Option(help="Launch profile declared by the agent")
+    ] = None,
+    agents_dir: Annotated[
+        Path, typer.Option(help="Directory holding agents/<id>.yaml")
+    ] = Path("agents"),
+    session_record: Annotated[
+        str | None,
+        typer.Option(
+            help=(
+                "Use this session-record slot instead of the suite's declared one "
+                "for THIS run (must equal the selected adapter's SESSION_RECORD_OUTPUT); "
+                "recorded in the run manifest"
+            )
+        ),
+    ] = None,
     force_build: Annotated[
         bool, typer.Option(help="Rebuild the sandbox template instead of reusing a cached alias")
     ] = False,
@@ -127,7 +147,34 @@ def run_cmd(
         from aeval.suite_loader.composition import lease_model_name
 
         broker_spec = parse_broker_spec()
-        job = compose_harbor_job(resolved, lease_model=lease_model_name(broker_spec))
+        if session_record is not None:
+            from aeval.agents.contract import session_record_slot_well_formed
+
+            if not session_record_slot_well_formed(session_record):
+                raise SuiteError(
+                    f"--session-record must be a lowercase slot slug, got {session_record!r}"
+                )
+        job = compose_harbor_job(
+            resolved,
+            agent=agent,
+            agent_profile=profile,
+            agents_root=agents_dir,
+            lease_model=lease_model_name(broker_spec),
+            session_record=session_record,
+        )
+        if agent is not None:
+            typer.echo(
+                f"composed for agent {agent} (profile {profile or 'default'}): "
+                f"{job.agents[0].import_path}"
+            )
+        if session_record is not None:
+            declared = getattr(
+                getattr(resolved.overlay, "driver", None), "session_record", None
+            )
+            typer.echo(
+                f"session-record override: {session_record!r} "
+                f"(suite declares {declared!r}) — recorded in the run manifest"
+            )
         # Declared adapter identity, resolved before anything runs: a run whose
         # records cannot name its agent is refused here, not discovered later.
         adapters = [
@@ -224,6 +271,7 @@ def run_cmd(
             adapters=adapters,
             budget_enforcement_point=budget_point,
             accepted_unmetered_budget=accept_unmetered_budget,
+            session_record_override=session_record,
             overlay=OverlayIdentity(
                 suite_id=resolved.id,
                 suite_version=resolved.version,

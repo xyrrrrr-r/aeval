@@ -188,7 +188,8 @@ def _check_agent_capabilities(agents: list[Any], required: list[str], job_path: 
 
 
 def _check_session_record_pairing(
-    agents: list[Any], suite: Any, job_path: Path
+    agents: list[Any], suite: Any, job_path: Path,
+    session_record: str | None = None,
 ) -> None:
     """Refuse a pairing whose session-record flavors disagree.
 
@@ -201,7 +202,7 @@ def _check_session_record_pairing(
     """
     from aeval.agents.contract import load_adapter_class, session_record_output_of
 
-    suite_flavor = getattr(
+    suite_flavor = session_record or getattr(
         getattr(suite.overlay, "driver", None), "session_record", "dsh_session"
     )
     for agent in agents:
@@ -280,6 +281,7 @@ def compose_harbor_job(
     agent_profile: str | None = None,
     agents_root: Path | None = None,
     lease_model: str | None = None,
+    session_record: str | None = None,
 ) -> JobConfig:
     """Compose the suite's Harbor job, optionally for a named agent.
 
@@ -288,6 +290,12 @@ def compose_harbor_job(
     backend, attempts, setup budget — and stops encoding which agent runs it, so
     pairing a suite with a new agent costs a declaration rather than a new job
     file (and the suite x agent matrix stops being a matrix of files).
+
+    ``session_record`` is the run's recorded slot override
+    (``aeval run --session-record``): it replaces the SUITE's declared slot for
+    this composition only, and must still equal the selected adapter's
+    ``SESSION_RECORD_OUTPUT`` — an ad-hoc pairing, recorded in the run manifest,
+    rather than an edit to sealed suite bytes.
 
     ``lease_model`` is the run's model (the operator's broker identity), stated
     once in the composed agent entry as Harbor's own ``model_name``. An adapter
@@ -337,7 +345,7 @@ def compose_harbor_job(
     ):
         raise SuiteError("Harbor job must explicitly select at least one agent")
     _check_agent_capabilities(agents, suite.overlay.driver.require, job_path)
-    _check_session_record_pairing(agents, suite, job_path)
+    _check_session_record_pairing(agents, suite, job_path, session_record)
     job = JobConfig.model_validate(deepcopy(job_data), extra="forbid")
     # P0-2: verifier log filters can silently drop required evidence
     # logs — an evaluation job must collect the full verifier log set.

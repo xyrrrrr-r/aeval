@@ -114,6 +114,7 @@ def create_run_context(job: Any) -> EvaluationContext:
         run_id=run_id, runtime_lock=lock, suite=suite, run_dir=root,
         store_path=Path(store_path), run_binding=binding, job_id=str(job.id),
         trials_dir=trials_dir,
+        session_record_override=manifest.session_record_override,
     )
     # P0-4: controlled model routing is opt-in via the operator's broker
     # spec; a BROKEN spec fails registration rather than silently
