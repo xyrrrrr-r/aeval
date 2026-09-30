@@ -32,6 +32,7 @@ import tempfile
 import time
 from collections.abc import Awaitable, Callable
 from pathlib import Path, PurePosixPath
+from collections.abc import Mapping
 from typing import TYPE_CHECKING, Any, Sequence
 
 from aeval.contracts import (
@@ -161,7 +162,7 @@ async def deploy_control_stack(
     control_dist: Path,
     control_ca: Path | None,
     trial_id: str,
-    sandbox_mode: str | None = None,
+    run_env: Mapping[str, str] | None = None,
     mint_session: Callable[..., Awaitable[None]] | None = None,
 ) -> str:
     """Deploy the in-sandbox control stack; return the patch file path.
@@ -175,8 +176,10 @@ async def deploy_control_stack(
     - the Cordis patch lists the transport entry first, then the control
       plugin (which injects ``evalBroker``);
     - a privately signed broker needs ``NODE_EXTRA_CA_CERTS`` in the run;
-    - the suite's declared confinement posture is passed as
-      ``DSH_PERMISSION_MODE`` (see ``DriverSpec.sandbox_mode``).
+    - environment the deploying flavor's stack needs in the agent's run is
+      passed as ``run_env`` — agent-neutral here: the framework sets the
+      variables, the flavor decides which (e.g. DSH's ``DSH_PERMISSION_MODE``
+      from its own ``control_options`` namespace).
 
     ``mint_session`` creates the owner-assigned session the run must resume
     (``dsh --session-id`` only adopts an existing one, D15). The session
@@ -250,12 +253,12 @@ async def deploy_control_stack(
             agent.set_workspace_dir(str(paths.sandbox_cwd))
         if control_ca is not None:
             agent.set_run_env("NODE_EXTRA_CA_CERTS", (target / "ca.crt").as_posix())
-        if sandbox_mode is not None:
-            # The CLI reads this in its composed profile (dsh-base's
-            # cordis.patch.yml): the bash executor skips confinement for
-            # danger-full-access instead of probing for a runner the image
-            # does not ship.
-            agent.set_run_env("DSH_PERMISSION_MODE", str(sandbox_mode))
+        for name, value in (run_env or {}).items():
+            # The deploying flavor names these: the DSH CLI reads
+            # DSH_PERMISSION_MODE in its composed profile (dsh-base's
+            # cordis.patch.yml) and skips confinement for danger-full-access
+            # instead of probing for a runner the image does not ship.
+            agent.set_run_env(str(name), str(value))
         return patch_path
     finally:
         shutil.rmtree(staging, ignore_errors=True)
@@ -489,6 +492,7 @@ async def _deploy_facade_flavor(
     config: dict[str, Any], trial_id: str,
     control_dist: Path | None, control_ca: Path | None,
     facade_dist: Path | None, facade_root: PurePosixPath | None = None,
+    control_options: Mapping[str, Any] | None = None,
 ) -> None:
     """The agent-neutral facade flavor: upload, start, health-gate.
 
@@ -497,9 +501,19 @@ async def _deploy_facade_flavor(
     agent speaks, never a default. A facade-flavor stack without an openai_*
     routing is refused by the declaration gap check; this is the same rule
     enforced at deploy time, fail-closed.
+
+    It consumes no ``control_options``: a suite that declares some for this
+    namespace is refused rather than silently ignored (the same rule that keeps
+    a family's knob from becoming a fact nobody reads).
     """
     from aeval.agents.contract import facade_protocols_for, model_routing_of
 
+    if control_options:
+        raise BootstrapError(
+            "the deepagent-facade stack consumes no control options, but the "
+            f"suite declares {sorted(control_options)} — remove them or move "
+            "them to the flavor that owns them"
+        )
     routing = model_routing_of(type(agent))
     if routing is None or routing.agent_protocol == "gateway_native":
         raise BootstrapError(
@@ -584,7 +598,22 @@ async def _deploy_declared_stack(
         environment=environment, context=context, agent=agent, paths=paths,
         config=config, trial_id=trial_id, control_dist=control_dist,
         control_ca=control_ca, facade_dist=facade_dist, facade_root=facade_root,
+        control_options=control_options_for(context, stack),
     )
+
+
+def control_options_for(context: Any, flavor_name: str) -> dict[str, Any]:
+    """The suite's options for ONE flavor, from its own namespace.
+
+    ``driver.control_options`` is namespaced by flavor name because the
+    framework must not know any family's knobs: it hands a flavor exactly its
+    own mapping (empty when the suite declares none) and interprets nothing.
+    The flavor validates what it gets.
+    """
+    driver = getattr(getattr(getattr(context, "suite", None), "overlay", None), "driver", None)
+    declared = getattr(driver, "control_options", None) or {}
+    options = declared.get(flavor_name)
+    return dict(options) if isinstance(options, Mapping) else {}
 
 
 async def bootstrap_trial_control(

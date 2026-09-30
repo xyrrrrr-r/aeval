@@ -37,7 +37,12 @@ __all__ = [
 CONTROL_FLAVOR_DEPLOY_KEYS = (
     "environment", "context", "agent", "paths", "config", "trial_id",
     "control_dist", "control_ca", "facade_dist", "facade_root",
+    "control_options",
 )
+
+#: ``control_options`` carries ONLY the calling flavor's own namespace from the
+#: suite's ``driver.control_options`` (the framework resolves the namespace and
+#: interprets nothing); a flavor validates its own keys and values.
 
 #: A flavor's deployment coroutine: async, keyword-only, uniform keys above.
 ControlFlavorDeploy = Callable[..., Awaitable[None]]

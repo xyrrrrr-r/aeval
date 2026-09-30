@@ -18,6 +18,7 @@ from __future__ import annotations
 import json
 import shlex
 from pathlib import Path, PurePosixPath
+from collections.abc import Mapping
 from typing import TYPE_CHECKING, Any
 
 from aeval.agents.dsh.agent import SESSIONS_DIRNAME
@@ -109,11 +110,45 @@ async def mint_owner_session(
         )
 
 
+#: The option namespace this flavor owns (``driver.control_options.dsh``).
+#: Validated here, not in the framework: a knob only DSH reads stays a DSH fact.
+_DSH_OPTION_KEYS = {"permission_mode"}
+_DSH_PERMISSION_MODES = {"read-only", "workspace-write", "danger-full-access"}
+
+
+def _dsh_run_env(control_options: Mapping[str, Any] | None) -> dict[str, str]:
+    """Translate this flavor's suite options into the agent's run env.
+
+    ``permission_mode`` is DSH's own confinement posture
+    (``DSH_PERMISSION_MODE``): the CLI reads it in its composed profile and, for
+    ``danger-full-access``, skips probing for a bwrap/Landlock runner the sealed
+    pilot image does not ship — without it every shell call is refused. Unknown
+    keys or values are refused rather than ignored.
+    """
+    options = dict(control_options or {})
+    unknown = sorted(set(options) - _DSH_OPTION_KEYS)
+    if unknown:
+        raise BootstrapError(
+            f"control_options.dsh declares {unknown}; known options: "
+            f"{sorted(_DSH_OPTION_KEYS)}"
+        )
+    mode = options.get("permission_mode")
+    if mode is None:
+        return {}
+    if mode not in _DSH_PERMISSION_MODES:
+        raise BootstrapError(
+            f"control_options.dsh.permission_mode must be one of "
+            f"{sorted(_DSH_PERMISSION_MODES)}, got {mode!r}"
+        )
+    return {"DSH_PERMISSION_MODE": str(mode)}
+
+
 async def _deploy_dsh_stack(
     *, environment: Any, context: Any, agent: Any, paths: TrialPaths,
     config: dict[str, Any], trial_id: str,
     control_dist: Path | None, control_ca: Path | None,
     facade_dist: Path | None, facade_root: PurePosixPath | None = None,
+    control_options: Mapping[str, Any] | None = None,
 ) -> None:
     """The dsh flavor: graft the plugin tree into the CLI's own modules.
 
@@ -125,11 +160,10 @@ async def _deploy_dsh_stack(
             "the agent declares the dsh control stack but the broker spec "
             "carries no controlDist — the trial would run unmetered"
         )
-    driver = getattr(getattr(context.suite, "overlay", None), "driver", None)
     await _bootstrap.deploy_control_stack(
         environment=environment, agent=agent, paths=paths, config=config,
         control_dist=Path(control_dist), control_ca=control_ca, trial_id=trial_id,
-        sandbox_mode=getattr(driver, "sandbox_mode", None),
+        run_env=_dsh_run_env(control_options),
         mint_session=mint_owner_session,
     )
 

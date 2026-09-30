@@ -637,14 +637,20 @@ def test_every_task_publishes_a_reward_on_every_code_path():
 def test_suite_declares_the_sandbox_posture_the_tasks_need(suite):
     """DSH refuses shell commands when no bwrap/Landlock runner exists
     (measured: "no sandbox backend is usable on this host"), which left
-    two of three tasks unanswerable. The suite declares the posture
-    explicitly; aeval passes it to the run as DSH_PERMISSION_MODE."""
-    assert suite.overlay.driver.sandbox_mode == "danger-full-access"
-    declared = DriverSpec().sandbox_mode
-    assert declared is None, "the default must stay DSH's own workspace-write"
-    # the value is the CLI's own vocabulary
-    for mode in ("read-only", "workspace-write", "danger-full-access"):
-        assert DriverSpec(sandbox_mode=mode).sandbox_mode == mode
+    two of three tasks unanswerable. The knob is DSH's own, so the suite
+    declares it inside the dsh namespace of ``control_options`` — the
+    framework carries it without interpreting it, and the dsh flavor turns it
+    into DSH_PERMISSION_MODE."""
+    assert suite.overlay.driver.control_options == {
+        "dsh": {"permission_mode": "danger-full-access"}
+    }
+    # the framework has no DSH-shaped field of its own any more
+    assert not hasattr(DriverSpec(), "sandbox_mode")
+    assert DriverSpec().control_options == {}
+    # a new family's namespace is accepted by the framework and validated by
+    # the flavor that owns it (see the dsh flavor's own tests)
+    declared = DriverSpec(control_options={"other": {"knob": 1}})
+    assert declared.control_options == {"other": {"knob": 1}}
 
 
 # --- grading ----------------------------------------------------------

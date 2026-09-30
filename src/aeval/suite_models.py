@@ -227,23 +227,38 @@ class DriverSpec(_SuiteModel):
     # recorded cwd differs from the run's, so the mint and the run must
     # agree.
     workspace_dir: str = "/workspace"
-    # DSH's own confinement posture for the agent's run inside the sandbox
-    # (``DSH_PERMISSION_MODE``, the CLI's documented deployment override).
+    # Per-flavor options for the in-sandbox control stack, namespaced by the
+    # registered flavor name (``control_stack``). The framework never
+    # interprets them: the flavor that owns the namespace validates its own
+    # keys and values (fail-closed), so a family-specific knob stays a family
+    # fact instead of becoming a framework field only one agent ever reads —
+    # DSH's permission mode used to be ``driver.sandbox_mode`` here.
     #
-    # ``None`` keeps DSH's default (``workspace-write``), which confines
-    # the shell with a bwrap/Landlock runner. A sealed trial image that
-    # ships neither — as the pilot's does — makes DSH refuse every shell
-    # call ("no sandbox backend is usable on this host"), and the agent
-    # then cannot run a single command: measured on the pilot, where
-    # openssl-selfsigned-cert and sqlite-db-truncate were unanswerable
-    # while hello-world (file tools only) passed.
+    # Example (DSH, whose sealed pilot image ships no bwrap/Landlock runner, so
+    # its shell would refuse every command without this):
     #
-    # A suite whose isolation boundary is the disposable per-trial
-    # microVM declares ``danger-full-access`` here; DSH then applies no
-    # inner confinement and needs no runner. The mode is carried into the
-    # run as an environment variable, so the trial record shows which
-    # posture produced it.
-    sandbox_mode: Literal["read-only", "workspace-write", "danger-full-access"] | None = None
+    #     control_options:
+    #       dsh: {permission_mode: danger-full-access}
+    control_options: dict[str, dict[str, Any]] = Field(default_factory=dict)
+
+    @field_validator("control_options")
+    @classmethod
+    def _option_namespaces(
+        cls, value: dict[str, dict[str, Any]]
+    ) -> dict[str, dict[str, Any]]:
+        import re as _re
+
+        for name, options in value.items():
+            if not _re.match(r"^[a-z][a-z0-9-]*$", str(name)):
+                raise ValueError(
+                    f"control_options names {name!r}; namespaces are control "
+                    "flavor names (lowercase slugs)"
+                )
+            if not isinstance(options, dict):
+                raise ValueError(
+                    f"control_options.{name} must be a mapping of option -> value"
+                )
+        return value
 
 
 class ProvenanceInfo(_SuiteModel):

@@ -53,10 +53,14 @@ driver:
   # (measured: "no sandbox backend is usable on this host"). Terminal-Bench
   # tasks need a working shell; without this, only hello-world (file tools
   # alone) was answerable. The isolation boundary for a sealed trial is the
-  # disposable per-trial microVM, so DSH's own inner confinement is off —
-  # declared here rather than assumed, and passed to the run as
-  # DSH_PERMISSION_MODE (which also sets approvals to never).
-  sandbox_mode: "danger-full-access"
+  # disposable per-trial microVM, so DSH's own inner confinement is off.
+  #
+  # 这是 DSH 自己的开关，因此写在 dsh 命名空间下：框架不认识它（不做任何
+  # 解释），由 dsh flavor 校验并翻译成 DSH_PERMISSION_MODE 注入 agent 的运行
+  # 环境。别的家族要自己的开关，就用自己 flavor 的名字另开一个命名空间。
+  control_options:
+    dsh:
+      permission_mode: "danger-full-access"
 provenance:
   source: "terminal-bench-core@0.1.1 (https://github.com/laude-institute/terminal-bench @ 91e10457b5410f16c44364da1a34cb6de8c488a5)"
   source_url: "https://github.com/laude-institute/terminal-bench"
