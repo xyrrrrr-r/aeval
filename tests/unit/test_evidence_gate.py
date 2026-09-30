@@ -484,3 +484,132 @@ def test_bundle_descriptor_is_found_where_harbor_downloads_it(tmp_path):
     (trial / "bundle_descriptor.json").write_text("{}")
     # the downloaded location wins when both exist
     assert find_bundle_descriptor(trial) == trial / "agent" / "bundle_descriptor.json"
+
+
+async def test_gate_fails_closed_when_no_adapter_is_recorded(tmp_path, demo_suite):
+    """G6: without a live handle, the record owner comes from the runtime
+    lock — never from a hardcoded first agent. A lock recording no agent is a
+    refusal, not a silent default."""
+    from aeval.provenance import build_runtime_lock
+
+    lock = build_runtime_lock(agent_ids=[])
+    trial_dir = tmp_path / "trial"
+    build_complete_trial_dir(
+        trial_dir, plan=_full_plan(demo_suite), runtime_lock=lock,
+    )
+    ctx = _ctx(tmp_path, demo_suite, lock, with_trial_dir=trial_dir)
+    event = _Event("trial-1", trial_dir)
+    spy = VerifierSpy()
+    with pytest.raises(EvidenceIntegrityError, match="cannot be determined"):
+        await _run_gate(ctx, event, spy)
+    assert spy.calls == 0, "the gate must refuse before any verifier runs"
+
+
+async def test_gate_fails_closed_on_an_ambiguous_lock(tmp_path, demo_suite):
+    """Two recorded adapters and no live handle: which session-record layout
+    applies is genuinely unknown, so the gate refuses instead of guessing."""
+    from aeval.contracts import AgentReleaseLock
+    from aeval.provenance import build_runtime_lock
+
+    lock = build_runtime_lock(
+        agent_ids=[],
+        agents={
+            "dsh": AgentReleaseLock(id="dsh", version="1"),
+            "deepagent": AgentReleaseLock(id="deepagent", version="1"),
+        },
+    )
+    trial_dir = tmp_path / "trial"
+    build_complete_trial_dir(
+        trial_dir, plan=_full_plan(demo_suite), runtime_lock=lock,
+    )
+    ctx = _ctx(tmp_path, demo_suite, lock, with_trial_dir=trial_dir)
+    event = _Event("trial-1", trial_dir)
+    spy = VerifierSpy()
+    with pytest.raises(EvidenceIntegrityError, match="ambiguous"):
+        await _run_gate(ctx, event, spy)
+    assert spy.calls == 0
+
+
+async def test_gate_resolves_the_record_owner_from_the_lock(tmp_path, demo_suite):
+    """The offline/replay fallback: a lock recording exactly one agent
+    resolves its declaration to the adapter class — the default lock (which
+    records dsh) finds the DSH-shaped session record with no live handle."""
+    from aeval.agents.dsh.agent import DshAgent
+    from aeval.hooks.evidence import _record_owner
+
+    from aeval.provenance import build_runtime_lock
+
+    assert _record_owner(None, build_runtime_lock()) is DshAgent
+    # a live handle always wins over the lock
+    sentinel = object()
+    assert _record_owner(sentinel, build_runtime_lock()) is sentinel
+
+
+async def test_a_declared_slot_passes_the_gate_end_to_end(tmp_path):
+    """Stage 3 acceptance: an adapter's OWN slot name and path — plan,
+    collection, gate — without the framework's table knowing either.
+
+    The third slot kind beyond dsh_session/agent_session_record: a declared
+    slug plus a declared path, mirrored in the adapter's declaration."""
+    from types import SimpleNamespace
+
+    from aeval.provenance import build_runtime_lock
+    from aeval.hooks.evidence import build_required_collect_plan
+
+    class GptAgent:
+        SESSION_RECORD_OUTPUT = "gpt_session"
+        SESSION_RECORD_OUTPUT_PATH = "gpt/summary.v2.json"
+
+        @staticmethod
+        def locate_session_record(record_root, session_id):
+            candidate = Path(record_root) / session_id / "summary.v2.json"
+            return candidate if candidate.is_file() else None
+
+    # the suite declares the same slot; the plan carries it instead of the
+    # built-ins
+    suite = SimpleNamespace(overlay=SimpleNamespace(
+        driver=SimpleNamespace(session_record="gpt_session"), observables=[],
+    ))
+    plan = build_required_collect_plan(suite)
+    assert "gpt_session" in plan
+    assert "dsh_session" not in plan and "agent_session_record" not in plan
+    assert "runtime_dump" in plan and "canonical_transcript" in plan
+
+    lock = build_runtime_lock()
+    trial_dir = tmp_path / "trial"
+    build_complete_trial_dir(
+        trial_dir, plan=plan, runtime_lock=lock, session_root="sessions",
+        output_paths={"gpt_session": "gpt/summary.v2.json"},
+    )
+    # the official record the descriptor's session_root holds (same bytes as
+    # the collected artifact — ownership is by content)
+    record = trial_dir / "sessions" / "s-1" / "summary.v2.json"
+    record.parent.mkdir(parents=True, exist_ok=True)
+    record.write_bytes((trial_dir / "gpt" / "summary.v2.json").read_bytes())
+
+    bundle = verify_evidence_bundle(trial_dir, lock, plan, adapter=GptAgent)
+    assert bundle.trial_id == "trial-1"
+    assert "gpt/summary.v2.json" in bundle.artifacts
+
+
+async def test_the_gate_refuses_a_declared_slot_without_a_path(tmp_path):
+    """A slot nobody can locate is fail-closed, not passed with a guess."""
+    from aeval.provenance import build_runtime_lock
+
+    class Pathless:
+        SESSION_RECORD_OUTPUT = "gpt_session"
+        # no SESSION_RECORD_OUTPUT_PATH, and no built-in path exists
+
+        @staticmethod
+        def locate_session_record(record_root, session_id):
+            return None
+
+    lock = build_runtime_lock()
+    trial_dir = tmp_path / "trial"
+    plan = ["runtime_dump", "mock_call_log", "gpt_session", "canonical_transcript"]
+    build_complete_trial_dir(
+        trial_dir, plan=plan, runtime_lock=lock, session_root="sessions",
+        output_paths={"gpt_session": "gpt/summary.v2.json"},
+    )
+    with pytest.raises(EvidenceIntegrityError, match="no fixed path"):
+        verify_evidence_bundle(trial_dir, lock, plan, adapter=Pathless)

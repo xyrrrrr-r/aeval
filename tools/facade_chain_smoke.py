@@ -11,9 +11,18 @@ against the PRODUCTION code paths: the broker starts through
 start, health gate), and the lock's recorded facade digest is verified before
 anything is uploaded.
 
-The stub upstream speaks OpenAI's chat-completions SSE and reports usage, so
-the broker really counts tokens — which is what makes the second half of the
-check meaningful: once the lease's token cap is consumed, further calls must be
+TWO chains run (AGENT-ABSTRACTION-2 §4.1), each against its own broker and
+facade deployment:
+
+- the chat arm: an agent declaring ``openai_chat``; the facade serves
+  ``/v1/chat/completions`` and the broker's upstream speaks chat-completions;
+- the responses arm: an agent declaring ``openai_responses`` (the deepagent
+  adapter's own declaration); the facade serves ``/v1/responses`` only and
+  the broker's upstream speaks the OpenAI Responses wire to the stub.
+
+Each stub upstream speaks its protocol's SSE and reports usage, so the broker
+really counts tokens — which is what makes the second half of each check
+meaningful: once the lease's token cap is consumed, further calls must be
 refused (that refusal is the metering being real, not declared).
 
 This is a verification tool, not runtime code, and it belongs on the lab host:
@@ -75,14 +84,14 @@ def _estimated_input_tokens(raw: bytes) -> int:
 
 
 class _StubUpstream(BaseHTTPRequestHandler):
-    """An OpenAI-compatible chat-completions stub that reports usage."""
+    """A provider stub that speaks BOTH upstream wires and reports usage."""
 
     calls = 0
+    responses_calls = 0
+    counts = 0
 
     def log_message(self, *args):  # noqa: ANN002 - silence the default logging
         return
-
-    counts = 0
 
     def do_POST(self) -> None:  # noqa: N802 - http.server's API
         length = int(self.headers.get("content-length", "0") or "0")
@@ -102,9 +111,15 @@ class _StubUpstream(BaseHTTPRequestHandler):
             self.end_headers()
             self.wfile.write(payload)
             return
-        if not self.path.endswith("/chat/completions"):
-            self.send_error(404, "the stub serves /chat/completions and /tokens/count")
+        if self.path.endswith("/responses"):
+            self._serve_responses(raw, body)
             return
+        if not self.path.endswith("/chat/completions"):
+            self.send_error(404, "the stub serves /chat/completions, /responses and /tokens/count")
+            return
+        self._serve_chat(raw, body)
+
+    def _serve_chat(self, raw: bytes, body: dict) -> None:
         type(self).calls += 1
         # A real provider obeys the max_tokens the broker clamped to the lease
         # budget. Ignoring it made the broker fail the call with
@@ -123,11 +138,44 @@ class _StubUpstream(BaseHTTPRequestHandler):
             {**frame, "choices": [{"index": 0, "delta": {}, "finish_reason": "stop"}]},
         ]
         payload = "".join(f"data: {json.dumps(chunk)}\n\n" for chunk in chunks) + "data: [DONE]\n\n"
+        self._sse(payload)
+
+    def _serve_responses(self, raw: bytes, body: dict) -> None:
+        """The Responses wire (DeepSeek shape): semantic SSE, no [DONE].
+
+        Self-consistency matters as much as shape: ``input_tokens`` is derived
+        from the exact dispatch body the same way /tokens/count derives the
+        bound, so the broker's cross-check (usage vs counted bound) passes —
+        which is precisely what makes the responses arm's metering real.
+        """
+        type(self).responses_calls += 1
+        requested = body.get("max_output_tokens")
+        completion = STUB_COMPLETION_TOKENS if not isinstance(requested, int) else min(STUB_COMPLETION_TOKENS, requested)
+        input_tokens = _estimated_input_tokens(raw)
+        model = body.get("model", "stub")
+        events = [
+            {"type": "response.created", "response": {"id": "resp-stub", "status": "in_progress", "model": model}},
+            {"type": "response.output_item.added", "output_index": 0,
+             "item": {"id": "msg_0", "type": "message", "role": "assistant"}},
+            {"type": "response.output_text.delta", "item_id": "msg_0", "output_index": 0, "delta": STUB_REPLY},
+            {"type": "response.output_item.done", "output_index": 0,
+             "item": {"id": "msg_0", "type": "message", "role": "assistant",
+                      "content": [{"type": "output_text", "text": STUB_REPLY}]}},
+            {"type": "response.completed",
+             "response": {"id": "resp-stub", "status": "completed", "model": model,
+                          "usage": {"input_tokens": input_tokens, "output_tokens": completion,
+                                    "total_tokens": input_tokens + completion}}},
+        ]
+        payload = "".join(f"data: {json.dumps(event)}\n\n" for event in events)
+        self._sse(payload)
+
+    def _sse(self, payload: str) -> None:
+        encoded = payload.encode("utf-8")
         self.send_response(200)
         self.send_header("content-type", "text/event-stream")
-        self.send_header("content-length", str(len(payload.encode("utf-8"))))
+        self.send_header("content-length", str(len(encoded)))
         self.end_headers()
-        self.wfile.write(payload.encode("utf-8"))
+        self.wfile.write(encoded)
 
 
 class LocalSandbox:
@@ -162,10 +210,24 @@ class LocalSandbox:
         )
 
 
-class _FacadeAgent:
-    """The declared flavor under test (the real adapter declares the same)."""
+class _ChatFacadeAgent:
+    """The chat arm's declared flavor (openai_chat: facade serves /v1/chat/completions)."""
 
     CONTROL_STACK = "deepagent-facade"
+    MODEL_ROUTING = {
+        "agent_protocol": "openai_chat",
+        "env": {"base_url": "OPENAI_BASE_URL", "api_key": "OPENAI_API_KEY"},
+    }
+
+
+class _ResponsesFacadeAgent:
+    """The responses arm's declared flavor — the deepagent adapter declares the same."""
+
+    CONTROL_STACK = "deepagent-facade"
+    MODEL_ROUTING = {
+        "agent_protocol": "openai_responses",
+        "env": {"base_url": "OPENAI_BASE_URL", "api_key": "OPENAI_API_KEY"},
+    }
 
 
 def _request(url: str, body: dict, timeout: float = 30.0) -> tuple[int, str]:
@@ -298,7 +360,7 @@ async def _run(args) -> dict:
             await bootstrap_trial_control(
                 environment=stale_sandbox, context=stale_context, trial_id=trial_id,
                 paths=paths, broker=broker, provider=identity["provider"],
-                model=identity["model"], job_token_file=token_path, agent=_FacadeAgent(),
+                model=identity["model"], job_token_file=token_path, agent=_ChatFacadeAgent(),
                 facade_dist=facade_dist,
                 facade_root=facade_root.as_posix() if facade_root else None,
             )
@@ -314,7 +376,7 @@ async def _run(args) -> dict:
         _, config = await bootstrap_trial_control(
             environment=sandbox, context=context, trial_id=trial_id, paths=paths,
             broker=broker, provider=identity["provider"], model=identity["model"],
-            job_token_file=token_path, agent=_FacadeAgent(), facade_dist=facade_dist,
+            job_token_file=token_path, agent=_ChatFacadeAgent(), facade_dist=facade_dist,
             facade_root=facade_root.as_posix() if facade_root else None,
             control_ca=ca_path,
         )
@@ -360,6 +422,20 @@ async def _run(args) -> dict:
         later_success = first_refusal is not None and any(
             attempt["status"] == 200 for attempt in attempts[first_refusal:]
         )
+
+        # The chat facade must NOT have grown a responses endpoint: an existing
+        # deployment's surface is unchanged until a routing declares more.
+        chat_gate_status, _ = _request(f"{facade_url}/v1/responses", {
+            "model": identity["model"], "input": "say hello",
+        })
+
+        # ── the responses arm: its own broker (upstream protocol responses),
+        #    its own facade deployment (AEVAL_FACADE_PROTOCOLS=responses,
+        #    derived from the agent's declaration), same production paths ──
+        responses_chain = await _responses_chain(
+            args, work_dir=work_dir, stub_port=stub_port, facade_dist=facade_dist,
+            facade_root=facade_root, identity=identity, limits=limits,
+        )
         return {
             "facade_dist": str(facade_dist),
             "facade_url": facade_url,
@@ -378,6 +454,8 @@ async def _run(args) -> dict:
             "attempts": attempts,
             "refusal_codes": sorted(set(codes)),
             "streaming_ok": stream_ok,
+            "chat_facade_responses_endpoint_status": chat_gate_status,
+            "responses_chain": responses_chain,
             "facade_log_tail": _log_tail(
                 "/tmp/aeval-facade.log"
             ) if not any(a["status"] == 200 for a in attempts) else "",
@@ -386,12 +464,15 @@ async def _run(args) -> dict:
                 "stale_lock_uploaded_nothing": not stale_uploaded,
                 "deployed_entry_present": (Path(args.facade_root or "/opt/aeval-facade") / "dist" / "facade_main.js").is_file(),
                 "health_ok": health.get("ok") is True,
+                "health_serves_chat_only": health.get("protocols") == ["chat_completions"],
                 "completion_ok": bool(successes),
                 "streaming_ok": stream_ok,
                 "stub_reached": _StubUpstream.calls > 0,
                 "token_count_endpoint_used": _StubUpstream.counts > 0,
                 "cap_fires_402": bool(refused),
                 "no_success_after_cap": not later_success,
+                # the chat facade's surface is unchanged: /v1/responses is 404
+                "chat_facade_refuses_responses": chat_gate_status == 404,
                 # the broker's published lease must pin exactly the cap under
                 # test; in production the sandbox adapter compares this /info
                 # payload field by field with the composed control config, and
@@ -399,12 +480,149 @@ async def _run(args) -> dict:
                 # harness exercises.
                 "info_limits_mirror_the_lease": info_limits == limits,
                 "the_ca_is_load_bearing": (not args.tls) or untrusted_outcome != "deployed_without_the_ca",
+                # the responses arm's own checks (flattened for the reporter)
+                **{
+                    key: value
+                    for key, value in responses_chain["checks"].items()
+                },
             },
         }
     finally:
         broker.stop("smoke_end")
         stub.shutdown()
         _stop_facade(Path(args.facade_root) if args.facade_root else Path("/opt/aeval-facade"))
+        _stop_facade(_responses_facade_root(args))
+
+
+def _responses_facade_root(facade_root: Path | None) -> Path:
+    """The responses arm's deployment root (its own tree, its own log)."""
+    base = facade_root if facade_root else Path("/opt/aeval-facade")
+    return base.with_name(base.name + "-responses")
+
+
+async def _responses_chain(
+    args, *, work_dir: Path, stub_port: int, facade_dist: Path,
+    facade_root: Path | None, identity: dict, limits: dict,
+) -> dict:
+    """The responses arm, end to end through the same production paths.
+
+    A second broker whose upstream speaks the responses wire (protocol
+    'responses' — the DeepSeek-shaped upstream of AGENT-ABSTRACTION-2 §4.4),
+    deployed against by an agent declaring ``openai_responses`` so the facade
+    serves ``/v1/responses`` only. Everything else — lock coverage, tar
+    upload, detached start, health gate, budget refusal — is the same code
+    the chat arm just exercised.
+    """
+    trial_id = "facade-smoke-responses"
+    session_id = "facade-smoke-responses-session"
+    broker_port = args.responses_broker_port
+    facade_root_posix = _responses_facade_root(facade_root).as_posix()
+    token_path = str(work_dir / "trial-token-responses")
+
+    run_binding = RunBinding(
+        run_id="facade-smoke", job_config_hash="a" * 64,
+        config_file_sha256="b" * 64, runtime_lock_digest="c" * 64,
+    )
+    paths = TrialPaths(
+        sandbox_cwd=str(work_dir / "workspace-r"), dsh_home=str(work_dir / "dsh-home-r"),
+        bundle_path=str(work_dir / "bundle-r.json"), session_root="dsh-home-r",
+        download_root=f"trials/{trial_id}/agent",
+    )
+    trial_dir = work_dir / "broker" / trial_id
+    trial_dir.mkdir(parents=True, exist_ok=True)
+    control_config = {
+        "run": run_binding.model_dump(mode="json"), "trialId": trial_id,
+        "sessionId": session_id, "sessionRoot": paths.session_root,
+        "bundlePath": paths.bundle_path,
+        "gatewayUrl": f"http://127.0.0.1:{broker_port}",
+        "jobTokenFile": token_path, "provider": identity["provider"],
+        "model": identity["model"], "refuseAuxiliaryCalls": True, **limits,
+    }
+    control_config["configDigest"] = control_config_digest(control_config)
+    config_path = write_broker_config(
+        trial_dir / "broker.json",
+        run=run_binding.model_dump(mode="json"), trial_id=trial_id, session_id=session_id,
+        config_digest=control_config["configDigest"], identity=identity, limits=limits,
+        max_output_tokens=args.max_output_tokens, listen_host="127.0.0.1",
+        listen_port=broker_port, token_out=trial_dir / "job-token",
+        upstream={"provider": "stub", "model": identity["model"],
+                  "baseUrl": f"http://127.0.0.1:{stub_port}/v1",
+                  "apiKeyEnv": "STUB_UPSTREAM_KEY",
+                  "protocol": "responses"},
+        token_count={"endpoint": f"http://127.0.0.1:{stub_port}/v1/tokens/count",
+                     "margin": 8},
+    )
+    broker = ModelBrokerProcess(
+        node_bin=args.node, broker_js=Path(args.broker_js), config_path=config_path,
+    ).start()
+    facade_url = f"http://127.0.0.1:{args.responses_facade_port}"
+    try:
+        from aeval.provenance import build_runtime_lock
+
+        lock = build_runtime_lock(images={}, agent_ids=["deepagent-facade-smoke"],
+                                  facade_dist=facade_dist)
+        context = _context(work_dir, lock, trial_id=trial_id)
+        await bootstrap_trial_control(
+            environment=LocalSandbox(work_dir), context=context, trial_id=trial_id,
+            paths=paths, broker=broker, provider=identity["provider"],
+            model=identity["model"], job_token_file=token_path,
+            agent=_ResponsesFacadeAgent(), facade_dist=facade_dist,
+            facade_root=facade_root_posix,
+        )
+        health = _get(f"{facade_url}/healthz")
+
+        attempts: list[dict] = []
+        stream_ok = False
+        completion_ok = False
+        for index in range(args.max_calls):
+            streaming = index == 1
+            status, body = _request(f"{facade_url}/v1/responses", {
+                "model": identity["model"],
+                "input": "say hello",
+                "stream": streaming,
+            })
+            if streaming and status == 200:
+                stream_ok = "event: response.completed" in body
+            if status == 200 and not streaming:
+                try:
+                    parsed = json.loads(body)
+                    completion_ok = parsed.get("output", [{}])[0].get(
+                        "content", [{}]
+                    )[0].get("text") == STUB_REPLY
+                except (json.JSONDecodeError, IndexError, AttributeError):
+                    completion_ok = False
+            attempts.append({"call": index + 1, "stream": streaming, "status": status,
+                             "code": _error_code(body)})
+        refused = [attempt for attempt in attempts if attempt["status"] == 402]
+        first_refusal = attempts.index(refused[0]) if refused else None
+        later_success = first_refusal is not None and any(
+            attempt["status"] == 200 for attempt in attempts[first_refusal:]
+        )
+        # gating: the responses facade serves responses ONLY
+        chat_status, _ = _request(f"{facade_url}/v1/chat/completions", {
+            "model": identity["model"],
+            "messages": [{"role": "user", "content": "say hello"}],
+        })
+        return {
+            "facade_url": facade_url,
+            "broker_url": broker.url,
+            "stub_responses_calls": _StubUpstream.responses_calls,
+            "health": health,
+            "attempts": attempts,
+            "chat_endpoint_status": chat_status,
+            "checks": {
+                "responses_health_ok": health.get("ok") is True,
+                "responses_health_serves_responses_only": health.get("protocols") == ["responses"],
+                "responses_completion_ok": completion_ok,
+                "responses_streaming_ok": stream_ok,
+                "responses_stub_reached": _StubUpstream.responses_calls > 0,
+                "responses_cap_fires_402": bool(refused),
+                "responses_no_success_after_cap": not later_success,
+                "responses_facade_refuses_chat": chat_status == 404,
+            },
+        }
+    finally:
+        broker.stop("smoke_end_responses")
 
 
 def _log_tail(path: str, lines: int = 12) -> str:
@@ -427,7 +645,7 @@ def _stop_facade(root: Path) -> None:
     )
 
 
-def _context(work_dir: Path, lock: RuntimeLock) -> EvaluationContext:
+def _context(work_dir: Path, lock: RuntimeLock, trial_id: str = "facade-smoke") -> EvaluationContext:
     context = EvaluationContext(
         run_id="facade-smoke", runtime_lock=lock,
         suite=load_suite(REPO / "suites" / "deepagent-budget"),
@@ -437,10 +655,10 @@ def _context(work_dir: Path, lock: RuntimeLock) -> EvaluationContext:
         run_id="facade-smoke", job_config_hash="a" * 64,
         config_file_sha256="b" * 64, runtime_lock_digest=lock.digest(),
     )
-    state = TrialState(trial_id="facade-smoke", phase="running")
-    state.trial_dir = work_dir / "trials" / "facade-smoke"
+    state = TrialState(trial_id=trial_id, phase="running")
+    state.trial_dir = work_dir / "trials" / trial_id
     state.trial_dir.mkdir(parents=True, exist_ok=True)
-    context.trials["facade-smoke"] = state
+    context.trials[trial_id] = state
     return context
 
 
@@ -483,6 +701,10 @@ def main() -> int:
     parser.add_argument("--token-path", default=None)
     parser.add_argument("--broker-port", type=int, default=5199)
     parser.add_argument("--facade-port", type=int, default=8787)
+    parser.add_argument("--responses-broker-port", type=int, default=5198,
+                        help="the responses arm's broker listener")
+    parser.add_argument("--responses-facade-port", type=int, default=8786,
+                        help="the responses arm's facade listener")
     parser.add_argument("--max-steps", type=int, default=6)
     parser.add_argument("--max-tokens", type=int, default=250)
     parser.add_argument("--max-output-tokens", type=int, default=200)

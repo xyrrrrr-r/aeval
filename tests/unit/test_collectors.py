@@ -100,8 +100,18 @@ def test_the_dsh_default_keeps_the_historical_plan_byte_identical(tmp_path):
 def test_an_unknown_session_record_flavor_is_refused(tmp_path):
     from aeval.hooks.collectors import CollectionProducerError
 
-    with pytest.raises(CollectionProducerError, match="unknown session-record flavor"):
+    # a DECLARED slot without its fixed path is refused: the framework
+    # cannot know where a third party's record belongs
+    with pytest.raises(
+        CollectionProducerError, match="has no fixed path"
+    ):
         produce_session_record(tmp_path, b"x", flavor="gpt_session")
+    # with the adapter-declared path, the record lands there
+    outcome, ref = produce_session_record(
+        tmp_path, b"x", flavor="gpt_session", path="gpt/session.bin"
+    )
+    assert outcome.output_path == "gpt/session.bin"
+    assert ref.path == "gpt/session.bin"
 
 
 class _CannedExec:

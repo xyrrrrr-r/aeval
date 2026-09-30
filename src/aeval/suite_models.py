@@ -184,11 +184,25 @@ class DriverSpec(_SuiteModel):
     require: list[str] = Field(default_factory=list)
     # Which session-record collect output this suite's evidence bundles use.
     # The slot generalised off the DSH-only hardcode: an adapter declares the
-    # flavor it can produce (contract ``SESSION_RECORD_OUTPUT``) and the suite
-    # declares the flavor its tasks' collect commands name — a pairing where
+    # slot it can produce (contract ``SESSION_RECORD_OUTPUT``) and the suite
+    # declares the slot its tasks' collect commands name — a pairing where
     # the two disagree is refused at composition, not discovered mid-collection.
-    # The default keeps every pre-existing suite byte- and behavior-identical.
-    session_record: Literal["dsh_session", "agent_session_record"] = "dsh_session"
+    # Any well-formed slug is a declared slot (its adapter must then carry the
+    # fixed path); the DEFAULT is untouched so every suite sealed before the
+    # vocabulary opened keeps parsing and behaving byte-identically (I2).
+    session_record: str = "dsh_session"
+
+    @field_validator("session_record")
+    @classmethod
+    def _session_record_slot(cls, value: str) -> str:
+        from aeval.agents.contract import session_record_slot_well_formed
+
+        if not session_record_slot_well_formed(value):
+            raise ValueError(
+                "must be a lowercase slot slug (built-ins: dsh_session, "
+                f"agent_session_record), got {value!r}"
+            )
+        return value
     # Stage the task's `tests/` directory into the sandbox right after the
     # agent ends and BEFORE evidence collection.
     #

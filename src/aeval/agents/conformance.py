@@ -8,11 +8,15 @@ failure is cheap and a quiet one is a wrong number:
                        (a drifting declaration is a lie nobody notices);
 2. ``contract``      — the members the evidence chain reads all exist, so
                        collection cannot fail with an ``AttributeError`` midway;
-3. ``capabilities``  — the adapter offers what the suite requires *before* a
+3. ``model_routing`` — which wire the agent speaks, and whether the deployment
+                       can serve it (an OpenAI wire with no facade stack runs
+                       at the vendor unmetered — the one quiet overclaim the
+                       budget columns would still call metered);
+4. ``capabilities``  — the adapter offers what the suite requires *before* a
                        sandbox is built;
-4. ``accounting``    — spend can be enforced when the suite caps it, and a cap the
+5. ``accounting``    — spend can be enforced when the suite caps it, and a cap the
                        adapter cannot enforce is refused rather than overspent;
-5. ``transcript``    — ``read_trial_session()`` returns real ATIF, or raises. What
+6. ``transcript``    — ``read_trial_session()`` returns real ATIF, or raises. What
                        it must never do is return something that looks complete
                        and is not.
 
@@ -29,6 +33,9 @@ from typing import Callable, Literal
 from aeval.agents.contract import (
     adapter_declaration_gap,
     adapter_member_gap,
+    control_stack_of,
+    facade_protocols_for,
+    model_routing_of,
     session_record_output_of,
     budget_gate_violation,
     build_adapter_spec,
@@ -124,6 +131,56 @@ def check_contract(adapter: type) -> ConformanceCheck:
     )
 
 
+def check_model_routing(adapter: type) -> ConformanceCheck:
+    """Which wire the agent speaks, and whether the deployment can serve it.
+
+    The silent failure this guards (AGENT-ABSTRACTION-2 §4.5) is the one the
+    budget columns would still call metered: an agent that speaks an OpenAI
+    wire with no facade stack talks straight to the vendor — metered in the
+    manifest, unmetered in reality. The mirror case is equally quiet: a facade
+    stack declared with no OpenAI routing would serve an endpoint the agent
+    never calls. Both are refusals here, before a sandbox is built.
+    """
+    routing = model_routing_of(adapter)
+    stack = control_stack_of(adapter)
+    if routing is None:
+        if stack == "deepagent-facade":
+            return ConformanceCheck(
+                "model_routing",
+                "fail",
+                f"control_stack={stack!r} serves OpenAI endpoints, but the "
+                "adapter declares no MODEL_ROUTING — the facade would serve an "
+                "endpoint the agent never calls",
+            )
+        return ConformanceCheck(
+            "model_routing",
+            "skipped",
+            f"adapter declares no MODEL_ROUTING; control_stack={stack!r}",
+        )
+    if routing.agent_protocol == "gateway_native":
+        return ConformanceCheck(
+            "model_routing",
+            "pass",
+            f"gateway_native — the control stack ({stack!r}) speaks the broker "
+            "wire itself, so no facade endpoint is served",
+        )
+    if stack != "deepagent-facade":
+        return ConformanceCheck(
+            "model_routing",
+            "fail",
+            f"{routing.agent_protocol} needs the in-sandbox facade stack to "
+            f"translate it, but control_stack={stack!r} — the agent would talk "
+            "to the vendor unmetered",
+        )
+    return ConformanceCheck(
+        "model_routing",
+        "pass",
+        f"{routing.agent_protocol} via {stack!r}; facade serves "
+        f"{facade_protocols_for(routing)}; agent env "
+        + ", ".join(f"{slot}={name}" for slot, name in sorted(routing.env.items())),
+    )
+
+
 def check_capabilities(
     import_path: str,
     adapter: type,
@@ -165,6 +222,17 @@ def check_capabilities(
 def check_accounting(
     adapter: type, budget: object | None
 ) -> ConformanceCheck:
+    # An adapter that cannot describe itself has no enforcement to judge: the
+    # kit reports that as a skip pointing at the root cause (the contract
+    # check) instead of crashing the whole report on one broken adapter.
+    gap = adapter_declaration_gap(adapter)
+    if gap:
+        return ConformanceCheck(
+            "accounting",
+            "skipped",
+            "adapter cannot state its enforcement (see the contract check): "
+            + "; ".join(gap),
+        )
     spec = build_adapter_spec(adapter)
     if budget is None:
         return ConformanceCheck(
@@ -262,6 +330,7 @@ def run_conformance(
             )
         )
     report.checks.append(check_contract(adapter))
+    report.checks.append(check_model_routing(adapter))
     report.checks.append(
         check_capabilities(import_path, adapter, required_capabilities, session_record)
     )
@@ -282,7 +351,18 @@ def run_conformance_for(
     The pairing is what makes the capability and budget checks meaningful: an
     adapter is not conformant in the abstract, only against the suites it runs.
     """
-    adapter = load_adapter_class(import_path)
+    if declaration_path is not None:
+        # The declaration IS the adapter's description: resolve the class
+        # through it, so a declaration-driven base is judged as the complete
+        # per-agent class it materializes into (G11), not as the bare base.
+        from aeval.agents.declaration import resolve_agent_declaration
+
+        resolved = resolve_agent_declaration(
+            declaration_path, agents_root=agents_root or Path(declaration_path).parent
+        )
+        adapter = resolved.declaration.adapter_class()
+    else:
+        adapter = load_adapter_class(import_path)
     if not suite_paths:
         return [
             run_conformance(
@@ -320,6 +400,7 @@ __all__ = [
     "check_capabilities",
     "check_contract",
     "check_declaration",
+    "check_model_routing",
     "check_transcript",
     "run_conformance",
     "run_conformance_for",

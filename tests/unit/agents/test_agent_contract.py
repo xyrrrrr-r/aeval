@@ -144,13 +144,31 @@ def test_session_record_output_of_fails_closed_on_bad_declarations():
     class Undeclared:
         pass
 
-    class WrongFlavor:
-        SESSION_RECORD_OUTPUT = "freeform"
+    class Malformed:
+        SESSION_RECORD_OUTPUT = "Free-Form!"
 
     with pytest.raises(SuiteError, match="declares no valid SESSION_RECORD_OUTPUT"):
         session_record_output_of(Undeclared)
     with pytest.raises(SuiteError, match="declares no valid SESSION_RECORD_OUTPUT"):
-        session_record_output_of(WrongFlavor)
+        session_record_output_of(Malformed)
+
+
+def test_a_declared_slot_needs_its_fixed_path():
+    """The vocabulary is open (any well-formed slug is a slot), so the path
+    is what makes a declared slot real — without it neither the collector
+    nor the evidence gate could locate the record."""
+    from aeval.agents.contract import session_record_output_of
+
+    class OwnSlot:
+        SESSION_RECORD_OUTPUT = "gpt_session"
+
+    with pytest.raises(SuiteError, match="no built-in path"):
+        session_record_output_of(OwnSlot)
+
+    class SlottedWithPath(OwnSlot):
+        SESSION_RECORD_OUTPUT_PATH = "gpt/session.bin"
+
+    assert session_record_output_of(SlottedWithPath) == "gpt_session"
 
 
 def test_dsh_adapter_spec_is_built_from_declarations():

@@ -41,6 +41,7 @@ from aeval.agents.dsh.bridge import (
     read_dsh_session_via_bridge,
 )
 from aeval.contracts import CanonicalTranscript
+from aeval.control.artifacts import control_artifact_candidates
 from aeval.provenance import OFFICIAL_DSH_TAG
 
 __all__ = [
@@ -257,20 +258,25 @@ def build_headless_command(
 def session_reader_candidates() -> list[Path]:
     """Built readers to try when the operator has not named one.
 
-    ``dsh-eval-control`` is a sibling checkout in the development layout and
-    an npm dependency in an installed one; both are probed, in that order.
+    The dsh flavor's control artifact (G8): ``dsh-eval-control`` is a sibling
+    checkout in the development layout and an npm dependency in an installed
+    one; both are probed, in that order. The search discipline itself lives in
+    ``aeval.control.artifacts``, shared with every other control artifact —
+    only the package name and the wanted file are DSH's to know.
     """
     repo_dir = Path(__file__).parents[4]
-    candidates = [
-        repo_dir.parent / "dsh-eval-control" / "dist" / "session_reader.js"
-    ]
-    root_env = os.environ.get(SESSION_READER_ROOT_ENV)
-    if root_env:
-        candidates.insert(0, Path(root_env) / "dist" / "session_reader.js")
-    candidates.append(
-        repo_dir / "node_modules" / "dsh-eval-control" / "dist" / "session_reader.js"
+    return control_artifact_candidates(
+        # SESSION_READER_ROOT_ENV names the package ROOT (its dist/ holds the
+        # reader), not the reader file itself — hence env_inner.
+        env=SESSION_READER_ROOT_ENV,
+        env_inner="dist/session_reader.js",
+        package="dsh-eval-control",
+        inner="dist/session_reader.js",
+        walk_from=(repo_dir.parent,),
+        extra=(
+            repo_dir / "node_modules" / "dsh-eval-control" / "dist" / "session_reader.js",
+        ),
     )
-    return candidates
 
 
 def resolve_session_reader(explicit: Path | None = None) -> Path:
@@ -333,10 +339,21 @@ class DshAgent(BaseInstalledAgent):
     # what stops the framework from deploying it into a second agent.
     CONTROL_STACK = "dsh"
 
+    # Model traffic routing (AGENT-ABSTRACTION-2 §4.1): the control stack's
+    # transport speaks the broker wire (aeval-model-broker/3) natively, so no
+    # facade is deployed for this agent and no facade env is injected.
+    MODEL_ROUTING = {"agent_protocol": "gateway_native"}
+
     # The collect slot this adapter's official session record belongs to
     # (aeval.agents.contract). DSH's record is the zstd session file under
     # the synced session root — the historical slot, byte-identical path.
     SESSION_RECORD_OUTPUT = "dsh_session"
+    # The record's fixed path inside the trial dir — an agent fact the
+    # framework used to hardcode (AGENT-ABSTRACTION-2 G10). The declaration
+    # (agents/dsh.yaml ``artifacts:``) mirrors this value and the two are
+    # cross-checked, so the collector and the onboarding guide can never
+    # disagree about where the record lands.
+    SESSION_RECORD_OUTPUT_PATH = "sessions/session.v4.jsonl.zstd"
 
     SANDBOX_HOME = "/logs/agent/dsh-home"
     SESSION_ARTIFACT_DIR = "dsh-home"

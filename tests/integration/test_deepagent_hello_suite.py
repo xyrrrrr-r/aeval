@@ -68,7 +68,7 @@ def test_the_deepagent_pairing_composes_end_to_end(suite):
     """The whole point: one declaration, no per-agent job file."""
     assert not (SUITE / "jobs" / "deepagent.yaml").exists()
     driven = compose_harbor_job(suite, agent="deepagent", agents_root=AGENTS)
-    assert driven.agents[0].import_path == "aeval.agents.deepagent.agent:DeepgentAgent"
+    assert driven.agents[0].import_path == "aeval.agents.deepagent.agent:DcodeAgent"
 
 
 def test_the_dsh_pairing_is_refused_for_the_flavor_reason(suite):

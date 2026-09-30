@@ -116,13 +116,21 @@ export function parseBrokerMainConfig(raw) {
         ...(limitsRaw['maxSteps'] !== undefined ? { maxSteps: positiveInt(limitsRaw['maxSteps'], 'limits.maxSteps') } : {}),
         ...(limitsRaw['maxTokens'] !== undefined ? { maxTokens: positiveInt(limitsRaw['maxTokens'], 'limits.maxTokens') } : {}),
     });
-    const upstreamRaw = record(input['upstream'], 'upstream', ['provider', 'baseUrl', 'apiKeyEnv', 'model', 'timeoutMs', 'reasoningEfforts']);
+    const upstreamRaw = record(input['upstream'], 'upstream', ['provider', 'baseUrl', 'apiKeyEnv', 'model', 'protocol', 'timeoutMs', 'reasoningEfforts']);
+    // Optional and closed-vocabulary: absent = chat_completions, anything else
+    // is a config error, never a guess.
+    const protocol = upstreamRaw['protocol'] === undefined
+        ? undefined
+        : upstreamRaw['protocol'] === 'chat_completions' || upstreamRaw['protocol'] === 'responses'
+            ? upstreamRaw['protocol']
+            : fail('upstream.protocol', "must be 'chat_completions' or 'responses'");
     const reasoningEfforts = upstreamRaw['reasoningEfforts'] === undefined ? undefined : effortList(upstreamRaw['reasoningEfforts'], 'upstream.reasoningEfforts');
     const upstream = Object.freeze({
         provider: validateIdentifier(upstreamRaw['provider'], 'upstream.provider'),
         baseUrl: nonEmptyString(upstreamRaw['baseUrl'], 'upstream.baseUrl'),
         apiKeyEnv: validateIdentifier(upstreamRaw['apiKeyEnv'], 'upstream.apiKeyEnv'),
         model: validateIdentifier(upstreamRaw['model'], 'upstream.model'),
+        ...(protocol !== undefined ? { protocol } : {}),
         ...(upstreamRaw['timeoutMs'] !== undefined ? { timeoutMs: positiveInt(upstreamRaw['timeoutMs'], 'upstream.timeoutMs') } : {}),
         ...(reasoningEfforts !== undefined ? { reasoningEfforts } : {}),
     });
@@ -227,6 +235,9 @@ export async function main(argv = process.argv.slice(2)) {
         const meter = config.limits.maxTokens === undefined ? undefined : createProviderCountBound({
             baseUrl: config.upstream.baseUrl,
             apiKeyEnv: config.upstream.apiKeyEnv,
+            // The bound must count the exact dispatch body, so it speaks the same
+            // wire the upstream adapter speaks.
+            ...(config.upstream.protocol !== undefined ? { protocol: config.upstream.protocol } : {}),
             ...config.tokenCount,
         });
         controller = new AbortController();

@@ -24,8 +24,8 @@ from aeval.agents.declaration import (
     resolve_agent_declaration,
 )
 from aeval.agents.deepagent.agent import (
-    DeepgentAgent,
-    DeepgentRunError,
+    DcodeAgent,
+    DcodeRunError,
     _lease_model_name,
     default_deepagent_registry_entry,
     facade_routing_env,
@@ -62,11 +62,11 @@ def _write_trajectory(logs_dir: Path) -> None:
     )
 
 
-def _agent(logs_dir: Path, **kwargs) -> DeepgentAgent:
-    return DeepgentAgent(logs_dir, **kwargs)
+def _agent(logs_dir: Path, **kwargs) -> DcodeAgent:
+    return DcodeAgent(logs_dir, **kwargs)
 
 
-def _distribution_env(agent: DeepgentAgent) -> dict[str, str]:
+def _distribution_env(agent: DcodeAgent) -> dict[str, str]:
     """The launcher env the adapter handed to Harbor.
 
     AcpAgent parses whatever the adapter passed into its own
@@ -81,25 +81,25 @@ def _distribution_env(agent: DeepgentAgent) -> dict[str, str]:
 
 class TestContract:
     def test_members_complete(self) -> None:
-        assert adapter_member_gap(DeepgentAgent) == []
+        assert adapter_member_gap(DcodeAgent) == []
 
     def test_shipped_declaration_matches_class(self) -> None:
         resolved = resolve_agent_declaration(DECLARATION_PATH)
-        check_declaration_matches_adapter(resolved.declaration, DeepgentAgent)
+        check_declaration_matches_adapter(resolved.declaration, DcodeAgent)
 
     def test_provides_is_the_honest_set(self) -> None:
         # The honesty lock: nothing beyond what P2-5a actually delivers.
         # resume needs session pinning we do not do; sdk_jsonrpc is a DSH
         # channel this agent has nothing to serve.
-        assert DeepgentAgent.PROVIDES == frozenset(
+        assert DcodeAgent.PROVIDES == frozenset(
             {"acp_stdio", "shell", "file_tools"}
         )
 
     def test_metering_is_declared_with_the_stack_that_delivers_it(self) -> None:
         # The two declarations are one claim: the gateway lease can only be
         # honoured because the generic facade stack is deployed for this agent.
-        assert DeepgentAgent.BUDGET_ENFORCEMENT == "gateway_lease"
-        assert DeepgentAgent.CONTROL_STACK == "deepagent-facade"
+        assert DcodeAgent.BUDGET_ENFORCEMENT == "gateway_lease"
+        assert DcodeAgent.CONTROL_STACK == "deepagent-facade"
 
     def test_facade_routing_env_points_the_agent_at_the_facade(self) -> None:
         env = facade_routing_env()
@@ -135,11 +135,11 @@ class TestContract:
         local = entry["distribution"]["local"]
         assert local["cmd"] == "dcode"
         assert local["args"] == ["--acp"]
-        assert entry["version"] == DeepgentAgent.DEEPAGENTS_CODE_VERSION == "0.1.78"
+        assert entry["version"] == DcodeAgent.DEEPAGENTS_CODE_VERSION == "0.1.78"
 
     def test_identity(self, tmp_path: Path) -> None:
         agent = _agent(tmp_path)
-        assert DeepgentAgent.name() == "deepagent"
+        assert DcodeAgent.name() == "deepagent"
         assert agent.version() == "0.1.78"
 
 
@@ -225,13 +225,13 @@ class TestReadTrialSession:
     def test_missing_trajectory_fails_closed(self, tmp_path: Path) -> None:
         agent = _agent(tmp_path)
 
-        with pytest.raises(DeepgentRunError):
+        with pytest.raises(DcodeRunError):
             agent.read_trial_session()
 
     def test_unparsable_trajectory_fails_closed(self, tmp_path: Path) -> None:
         (tmp_path / "trajectory.json").write_text("{not json", encoding="utf-8")
 
-        with pytest.raises(DeepgentRunError):
+        with pytest.raises(DcodeRunError):
             _agent(tmp_path).read_trial_session()
 
     def test_no_summary_fails_closed_on_stop_reason(

@@ -35,8 +35,25 @@ observations:
 # the cordis patch). Declared, so the framework never deploys it into another agent.
 control_stack: dsh
 
+# Model traffic routing (AGENT-ABSTRACTION-2 §4.1): DSH's control-stack
+# transport speaks the broker wire (aeval-model-broker/3) natively, so there
+# is no facade to deploy and no facade env to inject — the composition skips
+# both on this declaration.
+model_routing:
+  agent_protocol: gateway_native
+
 sandbox_home: /logs/agent/dsh-home
 session_artifact_dir: dsh-home
+
+# Evidence artifacts this adapter produces. The session-record slot's fixed
+# path is declared here (and mirrored on the class as
+# SESSION_RECORD_OUTPUT_PATH, cross-checked at load): the value is
+# byte-identical to the path the framework hardcoded before the slot
+# generalised, so historical bundles and plans recompute identically.
+artifacts:
+  - name: dsh-session-record
+    slot: dsh_session
+    path: sessions/session.v4.jsonl.zstd
 
 # How this adapter is launched in a deployment. These paths are cluster facts
 # (install prefix, npm cache, where the official session reader is mounted), so

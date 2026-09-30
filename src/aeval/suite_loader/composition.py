@@ -266,7 +266,10 @@ def _declared_agent_entry(
         )
     resolved = resolve_agent_declaration(path, agents_root=root)
     declaration = resolved.declaration
-    check_declaration_matches_adapter(declaration, load_adapter_class(declaration.import_path))
+    # The class the RUNTIME resolves: a pinned import_path is itself, while a
+    # declaration-driven base materializes into the declaration's complete
+    # adapter class — the check below must judge that class, not the base.
+    check_declaration_matches_adapter(declaration, declaration.adapter_class())
     return declaration.launch_entry(profile)
 
 

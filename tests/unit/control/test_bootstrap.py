@@ -7,7 +7,10 @@ from types import SimpleNamespace
 
 import pytest
 
-from aeval.contracts import RunBinding, TrialPaths
+from aeval.contracts import RunBinding, TrialPaths, control_config_digest
+# importing the dsh flavor registers it (the adapter package IS the
+# registration) and gives the minting/config tests the flavor's own hooks
+from aeval.agents.dsh.control_flavor import dsh_config_fields, mint_owner_session
 from aeval.control.bootstrap import (
     BootstrapError,
     deploy_control_stack,
@@ -122,13 +125,9 @@ async def test_bootstrap_uploads_token_and_binds_control(
 
 
 def test_compose_control_config_digest_is_deterministic(runtime_lock):
-    paths = TrialPaths(
-        sandbox_cwd="/w", dsh_home="/h", bundle_path="/b.json",
-        session_root="h", download_root="d",
-    )
     base = dict(
         run_binding={"run_id": "r"},
-        trial_id="t", session_id="s", paths=paths,
+        trial_id="t", session_id="s",
         gateway_url="http://127.0.0.1:1",
     )
     a = compose_control_config(provider="p", model="m", **base)
@@ -263,12 +262,8 @@ def test_control_config_mirrors_the_lease_limits(runtime_lock):
     """The sandbox adapter compares the broker's /info against this
     config field by field; a lease with maxSteps and a config without it
     fails with AEVAL_LEASE_MISMATCH (found on the real sandbox)."""
-    paths = TrialPaths(
-        sandbox_cwd="/w", dsh_home="/h", bundle_path="/b.json",
-        session_root="h", download_root="d",
-    )
     base = dict(
-        run_binding={"run_id": "r"}, trial_id="t", session_id="s", paths=paths,
+        run_binding={"run_id": "r"}, trial_id="t", session_id="s",
         gateway_url="http://127.0.0.1:1", provider="p", model="m",
     )
     bare = compose_control_config(**base)
@@ -280,10 +275,86 @@ def test_control_config_mirrors_the_lease_limits(runtime_lock):
     assert mirrored["maxSteps"] == 5
     assert mirrored["maxTokens"] == 4096
     assert mirrored["reasoningEffort"] == "high"
-    # the sandboxed deployment lets the harness process finalize as owner
-    assert mirrored["ownerFinalize"] is True
     # limits participate in the digest, so the two cannot be confused
     assert mirrored["configDigest"] != bare["configDigest"]
+
+
+def test_the_neutral_config_carries_no_flavor_fields():
+    """G7: an agent that declares no stack (or a facade flavor) must not
+    carry the DSH plugin's fields — the deepagent arm's config used to drag
+    sessionRoot/bundlePath around with nothing consuming them."""
+    config = compose_control_config(
+        run_binding={"run_id": "r"}, trial_id="t", session_id="s",
+        gateway_url="http://127.0.0.1:1", provider="p", model="m",
+    )
+    for field in ("sessionRoot", "bundlePath", "refuseAuxiliaryCalls",
+                  "auxiliaryPolicy", "ownerFinalize"):
+        assert field not in config, field
+
+
+def test_the_dsh_flavor_shapes_its_half_of_the_config():
+    """The DSH plugin's fields come from the flavor's declared hook, and the
+    composed dsh config digests exactly as it did before the split (the
+    canonical digest is key-sorted, so merging order cannot drift it)."""
+    paths = TrialPaths(
+        sandbox_cwd="/w", dsh_home="/h", bundle_path="/b.json",
+        session_root="h", download_root="d",
+    )
+    fields = dsh_config_fields(paths=paths)
+    assert fields == {
+        "sessionRoot": "h", "bundlePath": "/b.json",
+        "refuseAuxiliaryCalls": True, "ownerFinalize": True,
+    }
+    assert "auxiliaryPolicy" not in fields
+
+    with_policy = dsh_config_fields(
+        paths=paths, auxiliary_policy={"compaction": "allow"},
+    )
+    assert with_policy["auxiliaryPolicy"] == {"compaction": "allow"}
+
+    flavored = compose_control_config(
+        run_binding={"run_id": "r"}, trial_id="t", session_id="s",
+        gateway_url="http://127.0.0.1:1", provider="p", model="m",
+        flavor_fields=fields,
+    )
+    assert flavored["sessionRoot"] == "h"
+    assert flavored["refuseAuxiliaryCalls"] is True
+    assert flavored["ownerFinalize"] is True
+    # flavor fields participate in the digest
+    neutral = compose_control_config(
+        run_binding={"run_id": "r"}, trial_id="t", session_id="s",
+        gateway_url="http://127.0.0.1:1", provider="p", model="m",
+    )
+    assert flavored["configDigest"] != neutral["configDigest"]
+
+
+def test_the_dsh_flavors_fields_digest_as_the_composition_always_did():
+    """Byte-compat guarantee for the sealed dsh evidence: the flavor-split
+    composition must produce the SAME configDigest the monolithic composer
+    produced for the same inputs."""
+    paths = TrialPaths(
+        sandbox_cwd="/w", dsh_home="/h", bundle_path="/b.json",
+        session_root="h", download_root="d",
+    )
+    split = compose_control_config(
+        run_binding={"run_id": "r"}, trial_id="t", session_id="s",
+        gateway_url="http://127.0.0.1:1", provider="p", model="m",
+        reasoning_effort="high", limits={"maxSteps": 5, "maxTokens": 4096},
+        flavor_fields=dsh_config_fields(
+            paths=paths, auxiliary_policy={"compaction": "allow"},
+        ),
+    )
+    monolithic = {
+        "run": {"run_id": "r"}, "trialId": "t", "sessionId": "s",
+        "sessionRoot": "h", "bundlePath": "/b.json",
+        "gatewayUrl": "http://127.0.0.1:1",
+        "jobTokenFile": SANDBOX_TOKEN_PATH.as_posix(),
+        "provider": "p", "model": "m", "refuseAuxiliaryCalls": True,
+        "reasoningEffort": "high", "maxSteps": 5, "maxTokens": 4096,
+        "auxiliaryPolicy": {"compaction": "allow"}, "ownerFinalize": True,
+    }
+    monolithic["configDigest"] = control_config_digest(monolithic)
+    assert split == monolithic
 
 
 class _RecordingEnvironment:
@@ -351,6 +422,7 @@ async def test_deploy_control_stack_uploads_and_registers(tmp_path):
     patch = await deploy_control_stack(
         environment=env, agent=agent, paths=_paths_for_stack(), config=config,
         control_dist=dist, control_ca=ca, trial_id="t-1",
+        mint_session=mint_owner_session,
     )
 
     # placed inside the DSH tree so the harness packages resolve
@@ -412,6 +484,7 @@ async def test_deploy_control_stack_requires_a_minted_session(tmp_path):
             environment=_RecordingEnvironment(mint_ok=False), agent=_Agent(),
             paths=_paths_for_stack(), config={"sessionId": "s", "jobTokenFile": "/t"},
             control_dist=dist, control_ca=None, trial_id="t",
+            mint_session=mint_owner_session,
         )
 
 
@@ -424,15 +497,17 @@ def test_control_config_mirrors_the_auxiliary_policy(runtime_lock):
         session_root="h", download_root="d",
     )
     base = dict(
-        run_binding={"run_id": "r"}, trial_id="t", session_id="s", paths=paths,
+        run_binding={"run_id": "r"}, trial_id="t", session_id="s",
         gateway_url="http://127.0.0.1:1", provider="p", model="m",
     )
     bare = compose_control_config(**base)
     assert "auxiliaryPolicy" not in bare, "an ordinary deployment keeps its digest unchanged"
-    assert bare["refuseAuxiliaryCalls"] is True
 
     mirrored = compose_control_config(
-        **base, auxiliary_policy={"compaction": "allow"}
+        **base,
+        flavor_fields=dsh_config_fields(
+            paths=paths, auxiliary_policy={"compaction": "allow"},
+        ),
     )
     assert mirrored["auxiliaryPolicy"] == {"compaction": "allow"}
     assert mirrored["refuseAuxiliaryCalls"] is True
@@ -443,7 +518,16 @@ def test_control_config_mirrors_the_auxiliary_policy(runtime_lock):
 # --- P2-4: the control stack is deployed only where it is declared -------------
 
 class _StackAgent:
+    """Declares the dsh stack AND satisfies the flavor's interface needs."""
+
     CONTROL_STACK = "dsh"
+
+    @staticmethod
+    def cli_bin_dir():
+        return "/opt/dsh"
+
+    def add_patch_file(self, path):
+        self.patch = path
 
 
 class _NoStackAgent:

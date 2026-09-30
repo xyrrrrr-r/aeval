@@ -1,4 +1,5 @@
 import { attributionHeaders, LlmAdapter, LlmError, normalizeApiKey, ReasoningEffortId, ToolCallId } from '@deepseek-ai/dsh-llm';
+import { ResponsesAdapter, buildResponsesBody } from './upstream_responses.js';
 // One SSE data line carries one completion chunk; a line growing past the
 // broker's wire bound can never yield a legal chunk, so refuse it early.
 const MAX_SSE_LINE_BYTES = 8 * 1024 * 1024;
@@ -374,7 +375,11 @@ async function* readChatCompletionsSse(body, signal) {
         reader.releaseLock();
     }
 }
-/** Build the production chat-completions upstream adapter for one provider route. */
+/** Build the exact request body a dispatch over `protocol` would send. */
+export function buildUpstreamRequestBody(protocol, model, options) {
+    return protocol === 'responses' ? buildResponsesBody(model, options) : buildChatCompletionsBody(model, options);
+}
+/** Build the production upstream adapter for one provider route. */
 export function createUpstreamAdapter(options) {
     if (typeof options.provider !== 'string' || options.provider.trim() === '' || /\s/u.test(options.provider))
         invalid('provider must be a non-empty identifier without whitespace');
@@ -384,6 +389,12 @@ export function createUpstreamAdapter(options) {
         invalid('apiKeyEnv must be an environment variable name');
     if (typeof options.baseUrl !== 'string')
         invalid('baseUrl must be a string');
+    // The protocol defaults to chat_completions: a spec written before the
+    // responses mode existed must keep producing the same adapter, URL, and
+    // bytes it always did (zero drift for sealed evidence).
+    const protocol = options.protocol ?? 'chat_completions';
+    if (protocol !== 'chat_completions' && protocol !== 'responses')
+        invalid("protocol must be 'chat_completions' or 'responses'");
     if (options.timeoutMs !== undefined && (!Number.isSafeInteger(options.timeoutMs) || options.timeoutMs < 1 || options.timeoutMs > TIMER_RANGE_MS))
         invalid('timeoutMs must be a positive safe integer within timer range');
     if (options.headers !== undefined && (typeof options.headers !== 'object' || options.headers === null || Array.isArray(options.headers)
@@ -405,5 +416,8 @@ export function createUpstreamAdapter(options) {
     }
     const baseUrl = httpBase(options.baseUrl);
     const key = readUpstreamKey(options.apiKeyEnv);
+    if (protocol === 'responses') {
+        return new ResponsesAdapter(options.model, `${baseUrl}/responses`, options.headers ?? {}, key, options.timeoutMs, efforts);
+    }
     return new ChatCompletionsAdapter(options.model, `${baseUrl}/chat/completions`, options.headers ?? {}, key, options.timeoutMs, efforts);
 }

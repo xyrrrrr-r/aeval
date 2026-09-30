@@ -20,6 +20,9 @@ import shutil
 import pytest
 
 from aeval.contracts import ControlDistLock, RunBinding, TrialPaths
+# importing the dsh flavor registers it (the adapter package IS the
+# registration) — the dsh-dispatch tests below need it in the registry
+import aeval.agents.dsh.control_flavor  # noqa: F401
 from aeval.control.bootstrap import (
     FACADE_SANDBOX_ROOT,
     BootstrapError,
@@ -191,9 +194,36 @@ async def test_deploy_generic_facade_uploads_starts_and_health_gates(tmp_path):
     assert "AEVAL_GATEWAY_URL=http://10.0.0.1:5000" in start
     assert "AEVAL_TRIAL_TOKEN_FILE=/run/aeval/trial-token" in start
     assert "AEVAL_FACADE_PORT=8787" in start
+    # the protocol surface defaults to chat only: an existing deployment's
+    # facade behaves exactly as before until a routing declares more
+    assert "AEVAL_FACADE_PROTOCOLS=chat_completions" in start
     assert ">/tmp/aeval-facade.log 2>&1 < /dev/null" in start
     # the gate waited for the second probe
     assert env.probes == 2
+
+
+async def test_the_declared_wire_selects_the_served_protocols(tmp_path):
+    dist = _built_dist(tmp_path)
+    env = _FakeExecEnvironment()
+    await deploy_generic_facade(
+        environment=env, facade_dist=dist,
+        gateway_url="http://10.0.0.1:5000", token_file="/run/aeval/trial-token",
+        protocols=["responses"],
+    )
+    start = next(cmd for cmd in env.commands if "facade_main.js" in cmd)
+    assert "AEVAL_FACADE_PROTOCOLS=responses" in start
+
+
+async def test_an_unknown_facade_protocol_is_refused_before_any_upload(tmp_path):
+    dist = _built_dist(tmp_path)
+    env = _FakeExecEnvironment()
+    with pytest.raises(BootstrapError, match="facade protocol"):
+        await deploy_generic_facade(
+            environment=env, facade_dist=dist,
+            gateway_url="http://10.0.0.1:5000", token_file="/run/aeval/trial-token",
+            protocols=["gopher"],
+        )
+    assert env.uploads == []
 
 
 async def test_deploy_generic_facade_refuses_an_unhealthy_facade(tmp_path):
@@ -240,6 +270,33 @@ async def test_deploy_generic_facade_needs_upload_and_exec(tmp_path):
 
 class _FacadeAgent:
     CONTROL_STACK = "deepagent-facade"
+    # Which wire the agent speaks (AGENT-ABSTRACTION-2 §4.5): the deployment
+    # derives the facade's served endpoints from exactly this declaration.
+    MODEL_ROUTING = {
+        "agent_protocol": "openai_responses",
+        "env": {"base_url": "OPENAI_BASE_URL", "api_key": "OPENAI_API_KEY"},
+    }
+
+
+class _ChatFacadeAgent:
+    CONTROL_STACK = "deepagent-facade"
+    MODEL_ROUTING = {
+        "agent_protocol": "openai_chat",
+        "env": {"base_url": "ANTHROPIC_BASE_URL", "api_key": "ANTHROPIC_API_KEY"},
+    }
+
+
+class _UnroutedFacadeAgent:
+    """Declares the facade stack but not which wire it speaks — refused."""
+
+    CONTROL_STACK = "deepagent-facade"
+
+
+class _NativeFacadeAgent:
+    """gateway-native routing with a facade stack — serves nothing, refused."""
+
+    CONTROL_STACK = "deepagent-facade"
+    MODEL_ROUTING = {"agent_protocol": "gateway_native"}
 
 
 class _DshAgent:
@@ -329,15 +386,55 @@ async def test_the_facade_flavor_deploys_the_generic_tree(
     assert calls[0]["facade_dist"] == dist
     assert calls[0]["gateway_url"] == "http://127.0.0.1:4321"
     assert calls[0]["token_file"] == "/run/aeval/trial-token"
+    # the served endpoints follow the declared wire, never a default
+    assert calls[0]["protocols"] == ["responses"]
     # the token still reaches the sandbox through the agent-neutral path —
     # and no facade tarball is uploaded by the recorded fake
     assert [target for _, target in env.uploads] == ["/run/aeval/trial-token"]
 
 
+async def test_the_chat_wire_routes_the_facade_to_the_chat_endpoint(
+    demo_suite, runtime_lock, tmp_path, monkeypatch
+):
+    import aeval.control.bootstrap as module
+
+    calls: list[dict] = []
+
+    async def _record(**kwargs):
+        calls.append(kwargs)
+        return "http://127.0.0.1:8787"
+
+    monkeypatch.setattr(module, "deploy_generic_facade", _record)
+    await _deploy_declared_stack(
+        environment=_FakeExecEnvironment(),
+        context=_context(demo_suite, runtime_lock, tmp_path),
+        agent=_ChatFacadeAgent(), paths=_paths(), config=_config(),
+        control_dist=None, control_ca=None, facade_dist=_built_dist(tmp_path), trial_id="t",
+    )
+    assert calls[0]["protocols"] == ["chat_completions"]
+
+
+async def test_a_facade_stack_without_a_wire_declaration_is_refused(
+    demo_suite, runtime_lock, tmp_path
+):
+    """The facade would serve endpoints the agent never calls — deploy nothing."""
+    for agent in (_UnroutedFacadeAgent, _NativeFacadeAgent):
+        with pytest.raises(BootstrapError, match="model routing"):
+            await _deploy_declared_stack(
+                environment=_FakeExecEnvironment(),
+                context=_context(demo_suite, runtime_lock, tmp_path),
+                agent=agent(), paths=_paths(), config=_config(),
+                control_dist=None, control_ca=None, facade_dist=None, trial_id="t",
+            )
+
+
 async def test_a_declared_but_unknown_stack_is_refused(
     demo_suite, runtime_lock, tmp_path
 ):
-    with pytest.raises(BootstrapError, match="cannot deploy"):
+    """Fail-closed twice over: the config cannot be shaped for an unregistered
+    stack (compose time) and the stack cannot be deployed (deploy time) — the
+    earlier refusal fires first, naming the stack."""
+    with pytest.raises(BootstrapError, match="team-framework-v9"):
         await bootstrap_trial_control(
             environment=_FakeExecEnvironment(),
             context=_context(demo_suite, runtime_lock, tmp_path), trial_id="t",
@@ -349,11 +446,21 @@ async def test_a_declared_but_unknown_stack_is_refused(
 async def test_the_dsh_flavor_still_needs_its_control_dist(
     demo_suite, runtime_lock, tmp_path
 ):
+    class _DshWithPrefix(_DshAgent):
+        # the flavor's interface requirements, satisfied so the refusal under
+        # test is the missing controlDist, not a missing hook
+        @staticmethod
+        def cli_bin_dir():
+            return "/opt/dsh"
+
+        def add_patch_file(self, path):
+            self.patch = path
+
     with pytest.raises(BootstrapError, match="no controlDist"):
         await _deploy_declared_stack(
             environment=_FakeExecEnvironment(),
             context=_context(demo_suite, runtime_lock, tmp_path),
-            agent=_DshAgent(), paths=_paths(), config=_config(),
+            agent=_DshWithPrefix(), paths=_paths(), config=_config(),
             control_dist=None, control_ca=None, facade_dist=None, trial_id="t",
         )
 

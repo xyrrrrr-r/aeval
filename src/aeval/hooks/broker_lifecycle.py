@@ -30,7 +30,10 @@ import os
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Mapping
+from typing import TYPE_CHECKING, Any, Mapping
+
+if TYPE_CHECKING:  # pragma: no cover - typing only
+    from aeval.control.flavors import ControlFlavor
 
 from aeval.control.bootstrap import compose_control_config
 from aeval.control.broker import (
@@ -160,6 +163,14 @@ def parse_broker_spec(path_env: str | None = None) -> BrokerSpec | None:
             "broker spec upstream.apiKeyEnv is required (the env var NAME — "
             "the key itself never enters config files)"
         )
+    # The upstream wire protocol selects which provider endpoint the broker
+    # drives (chat_completions — the default, byte-identical to a spec written
+    # before this key existed — or the OpenAI Responses API). Refuse anything
+    # else here rather than at broker startup inside a running trial.
+    if "protocol" in upstream and upstream["protocol"] not in ("chat_completions", "responses"):
+        raise BrokerSpecError(
+            "broker spec upstream.protocol must be 'chat_completions' or 'responses'"
+        )
     max_output = data.get("maxOutputTokens")
     if not isinstance(max_output, int) or isinstance(max_output, bool) or max_output < 1:
         raise BrokerSpecError("broker spec maxOutputTokens must be a positive integer")
@@ -236,6 +247,51 @@ def trial_control_paths(
     )
 
 
+def _config_flavor_for(agent: Any, lock: Any) -> ControlFlavor | None:
+    """The control flavor that shapes this trial's config (G7).
+
+    The live agent's declared stack when there is one; otherwise the adapter
+    the runtime lock recorded, resolved through its declaration (the same
+    discipline the evidence gate uses for the record owner) — never a
+    hardcoded first agent. ``None`` means the trial's agent declares no
+    control stack, so the config is the neutral identity alone. A DECLARED
+    stack nothing registered is an error: the config would be shaped for a
+    flavor that cannot exist.
+    """
+    from aeval.agents.contract import adapter_classes_recorded_in, control_stack_of
+    from aeval.control.flavors import control_flavor
+
+    if agent is not None:
+        stack = control_stack_of(type(agent))
+        if stack is None:
+            return None
+        flavor = control_flavor(stack)
+        if flavor is None:
+            raise BrokerSpecError(
+                f"agent declares control stack {stack!r} which nothing "
+                "registered — the control config cannot be shaped for it"
+            )
+        return flavor
+    classes, _unresolved = adapter_classes_recorded_in(lock)
+    if not classes:
+        return None
+    if len(classes) > 1:
+        raise BrokerSpecError(
+            "the runtime lock records several agents and no live handle is "
+            "available — the control config cannot be shaped for one of them"
+        )
+    stack = control_stack_of(classes[0])
+    if stack is None:
+        return None
+    flavor = control_flavor(stack)
+    if flavor is None:
+        raise BrokerSpecError(
+            f"the recorded agent declares control stack {stack!r} which "
+            "nothing registered — the control config cannot be shaped for it"
+        )
+    return flavor
+
+
 def start_trial_broker(
     spec: BrokerSpec, context: EvaluationContext, state: TrialState
 ) -> tuple[ModelBrokerProcess, dict[str, Any]]:
@@ -248,29 +304,37 @@ def start_trial_broker(
     """
     if context.run_binding is None:
         raise BrokerSpecError("run has no trusted binding — no broker identity to pin")
+    agent = (
+        context.environments.agent(state.trial_id)
+        if context.environments is not None
+        else None
+    )
     paths = trial_control_paths(
         state, context.run_dir,
         getattr(getattr(context.suite, "overlay", None), "driver", None),
-        (
-            context.environments.agent(state.trial_id)
-            if context.environments is not None
-            else None
-        ),
+        agent,
+    )
+    flavor = _config_flavor_for(agent, getattr(context, "runtime_lock", None))
+    flavor_fields = (
+        flavor.config_fields(
+            paths=paths,
+            # the served auxiliary policy must equal what /info reports, or
+            # the sandbox adapter fails the lease identity check (D47)
+            auxiliary_policy=dict(spec.auxiliary_policy) if spec.auxiliary_policy else None,
+        )
+        if flavor is not None and flavor.config_fields is not None else None
     )
     config = compose_control_config(
         run_binding=context.run_binding.model_dump(),
         trial_id=state.trial_id,
         session_id=state.session_id,
-        paths=paths,
         gateway_url=spec.gateway_url,
         provider=str(spec.identity.get("provider", "")),
         model=str(spec.identity.get("model", "")),
         # the lease identity must match the control config field by field
         reasoning_effort=spec.identity.get("reasoningEffort"),
         limits=dict(spec.limits),
-        # the served auxiliary policy must equal what /info reports, or the
-        # sandbox adapter fails the lease identity check (D47)
-        auxiliary_policy=dict(spec.auxiliary_policy) if spec.auxiliary_policy else None,
+        flavor_fields=flavor_fields,
     )
     digest = control_config_digest(config)
 

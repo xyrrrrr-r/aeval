@@ -90,7 +90,7 @@ def test_a_session_record_flavor_mismatch_is_refused_at_composition(suite):
     driven = compose_harbor_job(
         load_suite(deepagent_hello), agent="deepagent", agents_root=AGENTS
     )
-    assert driven.agents[0].import_path.endswith("DeepgentAgent")
+    assert driven.agents[0].import_path.endswith("DcodeAgent")
 
 
 def test_an_undeclared_agent_is_refused_with_the_fix(suite):

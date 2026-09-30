@@ -464,7 +464,9 @@ def agents_cmd(
                 suite_path(Path(agents_dir).resolve(), f"{agent_id}.yaml"), agents_root=agents_dir
             )
             declaration = resolved.declaration
-            adapter = load_adapter_class(declaration.import_path)
+            # the class the runtime resolves: itself when pinned, the
+            # materialized per-agent class when declaration-driven (G11)
+            adapter = declaration.adapter_class()
             mismatches = declaration_class_mismatches(declaration, adapter)
             if mismatches:
                 raise SuiteError(

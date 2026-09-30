@@ -1,4 +1,5 @@
 import type { GenerateOptions } from '@deepseek-ai/dsh-llm';
+import { type UpstreamProtocol } from './upstream.js';
 /**
  * Trusted input-token metering for hard token budgets.
  *
@@ -13,6 +14,12 @@ import type { GenerateOptions } from '@deepseek-ai/dsh-llm';
 export interface ProviderCountBoundOptions {
     readonly baseUrl: string;
     readonly apiKeyEnv: string;
+    /**
+     * Wire protocol of the dispatch being counted, so the bound counts the
+     * exact body the adapter would send (the two protocols serialize
+     * differently); defaults to chat_completions.
+     */
+    readonly protocol?: UpstreamProtocol;
     /** Absolute URL of the counting endpoint; defaults to `${baseUrl}/tokens/count`. */
     readonly endpoint?: string;
     /** Tokens added to the counted value to absorb framing drift; defaults to 8. */

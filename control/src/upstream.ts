@@ -1,12 +1,27 @@
 import { attributionHeaders, LlmAdapter, LlmError, normalizeApiKey, ReasoningEffortId, ToolCallId } from '@deepseek-ai/dsh-llm';
 import type { ContentBlock, FinishReason, GenerateOptions, LlmProviderInfo, LlmResolvedModelInfo, RequestMessage, StreamChunk, TokenUsage } from '@deepseek-ai/dsh-llm';
+import { ResponsesAdapter, buildResponsesBody } from './upstream_responses.js';
 
 /**
  * Production upstream for the eval broker: an OpenAI-compatible
  * chat-completions {@link LlmAdapter} that the trusted host starts through
  * `startHostBroker`. Credentials arrive by environment-variable name only; the
  * key value never enters configuration, log lines, or error messages.
+ *
+ * The wire the provider endpoint speaks is the `protocol` option
+ * (AGENT-ABSTRACTION-2-PLAN.md §4.4): `chat_completions` — the default, so an
+ * existing spec without the key keeps byte-identical behavior — or
+ * `responses` (OpenAI Responses API, e.g. DeepSeek's `https://api.deepseek.com`
+ * base). Both adapters serve the same neutral
+ * {@link GenerateOptions} → {@link StreamChunk} contract, so everything
+ * downstream of the adapter (metering, budgets, token bounds) is
+ * protocol-agnostic.
  */
+
+/**
+ * The upstream wire protocols a provider route can speak.
+ */
+export type UpstreamProtocol = 'chat_completions' | 'responses';
 
 export interface UpstreamAdapterOptions {
   readonly provider: string;
@@ -14,13 +29,18 @@ export interface UpstreamAdapterOptions {
   /** Environment variable holding the API key; only the name is configured. */
   readonly apiKeyEnv: string;
   readonly model: string;
+  /**
+   * Wire protocol of the provider endpoint; defaults to `chat_completions`.
+   * The endpoint path is derived from it (`/chat/completions` vs `/responses`).
+   */
+  readonly protocol?: UpstreamProtocol;
   readonly timeoutMs?: number;
   /** Extra request headers; the adapter's own auth, content-type, and attribution always win. */
   readonly headers?: Record<string, string>;
   /**
-   * Reasoning efforts the gateway declares. The chat-completions wire has no
-   * capability discovery, so the owner states them; a lease pinning an effort
-   * that is not declared here refuses to start.
+   * Reasoning efforts the gateway declares. Neither wire has capability
+   * discovery, so the owner states them; a lease pinning an effort that is
+   * not declared here refuses to start.
    */
   readonly reasoningEfforts?: readonly string[];
 }
@@ -400,12 +420,26 @@ async function* readChatCompletionsSse(body: ReadableStream<Uint8Array>, signal:
   }
 }
 
-/** Build the production chat-completions upstream adapter for one provider route. */
+/** Build the exact request body a dispatch over `protocol` would send. */
+export function buildUpstreamRequestBody(
+  protocol: UpstreamProtocol,
+  model: string,
+  options: Readonly<GenerateOptions>,
+): ChatCompletionsBody | ReturnType<typeof buildResponsesBody> {
+  return protocol === 'responses' ? buildResponsesBody(model, options) : buildChatCompletionsBody(model, options);
+}
+
+/** Build the production upstream adapter for one provider route. */
 export function createUpstreamAdapter(options: UpstreamAdapterOptions): LlmAdapter {
   if (typeof options.provider !== 'string' || options.provider.trim() === '' || /\s/u.test(options.provider)) invalid('provider must be a non-empty identifier without whitespace');
   if (typeof options.model !== 'string' || options.model.trim() === '' || /\s/u.test(options.model)) invalid('model must be a non-empty identifier without whitespace');
   if (typeof options.apiKeyEnv !== 'string' || !/^[A-Za-z_][A-Za-z0-9_]*$/u.test(options.apiKeyEnv)) invalid('apiKeyEnv must be an environment variable name');
   if (typeof options.baseUrl !== 'string') invalid('baseUrl must be a string');
+  // The protocol defaults to chat_completions: a spec written before the
+  // responses mode existed must keep producing the same adapter, URL, and
+  // bytes it always did (zero drift for sealed evidence).
+  const protocol: UpstreamProtocol = options.protocol ?? 'chat_completions';
+  if (protocol !== 'chat_completions' && protocol !== 'responses') invalid("protocol must be 'chat_completions' or 'responses'");
   if (options.timeoutMs !== undefined && (!Number.isSafeInteger(options.timeoutMs) || options.timeoutMs < 1 || options.timeoutMs > TIMER_RANGE_MS)) invalid('timeoutMs must be a positive safe integer within timer range');
   if (options.headers !== undefined && (typeof options.headers !== 'object' || options.headers === null || Array.isArray(options.headers)
     || Object.entries(options.headers).some(([name, value]) => typeof name !== 'string' || typeof value !== 'string' || /[\r\n]/u.test(name + value)))) invalid('headers must map header names to values');
@@ -422,5 +456,8 @@ export function createUpstreamAdapter(options: UpstreamAdapterOptions): LlmAdapt
   }
   const baseUrl = httpBase(options.baseUrl);
   const key = readUpstreamKey(options.apiKeyEnv);
+  if (protocol === 'responses') {
+    return new ResponsesAdapter(options.model, `${baseUrl}/responses`, options.headers ?? {}, key, options.timeoutMs, efforts);
+  }
   return new ChatCompletionsAdapter(options.model, `${baseUrl}/chat/completions`, options.headers ?? {}, key, options.timeoutMs, efforts);
 }

@@ -1,6 +1,6 @@
 import { attributionHeaders, LlmError } from '@deepseek-ai/dsh-llm';
 import type { GenerateOptions } from '@deepseek-ai/dsh-llm';
-import { buildChatCompletionsBody, readUpstreamKey } from './upstream.js';
+import { buildUpstreamRequestBody, readUpstreamKey, type UpstreamProtocol } from './upstream.js';
 
 /**
  * Trusted input-token metering for hard token budgets.
@@ -17,6 +17,12 @@ import { buildChatCompletionsBody, readUpstreamKey } from './upstream.js';
 export interface ProviderCountBoundOptions {
   readonly baseUrl: string;
   readonly apiKeyEnv: string;
+  /**
+   * Wire protocol of the dispatch being counted, so the bound counts the
+   * exact body the adapter would send (the two protocols serialize
+   * differently); defaults to chat_completions.
+   */
+  readonly protocol?: UpstreamProtocol;
   /** Absolute URL of the counting endpoint; defaults to `${baseUrl}/tokens/count`. */
   readonly endpoint?: string;
   /** Tokens added to the counted value to absorb framing drift; defaults to 8. */
@@ -94,6 +100,10 @@ async function boundedText(response: Response): Promise<string> {
 /** Build a provider-backed input-token bound for one upstream route. */
 export function createProviderCountBound(options: ProviderCountBoundOptions): ProviderInputTokenBound {
   if (typeof options.baseUrl !== 'string') invalid('baseUrl must be a string');
+  // Defaulted here, not at the type, so the runtime check below stays the one
+  // place an out-of-vocabulary protocol from a parsed config is refused.
+  const protocol: UpstreamProtocol = options.protocol ?? 'chat_completions';
+  if (protocol !== 'chat_completions' && protocol !== 'responses') invalid("protocol must be 'chat_completions' or 'responses'");
   const endpoint = countEndpoint(options);
   const margin = options.margin === undefined ? DEFAULT_MARGIN : options.margin;
   if (!Number.isSafeInteger(margin) || margin < 0) invalid('margin must be a non-negative safe integer');
@@ -111,7 +121,7 @@ export function createProviderCountBound(options: ProviderCountBoundOptions): Pr
     const signal = request.signal === undefined ? timeout : AbortSignal.any([request.signal, timeout]);
     // Count the exact wire body the dispatch adapter will send, so clamping
     // that changes the request is reflected in what gets counted.
-    const body = JSON.stringify(buildChatCompletionsBody(request.model, request));
+    const body = JSON.stringify(buildUpstreamRequestBody(protocol, request.model, request));
     let response: Response;
     try {
       response = await fetch(endpoint, { method: 'POST', headers, body, redirect: 'error', signal });

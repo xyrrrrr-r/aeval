@@ -34,11 +34,11 @@ from pathlib import Path
 from typing import Any
 
 from aeval.agents.contract import (
+    adapter_classes_recorded_in,
     describe_adapter,
     locate_session_record,
     session_record_output_of,
 )
-from aeval.agents.dsh.agent import DshAgent
 from aeval.contracts import (
     ArtifactRef,
     CollectOutcome,
@@ -85,12 +85,14 @@ FIXED_OUTPUT_PATHS: dict[str, str] = {
     "canonical_transcript": "canonical_transcript.json",
 }
 
-#: The session-record slot: exactly ONE of these belongs in every plan, chosen
-#: by the suite (``driver.session_record``). ``dsh_session`` is the DSH record
+#: The session-record slot entries of FIXED_OUTPUT_PATHS — the built-in slots
+#: whose paths the framework itself knows. ``dsh_session`` is the DSH record
 #: (zstd session file under the synced session root, byte-identical path to
-#: everything sealed before the slot generalised); ``agent_session_record`` is
-#: the adapter's own official session record at a generic path — the adapter
-#: documents what the bytes are.
+#: everything sealed before the slot generalised); ``agent_session_record``
+#: is the adapter's own official session record at a generic path. A DECLARED
+#: slot (any well-formed slug the adapter names) carries its path on the
+#: adapter instead — exactly ONE slot belongs in every plan, chosen by the
+#: suite (``driver.session_record``).
 SESSION_RECORD_OUTPUTS = ("dsh_session", "agent_session_record")
 
 SESSION_ROOT = "sessions"
@@ -105,6 +107,27 @@ def output_path_for(name: str) -> str:
     raise EvidenceIntegrityError(f"unknown collect output name: {name!r}")
 
 
+def slot_output_path(slot: str, adapter: Any) -> str:
+    """The fixed trial-dir path of a session-record slot, for this adapter.
+
+    A declared path on the adapter wins (it is the adapter's own record
+    location); the built-in table answers for the framework's two historical
+    slots; anything else is fail-closed — a slot whose path nobody knows
+    cannot be located, so the evidence cannot be verified.
+    """
+    from aeval.agents.contract import session_record_output_path_of
+
+    declared = session_record_output_path_of(adapter)
+    if declared is not None:
+        return declared
+    if slot in FIXED_OUTPUT_PATHS:
+        return FIXED_OUTPUT_PATHS[slot]
+    raise EvidenceIntegrityError(
+        f"session-record slot {slot!r} has no fixed path: the adapter "
+        "declares none and the framework has no built-in one"
+    )
+
+
 def build_required_collect_plan(suite: ResolvedSuite) -> list[str]:
     """Names of the collect outputs the evidence bundle must contain.
 
@@ -112,23 +135,31 @@ def build_required_collect_plan(suite: ResolvedSuite) -> list[str]:
     bound by the outer bundle attestation, and it must never be turned
     into a same-named placeholder artifact or a self-referential hash.
 
-    The session-record slot takes the suite's declared flavor
-    (``driver.session_record``); the default keeps the historical
-    ``dsh_session`` plan byte-identical.
+    The session-record slot takes the suite's declared slot
+    (``driver.session_record``) — a built-in name or the adapter's own
+    declared slot, paired exactly at composition; the default keeps the
+    historical ``dsh_session`` plan byte-identical.
     """
+    from aeval.agents.contract import session_record_slot_well_formed
+
     flavor = getattr(getattr(suite.overlay, "driver", None), "session_record", None)
     if flavor is None:
         flavor = "dsh_session"
-    if flavor not in SESSION_RECORD_OUTPUTS:
+    if not session_record_slot_well_formed(flavor):
         raise EvidenceIntegrityError(
             f"unknown session-record collect output: {flavor!r} "
-            f"(expected one of {list(SESSION_RECORD_OUTPUTS)})"
+            "(expected a lowercase slot slug, paired with the adapter's "
+            "declared SESSION_RECORD_OUTPUT)"
         )
     plan = [
         name
         for name in FIXED_OUTPUT_PATHS
         if name not in SESSION_RECORD_OUTPUTS or name == flavor
     ]
+    # a DECLARED slot is not in the fixed table at all — it still belongs in
+    # the plan, at the path its adapter carries
+    if flavor not in FIXED_OUTPUT_PATHS:
+        plan.append(flavor)
     plan.extend(f"observable:{o.name}" for o in suite.overlay.observables)
     return plan
 
@@ -333,15 +364,28 @@ def verify_evidence_bundle(
     artifacts: dict[str, ArtifactRef] = {a.path: a for a in manifest.artifacts}
     artifact_paths = {a.path for a in manifest.artifacts}
 
+    # Whose session-record layout this trial's evidence follows (P1-2b):
+    # resolved once, before the fixed-path discipline — a DECLARED slot's
+    # path travels on the adapter, so locating it needs the owner first.
+    record_owner = _record_owner(adapter, lock)
+
+    def expected_output_path(name: str) -> str:
+        if name.startswith("observable:") or (
+            name in FIXED_OUTPUT_PATHS and name not in SESSION_RECORD_OUTPUTS
+        ):
+            return output_path_for(name)
+        # the session-record slot: built-in path or the adapter's declared one
+        return slot_output_path(name, record_owner)
+
     # Fixed-path discipline: every planned output must exist at its
     # fixed path, and the manifest must not carry artifacts at paths
     # that are not part of the plan's fixed mapping.
     misplaced = []
     for name in plan:
-        expected = output_path_for(name)
+        expected = expected_output_path(name)
         if expected not in artifact_paths:
             misplaced.append(f"{name} missing at fixed path {expected}")
-    allowed_paths = {output_path_for(n) for n in plan}
+    allowed_paths = {expected_output_path(n) for n in plan}
     extra = sorted(artifact_paths - allowed_paths)
     if extra:
         misplaced.append(f"artifacts outside the fixed mapping: {extra}")
@@ -409,10 +453,11 @@ def verify_evidence_bundle(
     # Session ownership is ADAPTER-flavored (P1-2b): DSH persists one record per
     # session id under a project-nested tree; the ACP flavor has a single summary
     # whose own session id is the identity. The gate asks the adapter whose trial
-    # this is — the live handle, or the DSH adapter for offline/replay callers
-    # that only ever carry the historical bundle shape. Encoding the first
-    # agent's layout here is what made the second adapter expensive.
-    record_owner = adapter if adapter is not None else DshAgent
+    # this is — the live handle, or the adapter the runtime lock recorded,
+    # resolved through its declaration (computed once, above the fixed-path
+    # discipline). Hardcoding the first agent's class here is what made the
+    # second adapter expensive (G6); missing or ambiguous is fail-closed,
+    # never a silent default.
     slot = session_record_output_of(record_owner)
     record = locate_session_record(record_owner, session_root, descriptor.session_id)
     if record is None:
@@ -422,7 +467,7 @@ def verify_evidence_bundle(
             f"session {descriptor.session_id} — "
             f"{describe_adapter(record_owner)} located none"
         )
-    artifact = bundle.artifacts.get(FIXED_OUTPUT_PATHS[slot])
+    artifact = bundle.artifacts.get(slot_output_path(slot, record_owner))
     if artifact is None:
         raise EvidenceIntegrityError(
             f"{slot} artifact missing from the evidence bundle"
@@ -437,6 +482,41 @@ def verify_evidence_bundle(
     bundle.stop_reason = descriptor.stop_reason
 
     return bundle
+
+
+def _record_owner(adapter: Any, lock: Any) -> Any:
+    """Whose session-record layout this trial's evidence follows (P1-2b).
+
+    The live handle when there is one; otherwise the adapter the runtime lock
+    recorded, resolved through its declaration. Missing or ambiguous is
+    fail-closed: encoding the first agent's layout as the silent default is
+    exactly the mistake the adapter contract exists to prevent (G6) — a
+    session record located by the WRONG layout would let mismatched evidence
+    pass as complete.
+    """
+    if adapter is not None:
+        return adapter
+    classes, unresolved = adapter_classes_recorded_in(lock)
+    if len(classes) == 1:
+        return classes[0]
+    if len(classes) > 1:
+        raise EvidenceIntegrityError(
+            "the trial's agent adapter is ambiguous: the runtime lock records "
+            "several agents and no live handle is available — pass the trial's "
+            "adapter to the evidence gate to disambiguate the session-record "
+            "layout"
+        )
+    if unresolved:
+        raise EvidenceIntegrityError(
+            "the runtime lock records agent(s) whose declarations cannot be "
+            f"resolved ({', '.join(unresolved)}) and no live adapter handle is "
+            "available — the session-record layout cannot be determined"
+        )
+    raise EvidenceIntegrityError(
+        "the trial's agent adapter cannot be determined: no live handle and "
+        "the runtime lock records no agent — the session-record layout "
+        "cannot be guessed"
+    )
 
 
 def _live_adapter(context: Any, trial_id: str) -> Any:

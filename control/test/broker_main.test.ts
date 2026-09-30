@@ -11,6 +11,7 @@ import { attributionHeaders, LlmError, MessageId, ToolCallId } from '@deepseek-a
 import type { ContentBlock, GenerateOptions, RequestMessage, StreamChunk } from '@deepseek-ai/dsh-llm';
 import { createProviderCountBound } from '../src/token_bound.js';
 import { createUpstreamAdapter } from '../src/upstream.js';
+import { parseBrokerMainConfig } from '../src/broker_main.js';
 
 /**
  * P0-3 offline acceptance: the broker host entry (dist/broker_main.js), the
@@ -219,6 +220,19 @@ function simpleRequest(): GenerateOptions {
 }
 
 // ---------------------------------------------------------------- lifecycle
+
+test('the upstream protocol is optional, closed-vocabulary, and round-trips the config', () => {
+  const base = binConfig('http://127.0.0.1:9', '/unused');
+  const upstream = base.upstream as Record<string, unknown>;
+  // A pre-responses spec (no protocol key) parses unchanged: sealed evidence
+  // keeps recomputing, nothing drifts to a default the operator never wrote.
+  const legacy = parseBrokerMainConfig(base);
+  assert.equal(legacy.upstream.protocol, undefined);
+  const responses = parseBrokerMainConfig({ ...base, upstream: { ...upstream, protocol: 'responses' } });
+  assert.equal(responses.upstream.protocol, 'responses');
+  assert.throws(() => parseBrokerMainConfig({ ...base, upstream: { ...upstream, protocol: 'gopher' } }),
+    /upstream\.protocol/);
+});
 
 test('the bin serves its lease, reports readiness once, and cleans the token on SIGTERM', { timeout: 15000 }, async (t) => {
   const upstream = await fakeUpstream(t);

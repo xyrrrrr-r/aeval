@@ -6,7 +6,7 @@ extends: _base/agent.base.yaml
 
 id: deepagent
 version: "1"
-import_path: "aeval.agents.deepagent.agent:DeepgentAgent"
+import_path: "aeval.agents.deepagent.agent:DcodeAgent"
 
 provides:
   - acp_stdio
@@ -28,6 +28,22 @@ budget_enforcement: gateway_lease
 # before the run proceeds. The fixed port is a shared contract
 # (contracts.FACADE_BASE_URL) the adapter points the agent at.
 control_stack: deepagent-facade
+
+# Model traffic routing (AGENT-ABSTRACTION-2 §4.1): dcode's codex-profile
+# provider posts the OpenAI Responses protocol (POST /v1/responses), so the
+# facade serves the responses endpoint (AEVAL_FACADE_PROTOCOLS=responses) and
+# the broker's upstream speaks `responses` to the provider's responses base
+# (DeepSeek: https://api.deepseek.com, api-docs.deepseek.com "Using the
+# Responses API"). The env spellings are dcode facts (deepagents' ModelSpec
+# reads OPENAI_API_BASE for some providers; Harbor forwards OPENAI_BASE_URL):
+# the composition injects them with the facade's base URL and placeholder key.
+model_routing:
+  agent_protocol: openai_responses
+  env:
+    base_url: OPENAI_BASE_URL
+    alt_base_url: OPENAI_API_BASE
+    api_key: OPENAI_API_KEY
+
 transcript:
   source: native_session_via_bridge
   reader: harbor-acp-runner

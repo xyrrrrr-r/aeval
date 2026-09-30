@@ -28,9 +28,12 @@ rather than an implicit pass.
 
 from __future__ import annotations
 
+import re
+from dataclasses import dataclass, field
 from importlib import import_module
+from pathlib import PurePosixPath
 from typing import get_args
-from typing import Any, Protocol, runtime_checkable
+from typing import Any, Mapping, Protocol, runtime_checkable
 
 from pydantic import ValidationError
 
@@ -40,9 +43,15 @@ from aeval.suite_models import SuiteError
 __all__ = [
     "KNOWN_CAPABILITIES",
     "AgentAdapter",
+    "ModelRouting",
+    "model_routing_of",
+    "adapter_classes_recorded_in",
+    "control_stack_of",
     "capabilities_of",
     "declared_capabilities",
     "session_record_output_of",
+    "session_record_output_path_of",
+    "session_record_slot_well_formed",
     "terminal_descriptor_owner",
     "sandbox_session_record",
     "session_id_from_record",
@@ -95,9 +104,56 @@ LEGACY_SESSION_ID_ATTR = "dsh_session_id"
 SESSION_ID_MEMBERS = (SESSION_ID_ATTR, LEGACY_SESSION_ID_ATTR)
 
 SESSION_RECORD_OUTPUT_ATTR = "SESSION_RECORD_OUTPUT"
-#: The session-record collect outputs an adapter may declare. Must match the
-#: suite's ``driver.session_record`` — the pairing is refused at composition.
+#: The session-record slots the FRAMEWORK itself knows a fixed path for.
+#: Kept for bundles and plans sealed before slots became declarable: a new
+#: adapter may declare its own slot name (a well-formed slug) together with
+#: its fixed path, and the suite/adapter pairing is still exact-match — the
+#: built-ins are compatibility, not a gate.
 SESSION_RECORD_OUTPUTS = frozenset({"dsh_session", "agent_session_record"})
+
+#: Contract hook: the fixed path of THIS adapter's session record inside the
+#: trial dir (relative, no escapes). Optional for the built-in slots — their
+#: historical paths are the framework's compatibility table — but REQUIRED
+#: for a declared slot the framework has never known: without it nothing
+#: could tell the collector where the bytes belong.
+SESSION_RECORD_OUTPUT_PATH_ATTR = "SESSION_RECORD_OUTPUT_PATH"
+
+#: A slot name is a lowercase slug: it names a collect output that appears in
+#: plans, manifests and the evidence bundle's fixed-path table.
+_SESSION_RECORD_SLOT_PATTERN = re.compile(r"^[a-z][a-z0-9_]*$")
+
+
+def session_record_slot_well_formed(slot: str) -> bool:
+    """Whether ``slot`` is a well-formed session-record output name."""
+    return (
+        isinstance(slot, str)
+        and bool(_SESSION_RECORD_SLOT_PATTERN.match(slot))
+        and not slot.startswith("observable:")
+    )
+
+
+def session_record_output_path_of(adapter: type) -> str | None:
+    """The fixed trial-dir path of this adapter's session record, if declared.
+
+    Validated the moment it is read: a path that is absolute, empty or
+    escapes the trial dir is a configuration error, refused here rather than
+    discovered mid-collection.
+    """
+    value = getattr(adapter, SESSION_RECORD_OUTPUT_PATH_ATTR, None)
+    if value is None:
+        return None
+    if (
+        not isinstance(value, str)
+        or not value.strip()
+        or value.startswith("/")
+        or any(part == ".." for part in PurePosixPath(value).parts)
+    ):
+        raise SuiteError(
+            f"Agent adapter {describe_adapter(adapter)} declares "
+            f"{SESSION_RECORD_OUTPUT_PATH_ATTR}={value!r}; it must be a "
+            "relative path inside the trial directory that cannot escape it."
+        )
+    return value
 
 #: Contract hook: locate THIS adapter's official session record. Session-record
 #: shape is adapter-flavored (DSH nests one file per session id in a project
@@ -166,6 +222,140 @@ def control_stack_of(adapter: type) -> str | None:
     return declared.strip()
 
 
+def adapter_classes_recorded_in(lock: Any) -> tuple[list[type], list[str]]:
+    """Resolve a runtime lock's recorded agent ids to adapter classes.
+
+    Each recorded id is read through its declaration (``agents/<id>.yaml``),
+    the same resolution the plugin uses at run start — so anything that needs
+    "which adapter is this run about" without a live handle (the evidence
+    gate's record owner, the broker lifecycle's config flavor) asks the
+    recorded lock instead of assuming the first agent. An id whose
+    declaration or import cannot be resolved is reported in the second
+    element, not silently dropped — the caller decides whether that is fatal.
+
+    The class is the declaration's ``adapter_class()``: a pinned import_path
+    resolves to itself, while a declaration-driven base materializes into the
+    complete per-agent class (a declared agent has no code of its own to
+    import — the declaration IS its facts, G11).
+    """
+    from aeval.agents.declaration import default_agents_root, resolve_agent_declaration
+
+    try:
+        ids = sorted(lock.agent_locks())
+    except Exception:  # noqa: BLE001 - an unreadable lock is the caller's error
+        return [], []
+    classes: list[type] = []
+    unresolved: list[str] = []
+    for agent_id in ids:
+        path = default_agents_root() / f"{agent_id}.yaml"
+        try:
+            declaration = resolve_agent_declaration(path).declaration
+            resolved = declaration.adapter_class()
+        except Exception:  # noqa: BLE001 - resolution failure is reported, not raised here
+            unresolved.append(agent_id)
+            continue
+        if resolved not in classes:
+            classes.append(resolved)
+    return classes, unresolved
+
+
+#: Declaration: which client protocol the agent itself speaks for model
+#: traffic (AGENT-ABSTRACTION-2-PLAN §4.1). ``gateway_native`` means the
+#: control stack's transport already speaks the broker wire (DSH); the
+#: ``openai_*`` values mean the agent speaks an OpenAI protocol and the
+#: in-sandbox facade must serve the matching endpoint.
+MODEL_ROUTING_ATTR = "MODEL_ROUTING"
+MODEL_ROUTING_PROTOCOLS = frozenset({"gateway_native", "openai_chat", "openai_responses"})
+#: The env-spelling slots a declaration may name (which env var carries the
+#: base URL, an alternate spelling of it, and the API key).
+MODEL_ROUTING_ENV_SLOTS = ("base_url", "alt_base_url", "api_key")
+
+
+@dataclass(frozen=True)
+class ModelRouting:
+    """The agent-side model-routing declaration (class ``MODEL_ROUTING``).
+
+    ``env`` maps the logical slots to the env var NAMES the agent's runtime
+    actually reads (``{"base_url": "OPENAI_BASE_URL", …}``) — the spellings
+    are an agent fact, which is exactly why they are declared instead of
+    hardcoded in the core.
+    """
+
+    agent_protocol: str
+    env: Mapping[str, str] = field(default_factory=dict)
+
+
+def model_routing_of(adapter: type) -> ModelRouting | None:
+    """The model routing this adapter declares, validated (None when absent).
+
+    Fail closed on a malformed declaration: a protocol outside the vocabulary
+    or a misspelled env name would otherwise surface mid-trial as an agent
+    quietly talking past its own facade.
+    """
+    declared = getattr(adapter, MODEL_ROUTING_ATTR, None)
+    if declared is None:
+        return None
+    if not isinstance(declared, Mapping):
+        raise SuiteError(
+            f"{describe_adapter(adapter)}.{MODEL_ROUTING_ATTR} must be a mapping "
+            f"(agent_protocol + env) or absent, got {type(declared).__name__}"
+        )
+    protocol = declared.get("agent_protocol")
+    if protocol not in MODEL_ROUTING_PROTOCOLS:
+        raise SuiteError(
+            f"{describe_adapter(adapter)}.{MODEL_ROUTING_ATTR}.agent_protocol must be one "
+            f"of {sorted(MODEL_ROUTING_PROTOCOLS)}, got {protocol!r}"
+        )
+    raw_env = declared.get("env", {})
+    if raw_env is None:
+        raw_env = {}
+    if not isinstance(raw_env, Mapping):
+        raise SuiteError(
+            f"{describe_adapter(adapter)}.{MODEL_ROUTING_ATTR}.env must be a mapping of "
+            "slot -> env var name"
+        )
+    env: dict[str, str] = {}
+    for slot, name in raw_env.items():
+        if slot not in MODEL_ROUTING_ENV_SLOTS:
+            raise SuiteError(
+                f"{describe_adapter(adapter)}.{MODEL_ROUTING_ATTR}.env names unknown slot "
+                f"{slot!r}; known slots: {list(MODEL_ROUTING_ENV_SLOTS)}"
+            )
+        if not isinstance(name, str) or not name.isidentifier():
+            raise SuiteError(
+                f"{describe_adapter(adapter)}.{MODEL_ROUTING_ATTR}.env.{slot} must be an "
+                f"environment variable name, got {name!r}"
+            )
+        env[str(slot)] = name
+    if protocol != "gateway_native":
+        for required in ("base_url", "api_key"):
+            if required not in env:
+                raise SuiteError(
+                    f"{describe_adapter(adapter)}.{MODEL_ROUTING_ATTR}: protocol "
+                    f"{protocol!r} needs env.{required} (the env var the agent's "
+                    "runtime reads for the facade)"
+                )
+    return ModelRouting(agent_protocol=str(protocol), env=env)
+
+
+def facade_protocols_for(routing: ModelRouting) -> list[str]:
+    """The facade endpoints a routing needs (the ``AEVAL_FACADE_PROTOCOLS`` set).
+
+    Pure derivation, no defaults: the deployment serves exactly what the
+    selected agent speaks, and nothing else.
+    """
+    if routing.agent_protocol == "gateway_native":
+        return []
+    if routing.agent_protocol == "openai_chat":
+        return ["chat_completions"]
+    if routing.agent_protocol == "openai_responses":
+        return ["responses"]
+    raise SuiteError(
+        f"model routing declares unknown protocol {routing.agent_protocol!r}; "
+        f"known: {sorted(MODEL_ROUTING_PROTOCOLS)}"
+    )
+
+
 def capabilities_of(adapter: type) -> frozenset[str]:
     """Capabilities a resolved adapter class declares via ``PROVIDES``."""
     declared = getattr(adapter, PROVIDES_ATTR, None)
@@ -195,16 +385,29 @@ def session_record_output_of(adapter: type) -> str:
 
     Every adapter declares ``SESSION_RECORD_OUTPUT`` — the collect slot its
     ``read_session_record()`` bytes belong to — and the suite declares the
-    matching flavor (``driver.session_record``). A missing or unknown value
-    is a configuration error, refused here rather than mid-collection.
+    matching flavor (``driver.session_record``). The built-in slots
+    (``dsh_session``, ``agent_session_record``) keep their historical fixed
+    paths; any other well-formed slug is a DECLARED slot and must come with
+    ``SESSION_RECORD_OUTPUT_PATH`` so the collector knows where the bytes
+    belong. A malformed value is a configuration error, refused here rather
+    than mid-collection.
     """
     value = getattr(adapter, SESSION_RECORD_OUTPUT_ATTR, None)
-    if not isinstance(value, str) or value not in SESSION_RECORD_OUTPUTS:
+    if not isinstance(value, str) or not session_record_slot_well_formed(value):
         raise SuiteError(
             f"Agent adapter {describe_adapter(adapter)} declares no valid "
-            f"{SESSION_RECORD_OUTPUT_ATTR}. Declare one of "
-            f"{sorted(SESSION_RECORD_OUTPUTS)} — the collect output your "
-            "read_session_record() bytes belong to."
+            f"{SESSION_RECORD_OUTPUT_ATTR}. Declare a lowercase slug (built-"
+            f"ins: {sorted(SESSION_RECORD_OUTPUTS)}) — the collect output "
+            "your read_session_record() bytes belong to."
+        )
+    if value not in SESSION_RECORD_OUTPUTS and getattr(
+        adapter, SESSION_RECORD_OUTPUT_PATH_ATTR, None
+    ) is None:
+        raise SuiteError(
+            f"Agent adapter {describe_adapter(adapter)} declares session-"
+            f"record slot {value!r}, which the framework has no built-in path "
+            f"for — declare {SESSION_RECORD_OUTPUT_PATH_ATTR} with its fixed "
+            "path inside the trial directory."
         )
     return value
 
@@ -339,15 +542,36 @@ def adapter_declaration_gap(adapter: type) -> list[str]:
     Empty = complete. Beyond missing attributes this refuses an unkeepable
     promise: the gateway lease is enforced *inside* the sandbox by the control
     stack, so an adapter that claims ``gateway_lease`` without declaring a stack
-    would run unmetered while looking metered.
+    would run unmetered while looking metered. The same holds for the declared
+    model routing (AGENT-ABSTRACTION-2 §4.5): an ``openai_*`` protocol needs
+    the facade stack to translate it, and a facade stack with no ``openai_*``
+    protocol would serve an endpoint the agent never calls.
     """
     missing = [name for name in REQUIRED_DECLARATIONS if getattr(adapter, name, None) is None]
+    stack = control_stack_of(adapter)
     if not missing and getattr(adapter, "BUDGET_ENFORCEMENT", None) == "gateway_lease":
-        if control_stack_of(adapter) is None:
+        if stack is None:
             missing.append(
                 "CONTROL_STACK (BUDGET_ENFORCEMENT='gateway_lease' is enforced by the "
                 "in-sandbox control stack; without it the spend would never be measured)"
             )
+    routing = model_routing_of(adapter)
+    if (
+        routing is not None
+        and routing.agent_protocol != "gateway_native"
+        and stack != "deepagent-facade"
+    ):
+        missing.append(
+            f"CONTROL_STACK (MODEL_ROUTING.agent_protocol={routing.agent_protocol!r} "
+            "speaks an OpenAI wire; only the deepagent-facade stack translates it — "
+            "anything else would run the agent unmetered)"
+        )
+    if stack == "deepagent-facade" and (routing is None or routing.agent_protocol == "gateway_native"):
+        missing.append(
+            "MODEL_ROUTING (the deepagent-facade stack translates an openai_* "
+            "protocol; without that declaration the facade would serve "
+            "nothing the agent speaks)"
+        )
     return missing
 
 

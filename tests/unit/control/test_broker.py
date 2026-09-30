@@ -93,6 +93,49 @@ def test_write_broker_config_round_trips(tmp_path):
     assert mode == 0o600
 
 
+def test_write_broker_config_carries_the_upstream_protocol(tmp_path):
+    """The responses mode reaches the bin's config verbatim; junk is refused.
+
+    Absent protocol stays absent — a spec written before the key existed must
+    produce byte-identical config (sealed evidence keeps recomputing).
+    """
+    path = write_broker_config(
+        tmp_path / "broker-responses.json",
+        run=RUN,
+        trial_id="trial-1",
+        session_id="session-1",
+        config_digest="a" * 64,
+        identity={"provider": "p", "model": "m"},
+        limits={"maxSteps": 5},
+        max_output_tokens=64,
+        listen_host="127.0.0.1",
+        token_out=tmp_path / "token",
+        upstream={
+            "provider": "p",
+            "baseUrl": "https://api.deepseek.com",
+            "apiKeyEnv": "K",
+            "model": "m",
+            "protocol": "responses",
+        },
+    )
+    data = json.loads(path.read_text(encoding="utf-8"))
+    assert data["upstream"]["protocol"] == "responses"
+    with pytest.raises(BrokerConfigError):
+        write_broker_config(
+            tmp_path / "broker-junk.json",
+            run=RUN,
+            trial_id="trial-1",
+            session_id="session-1",
+            config_digest="a" * 64,
+            identity={"provider": "p", "model": "m"},
+            limits={"maxSteps": 5},
+            max_output_tokens=64,
+            listen_host="127.0.0.1",
+            token_out=tmp_path / "token",
+            upstream={"provider": "p", "baseUrl": "https://x", "apiKeyEnv": "K", "model": "m", "protocol": "gopher"},
+        )
+
+
 @pytest.mark.parametrize(
     "kwargs",
     [

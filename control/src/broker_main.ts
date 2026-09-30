@@ -9,7 +9,7 @@ import type { AuxiliaryDecision, AuxiliaryPurpose, LeaseIdentity, LeaseLimits } 
 import { cleanupJobToken, isLoopbackHost, startHostBroker, writeJobToken } from './host_broker.js';
 import type { HostBroker } from './host_broker.js';
 import { createProviderCountBound } from './token_bound.js';
-import { createUpstreamAdapter } from './upstream.js';
+import { createUpstreamAdapter, type UpstreamProtocol } from './upstream.js';
 
 /**
  * Broker host entry for aeval: a trusted-owner subprocess that starts the
@@ -41,6 +41,12 @@ export interface BrokerMainConfig {
     readonly baseUrl: string;
     readonly apiKeyEnv: string;
     readonly model: string;
+    /**
+     * Wire protocol of the provider endpoint; absent means chat_completions
+     * (a pre-responses spec keeps its exact behavior, sealed evidence stays
+     * recomputable). 'responses' selects the OpenAI Responses API wire.
+     */
+    readonly protocol?: UpstreamProtocol;
     readonly timeoutMs?: number;
     readonly reasoningEfforts?: readonly string[];
   };
@@ -147,13 +153,21 @@ export function parseBrokerMainConfig(raw: unknown): BrokerMainConfig {
     ...(limitsRaw['maxSteps'] !== undefined ? { maxSteps: positiveInt(limitsRaw['maxSteps'], 'limits.maxSteps') } : {}),
     ...(limitsRaw['maxTokens'] !== undefined ? { maxTokens: positiveInt(limitsRaw['maxTokens'], 'limits.maxTokens') } : {}),
   });
-  const upstreamRaw = record(input['upstream'], 'upstream', ['provider', 'baseUrl', 'apiKeyEnv', 'model', 'timeoutMs', 'reasoningEfforts']);
+  const upstreamRaw = record(input['upstream'], 'upstream', ['provider', 'baseUrl', 'apiKeyEnv', 'model', 'protocol', 'timeoutMs', 'reasoningEfforts']);
+  // Optional and closed-vocabulary: absent = chat_completions, anything else
+  // is a config error, never a guess.
+  const protocol: UpstreamProtocol | undefined = upstreamRaw['protocol'] === undefined
+    ? undefined
+    : upstreamRaw['protocol'] === 'chat_completions' || upstreamRaw['protocol'] === 'responses'
+      ? (upstreamRaw['protocol'] as UpstreamProtocol)
+      : fail('upstream.protocol', "must be 'chat_completions' or 'responses'");
   const reasoningEfforts = upstreamRaw['reasoningEfforts'] === undefined ? undefined : effortList(upstreamRaw['reasoningEfforts'], 'upstream.reasoningEfforts');
   const upstream = Object.freeze({
     provider: validateIdentifier(upstreamRaw['provider'], 'upstream.provider'),
     baseUrl: nonEmptyString(upstreamRaw['baseUrl'], 'upstream.baseUrl'),
     apiKeyEnv: validateIdentifier(upstreamRaw['apiKeyEnv'], 'upstream.apiKeyEnv'),
     model: validateIdentifier(upstreamRaw['model'], 'upstream.model'),
+    ...(protocol !== undefined ? { protocol } : {}),
     ...(upstreamRaw['timeoutMs'] !== undefined ? { timeoutMs: positiveInt(upstreamRaw['timeoutMs'], 'upstream.timeoutMs') } : {}),
     ...(reasoningEfforts !== undefined ? { reasoningEfforts } : {}),
   });
@@ -256,6 +270,9 @@ export async function main(argv: readonly string[] = process.argv.slice(2)): Pro
     const meter = config.limits.maxTokens === undefined ? undefined : createProviderCountBound({
       baseUrl: config.upstream.baseUrl,
       apiKeyEnv: config.upstream.apiKeyEnv,
+      // The bound must count the exact dispatch body, so it speaks the same
+      // wire the upstream adapter speaks.
+      ...(config.upstream.protocol !== undefined ? { protocol: config.upstream.protocol } : {}),
       ...config.tokenCount,
     });
     controller = new AbortController();

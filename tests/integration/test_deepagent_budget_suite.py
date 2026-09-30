@@ -42,8 +42,8 @@ def suite():
 def _deepagent_specs():
     return [
         build_adapter_spec(
-            load_adapter_class("aeval.agents.deepagent.agent:DeepgentAgent"),
-            import_path="aeval.agents.deepagent.agent:DeepgentAgent",
+            load_adapter_class("aeval.agents.deepagent.agent:DcodeAgent"),
+            import_path="aeval.agents.deepagent.agent:DcodeAgent",
         )
     ]
 
@@ -132,7 +132,7 @@ def test_the_image_ships_node_for_the_facade():
 
 def test_the_capped_suite_composes_with_the_deepagent_declaration(suite):
     driven = compose_harbor_job(suite, agent="deepagent", agents_root=AGENTS)
-    assert driven.agents[0].import_path == "aeval.agents.deepagent.agent:DeepgentAgent"
+    assert driven.agents[0].import_path == "aeval.agents.deepagent.agent:DcodeAgent"
     assert driven.n_attempts == 5
     # the placeholder job keeps the suite loadable with no adapter installed
     placeholder = compose_harbor_job(suite)

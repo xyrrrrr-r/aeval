@@ -1,14 +1,20 @@
 """deepAgent adapter: the deepagents-code CLI driven over ACP stdio (P2-5a).
 
+This is the PINNED member of the OpenAI-protocol ACP family: the behavior
+base (:class:`aeval.agents.openai_acp.OpenAiAcpAgent`) carries everything
+true of any OpenAI-wire ACP CLI, and this subclass pins the dcode facts —
+identity, version pin, model-routing spellings, sandbox layout, the default
+registry entry. A sibling CLI needs none of this: a declaration naming the
+base is materialized into a complete adapter with zero code
+(AGENT-ABSTRACTION-2 G11, stage 4.1).
+
 Launch shape (source-backed facts in docs/TESTS/DEEPAGENTS-FACTS.md):
 
 - Harbor's generic ``AcpAgent`` builds an in-sandbox launcher from an inline
-  registry entry. This adapter's default entry selects the uvx distribution
-  ``deepagents-code==0.1.78 --acp`` — the product coding agent exposing
-  itself as an ACP server (deepagents ``libs/acp`` README, "dcode --acp".
-  The package ships both the ``deepagents-code`` and ``dcode`` console
-  scripts, so ``uvx deepagents-code==… --acp`` resolves without ``--from``).
-  Nothing of ours runs inside the sandbox.
+  registry entry. This adapter's default entry selects the pinned
+  ``dcode --acp`` console script from the task image — the product coding
+  agent exposing itself as an ACP server (deepagents ``libs/acp`` README,
+  "dcode --acp"). Nothing of ours runs inside the sandbox.
 - Harbor's in-sandbox runner records every ``session/update`` event
   (``acp-events.jsonl``) and a summary (``acp-summary.json``); its
   ``populate_context_post_run`` converts the events into an ATIF trajectory
@@ -23,9 +29,11 @@ Honest declarations (each one is a refusal to overclaim):
   cannot talk directly — the in-sandbox facade (P2-5b, declared here as
   ``CONTROL_STACK = "deepagent-facade"``) translates, and every model call is
   then metered by the broker lease. The claim is only honest because the
-  declaration and the deployment move together: ``facade_routing_env()`` below
-  points the agent at that facade, so the claim cannot be silently unfulfilled.
-- ``REQUIRED_OBSERVATIONS = ()``: dcode is Python (uvx); the Node observation
+  declaration and the deployment move together: ``MODEL_ROUTING`` below says
+  dcode speaks ``openai_responses``, the deployment serves exactly that
+  facade endpoint (``AEVAL_FACADE_PROTOCOLS``), and ``facade_routing_env()``
+  points the agent at it — so the claim cannot be silently unfulfilled.
+- ``REQUIRED_OBSERVATIONS = ()``: dcode is Python; the Node observation
   is DSH-specific.
 - no ``resume``: dcode persists sessions (``sessions.db``), but this adapter
   neither pins nor adopts a session, so the capability is not claimed.
@@ -36,25 +44,20 @@ Honest declarations (each one is a refusal to overclaim):
 
 from __future__ import annotations
 
-import json
-from collections.abc import Mapping
 from dataclasses import dataclass
-from pathlib import Path, PurePosixPath
+from pathlib import PurePosixPath
 from typing import Any
 
-from harbor.agents.installed.acp import AcpAgent
-from harbor.models.trajectories import Trajectory
-
-from aeval.contracts import (
-    FACADE_API_KEY_PLACEHOLDER,
-    FACADE_BASE_URL,
-    CanonicalTranscript,
-    CompletenessRecord,
-    FieldCompleteness,
-    StopReason,
-    TranscriptCapability,
+from aeval.agents.openai_acp import (
+    AcpTrialPaths,
+    OpenAiAcpAgent,
+    OpenAiAcpRunError,
+    _lease_model_name,
+    _SUMMARY_FILENAME,
+    _TRAJECTORY_FILENAME,
+    openai_facade_routing_env,
 )
-from aeval.suite_models import SuiteError
+from aeval.contracts import TranscriptCapability
 
 # Pinned product version. The registry entry below must name exactly this
 # version so every launch is reproducible (DEEPAGENTS-FACTS.md: version pins
@@ -79,63 +82,18 @@ _SESSION_ARTIFACT_DIR = "."
 # acp.py:377-378 mirrors this as the agent environment's log dir).
 _SANDBOX_LOGS_DIR = "/logs/agent"
 
-# Mirror of AcpAgent's artifacts (harbor acp.py:377-378, :1622). Defined here
-# so a Harbor rename fails loudly at read time instead of silently reading a
-# stale path.
-_SUMMARY_FILENAME = "acp-summary.json"
-_TRAJECTORY_FILENAME = "trajectory.json"
 
-# ACP stopReason (session/prompt response) → aeval stop reason. end_turn and
-# refusal are the agent finishing its turn — a refusal is still a completed
-# claim, not an infrastructure failure. max_tokens/max_steps are the agent
-# exhausting its own cap. Everything else — and a missing stop reason —
-# fails closed to infra_error, the same honesty rule as DSH's
-# derive_stop_reason (exit codes prove nothing about the session).
-_ACP_STOP_REASON_MAP: Mapping[str, StopReason] = {
-    "end_turn": "agent_claimed_done",
-    "refusal": "agent_claimed_done",
-    "max_tokens": "budget_exhausted",
-    "max_steps": "budget_exhausted",
-}
-
-
-class DeepgentRunError(RuntimeError):
+class DcodeRunError(OpenAiAcpRunError):
     """The deepAgent trial could not be read back fail-closed."""
 
 
 @dataclass(frozen=True)
-class DeepgentTrialPaths:
+class DcodeTrialPaths(AcpTrialPaths):
     """One trial's deepAgent logs: sandbox view and synced host view."""
-
-    environment_logs_dir: PurePosixPath
-    logs_dir: Path
 
     @property
     def sandbox_home(self) -> PurePosixPath:
         return PurePosixPath(_SANDBOX_HOME)
-
-    @property
-    def trajectory_path(self) -> Path:
-        return self.logs_dir / _TRAJECTORY_FILENAME
-
-    @property
-    def summary_path(self) -> Path:
-        return self.logs_dir / _SUMMARY_FILENAME
-
-
-def _lease_model_name(declared: str | None) -> str | None:
-    """The bare model name dcode must be told (``provider/name`` -> ``name``).
-
-    Harbor states a model as ``provider/name`` while an HTTP request carries the
-    bare name; the lease serves exactly one name and the facade refuses any
-    other, so the bare form is what has to reach the CLI.
-    """
-    if not isinstance(declared, str) or not declared.strip():
-        return None
-    name = declared.strip()
-    if "/" in name:
-        name = name.split("/", 1)[1].strip()
-    return name or None
 
 
 def default_deepagent_registry_entry(model: str | None = None) -> dict[str, Any]:
@@ -150,10 +108,11 @@ def default_deepagent_registry_entry(model: str | None = None) -> dict[str, Any]
     ``model`` is the lease's model name, appended as ``--model``. It cannot be
     baked into this entry (it is per-job) and it must not be omitted: dcode then
     falls back to its own codex-profile default, whose requests carry
-    responses-only arguments (``reasoning``, builtin tools), so langchain posts
-    to ``/v1/responses`` — which the generic facade does not serve — and the
-    lease would refuse that name anyway. example-lab: exactly how the first real run
-    of the generic facade flavor died (P2-5b).
+    responses-only arguments (``reasoning``, builtin tools) and may name a
+    model the lease does not serve — the facade would refuse that name anyway.
+    example-lab: exactly how the first real run of the generic facade flavor died
+    (P2-5b); the responses endpoint itself is now served per the declared
+    ``MODEL_ROUTING`` (AGENT-ABSTRACTION-2 §4.5).
     """
     return {
         "id": "deepagents-code",
@@ -177,55 +136,32 @@ def default_deepagent_registry_entry(model: str | None = None) -> dict[str, Any]
     }
 
 
-def facade_routing_env() -> dict[str, str]:
+def facade_routing_env(routing: Any = None) -> dict[str, str]:
     """The env that points dcode at the in-sandbox facade.
 
-    Part of this adapter's control-stack contract, not an operator errand: an
-    operator who forgot it would get an agent talking to a vendor directly —
-    metered in the manifest and unmetered in reality, which is exactly the
-    overclaim the declaration exists to prevent. An explicit ``model_env``
-    still wins (an unmetered smoke deliberately points elsewhere).
-
-    Both base spellings are set because deepagents' ModelSpec reads
-    ``OPENAI_API_BASE`` for some providers and Harbor's integration forwards
-    ``OPENAI_BASE_URL`` (DEEPAGENTS-FACTS.md §6).
+    The family-generic behavior lives on the base
+    (:func:`aeval.agents.openai_acp.openai_facade_routing_env`); this wrapper
+    keeps dcode's no-argument default (the declared ``DcodeAgent`` routing)
+    for the adapter's own call sites and tests. Part of the control-stack
+    contract, not an operator errand: an operator who forgot it would get an
+    agent talking to a vendor directly — metered in the manifest and unmetered
+    in reality. An explicit ``model_env`` still wins (an unmetered smoke
+    deliberately points elsewhere).
     """
-    return {
-        "OPENAI_BASE_URL": FACADE_BASE_URL,
-        "OPENAI_API_BASE": FACADE_BASE_URL,
-        "OPENAI_API_KEY": FACADE_API_KEY_PLACEHOLDER,
-    }
+    from aeval.agents.contract import model_routing_of
+
+    return openai_facade_routing_env(
+        model_routing_of(DcodeAgent) if routing is None else routing
+    )
 
 
-def _with_distribution_env(
-    entry: Mapping[str, Any], env: Mapping[str, str]
-) -> dict[str, Any]:
-    """Merge owner-supplied env (model routing) into the launcher env.
+class DcodeAgent(OpenAiAcpAgent):
+    """ACP-stdio adapter for the deepagents-code product agent (``dcode``).
 
-    Whichever distribution kind the entry declares carries the env; the
-    adapter must not care whether that is the local console script or a uvx
-    launch, only that the routing reaches the process.
+    The pinned member of the family: every fact below is a dcode fact,
+    mirrored in ``agents/deepagent.yaml`` and cross-checked against this class
+    at load, so the declaration and the runtime can never disagree.
     """
-    merged = json.loads(json.dumps(dict(entry)))
-    distribution = merged.get("distribution") or {}
-    kinds = [kind for kind in ("local", "binary", "uvx", "npx") if distribution.get(kind)]
-    if len(kinds) != 1:
-        raise SuiteError(
-            "the deepagent registry entry must declare exactly one ACP "
-            f"distribution kind, found {sorted(kinds)}"
-        )
-    kind = kinds[0]
-    target = dict(distribution[kind])
-    combined = dict(target.get("env") or {})
-    combined.update({str(key): str(value) for key, value in env.items()})
-    target["env"] = combined
-    distribution[kind] = target
-    merged["distribution"] = distribution
-    return merged
-
-
-class DeepgentAgent(AcpAgent):
-    """ACP-stdio adapter for the deepagents-code product agent (``dcode``)."""
 
     # Capabilities this adapter offers, matched against a suite's
     # driver.require before any trial starts (aeval.agents.contract).
@@ -239,11 +175,35 @@ class DeepgentAgent(AcpAgent):
     # observation regardless of this tuple.
     REQUIRED_OBSERVATIONS: tuple[str, ...] = ()
 
+    # A pinned adapter is NOT declaration-driven: every fact below lives in
+    # THIS class (and agents/deepagent.yaml mirrors it, cross-checked at
+    # load). Overriding the family base's marker keeps the runtime resolving
+    # this class itself instead of materializing a declaration-driven twin —
+    # which would drop the dcode registry entry the launch depends on.
+    DECLARATION_DRIVEN = False
+
     # The in-sandbox control stack this adapter needs (P2-5b): NOT the DSH
     # flavor (no plugin tree, no cordis patch — dcode is not DSH-managed), but
     # the generic facade deployment aeval knows how to upload, start and
     # health-gate. Without it the agent could not be metered at all.
     CONTROL_STACK = "deepagent-facade"
+
+    # Which wire dcode itself speaks for model traffic
+    # (AGENT-ABSTRACTION-2 §4.1): the codex-profile provider posts the OpenAI
+    # Responses protocol (``POST /v1/responses``; dcode model_config.py, and
+    # DEEPAGENTS-FACTS.md records the same for the default profile), so the
+    # facade must serve the responses endpoint and the broker's upstream
+    # speaks ``responses`` to the provider's responses base (DeepSeek:
+    # https://api.deepseek.com). The env spellings below are dcode facts; the
+    # composition injects them with the facade's base URL and placeholder key.
+    MODEL_ROUTING = {
+        "agent_protocol": "openai_responses",
+        "env": {
+            "base_url": "OPENAI_BASE_URL",
+            "alt_base_url": "OPENAI_API_BASE",
+            "api_key": "OPENAI_API_KEY",
+        },
+    }
 
     # Where the agent's own state lives inside the sandbox, and where its
     # session artifact would land in the bundle (P1-4: declared rather than
@@ -267,6 +227,10 @@ class DeepgentAgent(AcpAgent):
     # summary — not a DSH session file, so it takes the generic slot.
     SESSION_RECORD_OUTPUT = "agent_session_record"
 
+    # Read-back fails closed under this name (the family raises
+    # OpenAiAcpRunError; dcode's own name keeps the historical error type).
+    RUN_ERROR = DcodeRunError
+
     ADAPTER_ID = "deepagent"
     ADAPTER_VERSION = "1"
     ADAPTER_MODE = "acp_stdio"
@@ -284,38 +248,9 @@ class DeepgentAgent(AcpAgent):
 
     DEEPAGENTS_CODE_VERSION = _DEEPAGENTS_CODE_VERSION
 
-    def __init__(
-        self,
-        logs_dir: Path,
-        *args: Any,
-        registry_entry: Mapping[str, Any] | str | None = None,
-        model_env: Mapping[str, str] | None = None,
-        **kwargs: Any,
-    ) -> None:
-        entry = (
-            dict(registry_entry)
-            if registry_entry is not None
-            else default_deepagent_registry_entry(
-                # Harbor passes the job's model as ``model_name``
-                # (``provider/name``); the owner composes it into the agent
-                # entry so this adapter never has to guess what the lease
-                # serves. An explicit registry_entry still wins.
-                _lease_model_name(kwargs.get("model_name"))
-            )
-        )
-        # The facade routing is the declared control stack's other half; an
-        # explicit model_env overrides it field by field.
-        routing: dict[str, str] = facade_routing_env()
-        routing.update({str(k): str(v) for k, v in (model_env or {}).items()})
-        entry = _with_distribution_env(entry, routing)
-        self._transcript: CanonicalTranscript | None = None
-        self._summary: dict[str, Any] | None = None
-        # registry_entry is AcpAgent's first named parameter, BEFORE its
-        # *args: a positional logs_dir would land in it. Binding logs_dir by
-        # keyword keeps it flowing into BaseInstalledAgent's own slot.
-        super().__init__(
-            registry_entry=entry, logs_dir=logs_dir, *args, **kwargs
-        )
+    def default_registry_entry(self, model: str | None = None) -> dict[str, Any] | None:
+        """The pinned dcode entry (the base's hook — see G11)."""
+        return default_deepagent_registry_entry(model)
 
     @staticmethod
     def name() -> str:
@@ -324,151 +259,8 @@ class DeepgentAgent(AcpAgent):
     def version(self) -> str | None:
         return _DEEPAGENTS_CODE_VERSION
 
-    def paths(self) -> DeepgentTrialPaths:
-        return DeepgentTrialPaths(
+    def paths(self) -> DcodeTrialPaths:
+        return DcodeTrialPaths(
             environment_logs_dir=self.environment_logs_dir,
             logs_dir=self.logs_dir,
         )
-
-    @property
-    def agent_session_id(self) -> str | None:
-        """The ACP session id of the last run, from the runner's summary."""
-        summary = self._load_summary()
-        if not isinstance(summary, dict):
-            return None
-        session = summary.get("session")
-        if isinstance(session, dict):
-            value = session.get("sessionId")
-            if isinstance(value, str) and value:
-                return value
-        return None
-
-    @staticmethod
-    def session_id_from_record(record_bytes: bytes) -> str | None:
-        """The session id inscribed in the runner's summary, or None.
-
-        The ACP runtime mints its own session id; aeval's trial session id is
-        the control-wire identity and never appears in the record. So the record
-        is the only source of the identity the descriptor has to carry —
-        declared here instead of parsed in the framework (P1-2b: observed
-        identity belongs to the adapter that observes it).
-        """
-        try:
-            summary = json.loads(record_bytes.decode("utf-8"))
-        except (UnicodeDecodeError, ValueError):
-            return None
-        if not isinstance(summary, dict):
-            return None
-        session = summary.get("session")
-        if not isinstance(session, dict):
-            return None
-        session_id = session.get("sessionId")
-        return session_id if isinstance(session_id, str) and session_id else None
-
-    @classmethod
-    def locate_session_record(cls, record_root: Any, session_id: str) -> Path | None:
-        """``<record_root>/acp-summary.json`` when it records ``session_id``.
-
-        The ACP runner writes exactly one summary per run at the root of the
-        agent log directory — the same directory the descriptor is written to —
-        so ``SESSION_ARTIFACT_DIR`` is ``"."`` and the record is found here.
-        """
-        record = Path(record_root) / _SUMMARY_FILENAME
-        if not record.is_file():
-            return None
-        try:
-            recorded = cls.session_id_from_record(record.read_bytes())
-        except OSError:
-            return None
-        return record if recorded == session_id else None
-
-    def read_session_record(self) -> bytes:
-        """Contract member: Harbor's official session record for the last run.
-
-        The ACP runner's ``acp-summary.json`` (session id, stop reason, token
-        usage, instruction) is the official per-session record; the full event
-        stream it summarizes reaches the evidence bundle as the canonical
-        transcript (Harbor's ATIF conversion). Fails closed: a missing or
-        unreadable summary means the run or its log sync did not complete.
-        """
-        path = self.logs_dir / _SUMMARY_FILENAME
-        if not path.is_file():
-            raise DeepgentRunError(
-                f"official session record {path} is missing — the ACP run or "
-                "its log sync did not complete"
-            )
-        try:
-            return path.read_bytes()
-        except OSError as exc:
-            raise DeepgentRunError(
-                f"official session record {path} could not be read: {exc}"
-            ) from exc
-
-    def _load_summary(self) -> dict[str, Any] | None:
-        """Read the runner's summary once; a missing or broken file is None."""
-        if self._summary is not None:
-            return self._summary
-        path = self.logs_dir / _SUMMARY_FILENAME
-        if not path.is_file():
-            return None
-        try:
-            self._summary = json.loads(path.read_text(encoding="utf-8"))
-        except (OSError, ValueError):
-            return None
-        return self._summary
-
-    def _stop_reason(self, summary: Any) -> StopReason:
-        """Only a recorded ACP stop reason may report completion."""
-        if not isinstance(summary, dict):
-            return "infra_error"
-        response = summary.get("prompt_response")
-        if not isinstance(response, dict):
-            return "infra_error"
-        return _ACP_STOP_REASON_MAP.get(response.get("stopReason"), "infra_error")
-
-    def read_trial_session(self) -> CanonicalTranscript:
-        """Read Harbor's ATIF conversion of the recorded ACP session updates.
-
-        Fails closed: a missing or unparsable trajectory means the ACP run or
-        its log sync did not complete, and grading a truncated trajectory
-        would be silently wrong. Read once and cached, so grading and
-        reporting cannot disagree about the same trial.
-        """
-        if self._transcript is not None:
-            return self._transcript
-        trajectory_path = self.logs_dir / _TRAJECTORY_FILENAME
-        if not trajectory_path.is_file():
-            raise DeepgentRunError(
-                f"ACP trajectory missing: {trajectory_path} (the runner writes "
-                "it in populate_context_post_run; a missing file means the "
-                "run or its log sync did not complete)"
-            )
-        try:
-            atif = Trajectory.model_validate(
-                json.loads(trajectory_path.read_text(encoding="utf-8"))
-            )
-        except (OSError, ValueError) as exc:
-            raise DeepgentRunError(
-                f"cannot parse ACP trajectory {trajectory_path}: {exc}"
-            ) from exc
-        summary = self._load_summary()
-        self._transcript = CanonicalTranscript.build(
-            atif=atif,
-            stop_reason=self._stop_reason(summary),
-            evidence_uri=None,
-            completeness=CompletenessRecord(
-                fields=[
-                    FieldCompleteness(field="events", status="ok"),
-                    FieldCompleteness(
-                        field="token_usage",
-                        status="partial",
-                        reason=(
-                            "usage comes from the ACP summary when the server "
-                            "provides it; live coverage of dcode --acp is not "
-                            "yet verified (DEEPAGENTS-FACTS.md 未核实项)"
-                        ),
-                    ),
-                ]
-            ),
-        )
-        return self._transcript

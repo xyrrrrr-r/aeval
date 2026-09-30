@@ -120,6 +120,12 @@ def write_broker_config(
     for key in ("baseUrl",):
         if not isinstance(upstream.get(key), str) or not upstream[key]:
             raise BrokerConfigError(f"broker config upstream.{key}: required non-empty string")
+    # The upstream wire protocol is optional (absent = chat_completions, the
+    # pre-responses behavior) and closed-vocabulary on both sides of the wire:
+    # refuse here what parseBrokerMainConfig would refuse after startup.
+    if "protocol" in upstream and upstream["protocol"] not in ("chat_completions", "responses"):
+        raise BrokerConfigError(
+            "broker config upstream.protocol: must be 'chat_completions' or 'responses'")
 
     config: dict[str, Any] = {
         "run": dict(run),

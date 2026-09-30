@@ -118,8 +118,11 @@ def _produce_bytes(
     content: bytes,
     media_type: str,
     command: str,
+    *,
+    rel: str | None = None,
 ) -> tuple[CollectOutcome, ArtifactRef]:
-    rel = output_path_for(name)
+    if rel is None:
+        rel = output_path_for(name)
     started = _now()
     digest, size = atomic_write_bytes(trial_dir / rel, content)
     return (
@@ -157,26 +160,31 @@ def produce_mock_call_log(
 
 
 def produce_session_record(
-    trial_dir: Path, session_bytes: bytes, flavor: str = "dsh_session"
+    trial_dir: Path, session_bytes: bytes, flavor: str = "dsh_session",
+    *, path: str | None = None,
 ) -> tuple[CollectOutcome, ArtifactRef]:
     """The agent's official session record, in the slot the suite declared.
 
-    The slot is agent-flavored (``driver.session_record``): ``dsh_session`` for
-    DSH, ``agent_session_record`` for the generalized flavor, whose fixed path is
-    ``agent_session/record``. Writing the historical DSH slot for a non-DSH
-    adapter leaves the trial's required output missing even though the read
-    succeeded — example-lab caught exactly that: the ACP record was read host-side,
-    landed in the DSH path, and the trial was refused for "collect outcomes
-    missing for required outputs: ['agent_session_record']". The default keeps
-    the historical DSH plan byte-identical (name, path and command).
+    The slot is agent-flavored (``driver.session_record``): ``dsh_session``
+    for DSH, ``agent_session_record`` for the generalized flavor, or the
+    adapter's own DECLARED slot — whose fixed path travels with the adapter
+    (``SESSION_RECORD_OUTPUT_PATH``), because only it knows where its record
+    belongs. Writing the historical DSH slot for a non-DSH adapter leaves the
+    trial's required output missing even though the read succeeded — example-lab
+    caught exactly that: the ACP record was read host-side, landed in the DSH
+    path, and the trial was refused for "collect outcomes missing for
+    required outputs: ['agent_session_record']". The default keeps the
+    historical DSH plan byte-identical (name, path and command).
     """
     from aeval.agents.contract import SESSION_RECORD_OUTPUTS
 
-    if flavor not in SESSION_RECORD_OUTPUTS:
+    if flavor not in SESSION_RECORD_OUTPUTS and path is None:
         raise CollectionProducerError(
-            f"unknown session-record flavor {flavor!r} — expected one of "
-            f"{sorted(SESSION_RECORD_OUTPUTS)}"
+            f"session-record slot {flavor!r} has no fixed path — the adapter "
+            "must declare SESSION_RECORD_OUTPUT_PATH for a slot the framework "
+            "has no built-in path for"
         )
+    rel = path if path is not None else output_path_for(flavor)
     command = (
         "aeval: dsh_session download"
         if flavor == "dsh_session"
@@ -184,7 +192,7 @@ def produce_session_record(
     )
     return _produce_bytes(
         trial_dir, flavor, session_bytes, "application/octet-stream",
-        command=command,
+        command=command, rel=rel,
     )
 
 

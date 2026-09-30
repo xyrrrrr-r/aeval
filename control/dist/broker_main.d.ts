@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 import { type RunBinding } from './config.js';
 import type { AuxiliaryDecision, AuxiliaryPurpose, LeaseIdentity, LeaseLimits } from './gateway_lease.js';
+import { type UpstreamProtocol } from './upstream.js';
 export interface BrokerMainConfig {
     readonly run: RunBinding;
     readonly trialId: string;
@@ -26,6 +27,12 @@ export interface BrokerMainConfig {
         readonly baseUrl: string;
         readonly apiKeyEnv: string;
         readonly model: string;
+        /**
+         * Wire protocol of the provider endpoint; absent means chat_completions
+         * (a pre-responses spec keeps its exact behavior, sealed evidence stays
+         * recomputable). 'responses' selects the OpenAI Responses API wire.
+         */
+        readonly protocol?: UpstreamProtocol;
         readonly timeoutMs?: number;
         readonly reasoningEfforts?: readonly string[];
     };

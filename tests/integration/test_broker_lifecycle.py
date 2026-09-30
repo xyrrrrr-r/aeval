@@ -99,7 +99,22 @@ def test_parse_spec_happy_path(tmp_path, monkeypatch):
     assert spec.listen_port == 4711
     assert spec.gateway_url == "http://127.0.0.1:4711"
     assert spec.upstream["apiKeyEnv"] == KEY_ENV
+    # absent protocol means chat_completions on the bin side; the spec itself
+    # must not grow a default the operator never wrote
+    assert "protocol" not in spec.upstream
     assert spec.broker_js.name == "broker_main.js"
+
+
+def test_parse_spec_carries_the_upstream_protocol(tmp_path, monkeypatch):
+    """The responses arm's protocol reaches BrokerSpec verbatim (G1)."""
+    spec_path = _spec_json(tmp_path, port=4713)
+    data = json.loads(spec_path.read_text(encoding="utf-8"))
+    data["upstream"]["protocol"] = "responses"
+    spec_path.write_text(json.dumps(data), encoding="utf-8")
+    monkeypatch.setenv(BROKER_SPEC_ENV, str(spec_path))
+    monkeypatch.setenv(KEY_ENV, KEY)
+    spec = parse_broker_spec()
+    assert spec.upstream["protocol"] == "responses"
 
 
 @pytest.mark.parametrize(
@@ -112,6 +127,7 @@ def test_parse_spec_happy_path(tmp_path, monkeypatch):
         lambda d: d.pop("maxOutputTokens"),                  # no budget
         lambda d: d.update(maxOutputTokens=0),               # bad budget
         lambda d: d["upstream"].pop("apiKeyEnv"),            # no credential name
+        lambda d: d["upstream"].update(protocol="gopher"),   # unknown protocol
         lambda d: d.update(upstream=[]),                     # not an object
         lambda d: d.update(unknownKey=1),                    # unknown key
         lambda d: d.update(identity="x"),                    # identity not object
@@ -523,3 +539,45 @@ def test_agent_declared_paths_replace_the_dsh_convention(tmp_path):
 
     dsh = trial_control_paths(state, run_dir, agent=DshAgent)
     assert (dsh.dsh_home, dsh.session_root) == (SANDBOX_DSH_HOME, SANDBOX_SESSION_DIR)
+
+
+async def test_a_facade_flavor_agent_gets_the_neutral_config(
+    demo_suite, runtime_lock, tmp_path, monkeypatch
+):
+    """G7: the deepagent arm's control config carries none of the DSH plugin's
+    fields — the flavor's config half is declared by the flavor, and the
+    generic facade declares nothing beyond the neutral identity."""
+    from types import SimpleNamespace
+
+    monkeypatch.setenv(KEY_ENV, KEY)
+    ctx = await _context(demo_suite, runtime_lock, tmp_path)
+    state = _state(tmp_path)
+
+    class _FacadeAgent:
+        CONTROL_STACK = "deepagent-facade"
+        MODEL_ROUTING = {
+            "agent_protocol": "openai_responses",
+            "env": {"base_url": "OPENAI_BASE_URL", "api_key": "OPENAI_API_KEY"},
+        }
+
+    ctx.environments = SimpleNamespace(agent=lambda trial_id: _FacadeAgent())
+
+    import socket
+
+    with socket.socket() as s:
+        s.bind(("127.0.0.1", 0))
+        port = s.getsockname()[1]
+    spec = parse_broker_spec(str(_spec_json(tmp_path, port=port)))
+
+    broker, config = start_trial_broker(spec, ctx, state)
+    try:
+        assert config["gatewayUrl"] == broker.url
+        assert config["provider"] and config["model"]
+        # none of the DSH plugin's fields ride along
+        for field in ("sessionRoot", "bundlePath", "refuseAuxiliaryCalls",
+                      "auxiliaryPolicy", "ownerFinalize"):
+            assert field not in config, field
+        # the digest still covers exactly what is there
+        assert config["configDigest"] == control_config_digest(config)
+    finally:
+        stop_trial_broker(state)

@@ -96,6 +96,7 @@ def build_complete_trial_dir(
     descriptor: bool = True,
     session_root: str = "dsh-home",
     manifest_overrides: Mapping[str, object] | None = None,
+    output_paths: Mapping[str, str] | None = None,
 ) -> tuple[Path, CollectionManifest]:
     """Create a trial dir whose evidence bundle verifies cleanly.
 
@@ -104,6 +105,9 @@ def build_complete_trial_dir(
     ``tamper`` rewrites one output after hashing; ``omit`` drops one
     logical output entirely; ``descriptor=False`` skips the bundle
     descriptor. All produce gate failures for negative tests.
+    ``output_paths`` overrides the fixed path for named outputs — for
+    adapters whose DECLARED session-record slot the framework has no
+    built-in path for.
     """
     if runtime_lock is None:
         raise TypeError("runtime_lock is required since P0-6 (manifest binding)")
@@ -125,7 +129,7 @@ def build_complete_trial_dir(
     for name in plan:
         if name == omit:
             continue
-        rel = output_path_for(name)
+        rel = (output_paths or {}).get(name) or output_path_for(name)
         content = json.dumps({"name": name, "payload": 1}).encode()
         ref = write_artifact(root, rel, content)
         manifest.outcomes.append(

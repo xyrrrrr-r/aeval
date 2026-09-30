@@ -215,9 +215,14 @@ async def collect_trial_evidence(
             f"official session record could not be read: {exc}"
         ) from exc
     # The record goes into the flavor's slot, not the historical DSH one: a
-    # non-DSH adapter's required output is its own slot name.
+    # non-DSH adapter's required output is its own slot name. A DECLARED slot
+    # also carries its fixed path on the adapter — the framework cannot know
+    # where a third party's record belongs.
+    from aeval.agents.contract import session_record_output_path_of
+
     outcome, ref = produce_session_record(
-        trial_dir, session_bytes, flavor=suite_flavor
+        trial_dir, session_bytes, flavor=suite_flavor,
+        path=session_record_output_path_of(type(agent)),
     )
     outcomes.append(outcome)
     artifacts.append(ref)

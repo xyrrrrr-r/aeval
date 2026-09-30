@@ -185,7 +185,12 @@ class EvaluationContext:
         digest = control_config_digest(config)
         if config["configDigest"] != digest:
             raise LifecycleError("control config digest mismatch")
-        if config["bundlePath"] != paths.bundle_path or config["sessionRoot"] != paths.session_root:
+        # The flavor-provided path fields must match the owner's trusted
+        # paths WHEN the flavor carries them (the DSH plugin's session/bundle
+        # locations); a flavor that consumes no paths (the generic facade)
+        # has nothing to compare — absent is not a mismatch.
+        if (config.get("bundlePath", paths.bundle_path) != paths.bundle_path
+                or config.get("sessionRoot", paths.session_root) != paths.session_root):
             raise LifecycleError("control paths differ from owner paths")
         download = (self.run_dir / paths.download_root).resolve()
         if (not download.is_relative_to(self.run_dir.resolve())
