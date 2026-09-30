@@ -1,6 +1,10 @@
 schema_version: 2
 id: tbench-pilot
-version: 0.1.0
+# 0.2.0（2026-09-30）：准入规则变更 —— 驱动能力要求收窄为任务真正需要的
+# [acp_stdio, shell]（去掉 DSH 专属的 sdk_jsonrpc），会话槽位改为显式声明。对 DSH 的
+# 被测结果没有变化，但"谁能被这个评测集接受"变了，因此版本进位：本版本的跑次
+# 不与 0.1.0 同域可比。
+version: 0.2.0
 # 与 e2e-hello 共用同一份环境级基座：时钟、ready 观测点与 baseline
 # （证明跑的是"被适配过的镜像"而不是上游原镜像）、六项 requirements、
 # 驱动能力 [acp_stdio, sdk_jsonrpc]、指标种类、datasets 路径约定。
