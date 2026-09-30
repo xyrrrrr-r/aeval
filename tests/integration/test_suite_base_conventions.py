@@ -11,6 +11,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import yaml
+
 from aeval.suite_loader.loader import discover_suites, inherited_source_paths, load_suite
 
 SUITES = Path(__file__).parents[2] / "suites"
@@ -42,11 +44,25 @@ def test_inherited_conventions_reach_both_suites():
         overlay = _suite(name).overlay
         assert overlay.clock.mode == "real", name
         assert overlay.verdict.requirements == SIX_REQUIREMENTS, name
-        assert overlay.driver.require == ["acp_stdio", "sdk_jsonrpc"], name
         assert overlay.harbor.dataset == "datasets/local.yaml", name
         assert [obs.name for obs in overlay.observables][0] == "ready", name
         assert [base.id for base in overlay.baselines] == ["ready"], name
         assert [(m.id, m.kind) for m in overlay.metrics] == [("reliability", "pass_pow_k")], name
+
+
+def test_the_base_carries_no_agent_capability_requirements():
+    """A capability requirement is a suite fact (what THIS eval needs from the
+    agent), never a shared convention: putting one in the base turns some
+    agent's feature into a global default (DSH's sdk_jsonrpc used to live there
+    and forced every other family to patch it out with ``remove.require``)."""
+    base = SUITES / "_base" / "harbor.base.yaml"
+    assert "driver" not in yaml.safe_load(base.read_text())
+
+    for name in ("e2e-hello", "tbench-pilot"):
+        overlay = _suite(name).overlay
+        # declared by the suite itself: only what the task really needs
+        assert overlay.driver.require == ["acp_stdio", "shell"], name
+        assert overlay.driver.session_record == "dsh_session", name
 
 
 def test_suite_specific_facts_stay_in_the_suite():

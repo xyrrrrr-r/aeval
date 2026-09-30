@@ -9,9 +9,14 @@ extends: _base/harbor.base.yaml
 harbor:
   job: jobs/e2e-hello.yaml
 driver:
-  # 本套件用 DSH 的 ACP stdio 通道 + SDK JSON-RPC 驱动（DSH 适配器提供这两项）。
-  # 换成别的 agent 家族时，这里就是"是否接受该 agent"的显式门槛。
-  require: [acp_stdio, sdk_jsonrpc]
+  # 驱动能力要求：任务真正需要的两项——ACP 通道 + 能在沙箱里跑命令。
+  # 刻意**不写** sdk_jsonrpc：那是 DSH 特有的控制通道，不是本任务的需要，
+  # 写进 require 等于让整个评测集只接受 DSH。这里就是"是否接受某个 agent"
+  # 的显式门槛。
+  require: [acp_stdio, shell]
+  # 会话记录槽位也显式声明（不再依赖框架默认值——那个默认恰好是 DSH 的）：
+  # 本套件按 dsh_session 采集证据；换 agent 家族要连同这里一起显式改。
+  session_record: dsh_session
 observables:
   # file: sources only — P0-2 made db:/screenshot:/dom: probes explicitly
   # unsupported (fail closed); the e2e chain reads files out-of-band.

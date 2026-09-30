@@ -77,9 +77,13 @@ def test_the_dsh_pairing_is_refused_for_the_flavor_reason(suite):
         compose_harbor_job(suite, agent="dsh", agents_root=AGENTS)
 
 
-def test_deepagent_against_e2e_hello_is_still_refused_for_capabilities():
-    """The capability gate is not weakened by the new flavor gate."""
-    with pytest.raises(SuiteError, match="cannot serve this suite"):
+def test_deepagent_against_e2e_hello_is_refused_for_the_slot_not_capabilities():
+    """e2e-hello asks only for what its task needs (acp_stdio + shell), which
+    deepagent provides — so the refusal must come from the fact that actually
+    differs: the session-record slot it collects (dsh_session vs
+    agent_session_record). A capability refusal here would mean the suite is
+    back to requiring a DSH-specific channel."""
+    with pytest.raises(SuiteError, match="session-record flavor mismatch"):
         compose_harbor_job(
             load_suite(REPO / "suites" / "e2e-hello"),
             agent="deepagent",

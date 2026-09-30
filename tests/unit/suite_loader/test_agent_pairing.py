@@ -74,12 +74,12 @@ def test_a_session_record_flavor_mismatch_is_refused_at_composition(suite):
     e2e-hello's collect plan names dsh_session. The pairing must be refused
     before any sandbox is built, for the flavor reason, not a capability one.
     """
-    with pytest.raises(SuiteError) as excinfo:
+    # deepagent satisfies the capability requirement (this suite asks only for
+    # what the task needs: acp_stdio + shell) — the refusal must come from the
+    # slot, which is the fact that actually differs.
+    with pytest.raises(SuiteError, match="session-record flavor mismatch"):
         compose_harbor_job(suite, agent="deepagent", agents_root=AGENTS)
-    message = str(excinfo.value)
-    # capability gate fires first (sdk_jsonrpc); force the flavor gate by
-    # checking the reverse direction: dsh cannot serve an ACP-slot suite.
-    assert "cannot serve this suite" in message
+    # and the reverse direction: dsh cannot serve an ACP-slot suite.
 
     deepagent_hello = REPO / "suites" / "deepagent-hello"
     with pytest.raises(SuiteError, match="session-record flavor mismatch"):

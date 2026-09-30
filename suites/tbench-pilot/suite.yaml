@@ -25,10 +25,14 @@ metrics:
   # pass^3: the probability that all three attempts of a task pass.
   - { id: reliability, kind: pass_pow_k, k: 3 }
 driver:
-  # 驱动能力要求是套件自己的事实（基座不含）：本 pilot 用 DSH 的 ACP stdio
-  # 通道 + SDK JSON-RPC 驱动。要换成别的 agent 家族，改的是这里——而且必须是
-  # 一次显式的评测决策，不是继承来的默认值。
-  require: [acp_stdio, sdk_jsonrpc]
+  # 驱动能力要求是套件自己的事实（基座不含）：这三个 Terminal-Bench 任务真正
+  # 需要的是 ACP 通道 + 能在沙箱里跑命令，因此只要求这两项。刻意不写
+  # sdk_jsonrpc（DSH 特有通道）——那会让本评测集无条件只接受 DSH；要限制或
+  # 放开某个 agent 家族，改的就是这里，且必须是一次显式的评测决策。
+  require: [acp_stdio, shell]
+  # 会话记录槽位显式声明（框架默认值恰好是 DSH 的 dsh_session；写出事实而不是
+  # 依赖默认值）。换 agent 家族要连同这里一起显式改。
+  session_record: dsh_session
   # The collect command below runs the task's OWN verifier, and the
   # suite reads the reward it publishes. Harbor uploads the task's
   # tests only at verification time — after collection — so aeval

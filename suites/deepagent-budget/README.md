@@ -3,10 +3,12 @@
 P2-5a 的"跑通"载体：与 e2e-hello 同一任务形态（把 `hello` 写进
 `/workspace/result`），但驱动要求与证据槽位面向 ACP 适配器 deepagent：
 
-- `driver.require: [acp_stdio, shell, file_tools]` —— deepagent 提供的三项
-  （e2e-hello 自己声明了 `sdk_jsonrpc`（DSH 特有），deepagent 被正确拒绝，
-  那是能力门在工作）。基座不含任何 agent 特性，所以这里不再需要
-  `remove.require` 补丁——能力要求一律由套件自己声明；
+- `driver.require: [acp_stdio, shell, file_tools]` —— deepagent 提供的三项。
+  基座不含任何 agent 特性，能力要求一律由套件自己声明，因此这里不再需要
+  `remove.require` 补丁；e2e-hello 自己也只要求任务需要的两项
+  （`[acp_stdio, shell]`），它与 deepagent 的差异现在落在**会话记录槽位**
+  上：e2e-hello 采集 `dsh_session`，deepagent 产 `agent_session_record`，
+  组合期照样精确拒绝（槽位门，而不是能力门）；
 - `driver.session_record: agent_session_record` —— 会话记录走通用槽位；
   deepagent 的官方会话记录是 Harbor ACP runner 的 `acp-summary.json`
   （session id、stop reason、token usage、instruction），由适配器的
