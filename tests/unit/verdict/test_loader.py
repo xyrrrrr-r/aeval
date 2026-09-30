@@ -6,12 +6,13 @@ version, or lacks the coroutine entry point never executes.
 
 from __future__ import annotations
 
+import sys
 from pathlib import Path
 
 import pytest
 
 from aeval.suite_models import GraderDeclaration
-from aeval.verdict.loader import GraderLoadError, load_grader, split_impl
+from aeval.verdict.loader import GraderLoadError, _load_module, load_grader, split_impl
 
 _GOOD = '''
 GRADER_ID = "outcome"
@@ -130,3 +131,39 @@ async def test_loaded_grader_grade_returns_result(tmp_path):
     assert result.grader_id == "outcome"
     assert result.status == "pass"
     assert result.score.value == 1.0
+
+
+def test_loading_a_grader_writes_nothing_into_the_suite(tmp_path: Path) -> None:
+    """Importing a grader must not leave ``__pycache__`` in a sealed suite.
+
+    Found by the first real run of the generic facade flavor: grading the trial
+    created ``graders/__pycache__`` inside the suite, and the NEXT run was
+    refused by the provenance gate ("Suite ... has uncommitted changes") because
+    the suite tree is an input, not an output. Evaluating a suite may not mutate
+    the version it claims to have run.
+    """
+    grader = tmp_path / "graders" / "hello.py"
+    grader.parent.mkdir(parents=True)
+    grader.write_text(
+        'IMPLEMENTATION = "graders/hello.py@v1"\n'
+        'VERSION = "v1"\n'
+        "async def grade(record):\n"
+        "    return None\n",
+        encoding="utf-8",
+    )
+
+    module = _load_module(grader)
+
+    assert module.IMPLEMENTATION == "graders/hello.py@v1"
+    assert list(grader.parent.iterdir()) == [grader]
+
+
+def test_the_bytecode_flag_is_restored(tmp_path: Path) -> None:
+    """The guard is scoped: the rest of the process keeps its own setting."""
+    grader = tmp_path / "grader.py"
+    grader.write_text("async def grade(record):\n    return None\n", encoding="utf-8")
+    before = sys.dont_write_bytecode
+
+    _load_module(grader)
+
+    assert sys.dont_write_bytecode is before

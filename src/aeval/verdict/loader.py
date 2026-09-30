@@ -69,11 +69,20 @@ def _load_module(reference: Path) -> Any:
     # Grader modules are plain data-in/data-out implementations; they must
     # not register themselves anywhere global.
     sys.modules[module_name] = module
+    # Importing a grader must not write into the suite: ``__pycache__`` beside
+    # graders/ turns a sealed suite into a dirty one, and the next run is then
+    # refused by the provenance gate ("Suite ... has uncommitted changes") —
+    # example-lab, found by the first real run of the generic facade flavor, because
+    # grading the trial is what created the directory. The flag is process-wide,
+    # so it is restored immediately after this one import.
+    cache_flag = sys.dont_write_bytecode
     try:
+        sys.dont_write_bytecode = True
         spec.loader.exec_module(module)
     except Exception as exc:
         raise GraderLoadError(f"grader module raised during import: {exc}") from exc
     finally:
+        sys.dont_write_bytecode = cache_flag
         sys.modules.pop(module_name, None)
     return module
 
