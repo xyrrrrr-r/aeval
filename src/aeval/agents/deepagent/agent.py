@@ -123,7 +123,22 @@ class DeepgentTrialPaths:
         return self.logs_dir / _SUMMARY_FILENAME
 
 
-def default_deepagent_registry_entry() -> dict[str, Any]:
+def _lease_model_name(declared: str | None) -> str | None:
+    """The bare model name dcode must be told (``provider/name`` -> ``name``).
+
+    Harbor states a model as ``provider/name`` while an HTTP request carries the
+    bare name; the lease serves exactly one name and the facade refuses any
+    other, so the bare form is what has to reach the CLI.
+    """
+    if not isinstance(declared, str) or not declared.strip():
+        return None
+    name = declared.strip()
+    if "/" in name:
+        name = name.split("/", 1)[1].strip()
+    return name or None
+
+
+def default_deepagent_registry_entry(model: str | None = None) -> dict[str, Any]:
     """Inline ACP registry entry: the pinned dcode CLI as an ACP server.
 
     The distribution is ``local``: the task image ships the package pinned by
@@ -131,6 +146,14 @@ def default_deepagent_registry_entry() -> dict[str, Any]:
     a PyPI fetch at agent setup never exists. Model routing
     (``OPENAI_BASE_URL``, ``OPENAI_API_KEY``, …) reaches the server through the
     distribution env — see ``model_env`` on the adapter.
+
+    ``model`` is the lease's model name, appended as ``--model``. It cannot be
+    baked into this entry (it is per-job) and it must not be omitted: dcode then
+    falls back to its own codex-profile default, whose requests carry
+    responses-only arguments (``reasoning``, builtin tools), so langchain posts
+    to ``/v1/responses`` — which the generic facade does not serve — and the
+    lease would refuse that name anyway. example-lab: exactly how the first real run
+    of the generic facade flavor died (P2-5b).
     """
     return {
         "id": "deepagents-code",
@@ -147,7 +170,7 @@ def default_deepagent_registry_entry() -> dict[str, Any]:
             # places on purpose, and a test keeps them equal.
             "local": {
                 "cmd": "dcode",
-                "args": ["--acp"],
+                "args": ["--acp"] + (["--model", model] if model else []),
                 "env": {},
             },
         },
@@ -272,7 +295,13 @@ class DeepgentAgent(AcpAgent):
         entry = (
             dict(registry_entry)
             if registry_entry is not None
-            else default_deepagent_registry_entry()
+            else default_deepagent_registry_entry(
+                # Harbor passes the job's model as ``model_name``
+                # (``provider/name``); the owner composes it into the agent
+                # entry so this adapter never has to guess what the lease
+                # serves. An explicit registry_entry still wins.
+                _lease_model_name(kwargs.get("model_name"))
+            )
         )
         # The facade routing is the declared control stack's other half; an
         # explicit model_env overrides it field by field.

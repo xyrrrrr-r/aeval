@@ -147,6 +147,40 @@ def test_local_dataset_is_relative_to_suite_root_not_declaration_directory(nativ
     assert job.jobs_dir == Path("jobs")  # Output paths are not suite inputs.
 
 
+def test_lease_model_is_stated_in_the_composed_agent_entry(native_suite):
+    """The run's model is composed into the agent entry, once, for every adapter.
+
+    Harbor passes it to the agent as ``model_name``; an adapter whose CLI would
+    otherwise choose its own default turns it into a launch argument (the first
+    real run of the generic facade flavor talked the Responses API to a facade
+    that serves chat completions because nobody stated the model). Composing it
+    here keeps the statement in one place instead of one job file per pairing.
+    """
+    plain = compose_harbor_job(load_suite(native_suite))
+    assert all(agent.model_name is None for agent in plain.agents)
+
+    job = compose_harbor_job(
+        load_suite(native_suite), lease_model="deepseek/deepseek-chat"
+    )
+    assert [agent.model_name for agent in job.agents] == ["deepseek/deepseek-chat"]
+
+
+def test_lease_model_name_reads_the_broker_identity():
+    from types import SimpleNamespace
+
+    from aeval.suite_loader.composition import lease_model_name
+
+    assert (
+        lease_model_name(SimpleNamespace(identity={"provider": "deepseek", "model": "deepseek-chat"}))
+        == "deepseek/deepseek-chat"
+    )
+    assert lease_model_name(SimpleNamespace(identity={"model": "deepseek-chat"})) == "deepseek-chat"
+    # nothing to state: no spec, no identity, no model
+    assert lease_model_name(None) is None
+    assert lease_model_name(SimpleNamespace(identity=None)) is None
+    assert lease_model_name(SimpleNamespace(identity={"model": "  "})) is None
+
+
 @pytest.mark.parametrize(
     "selection, expected",
     [

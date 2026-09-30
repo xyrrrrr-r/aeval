@@ -119,7 +119,15 @@ def run_cmd(
         if run_dir.is_relative_to(suite):
             raise SuiteError("Run output must be outside the source suite directory")
         resolved = load_suite(suite)
-        job = compose_harbor_job(resolved)
+        # The operator's broker spec carries the run's model identity. Stating it
+        # in the composed agent entry is what lets an adapter whose CLI would
+        # otherwise pick its own default (and so its own wire protocol) agree
+        # with the lease that will meter it.
+        from aeval.hooks.broker_lifecycle import parse_broker_spec
+        from aeval.suite_loader.composition import lease_model_name
+
+        broker_spec = parse_broker_spec()
+        job = compose_harbor_job(resolved, lease_model=lease_model_name(broker_spec))
         # Declared adapter identity, resolved before anything runs: a run whose
         # records cannot name its agent is refused here, not discovered later.
         adapters = [
@@ -185,9 +193,8 @@ def run_cmd(
         # ran: fingerprint it into the lock so a changed control build breaks
         # comparability loudly instead of shifting behavior silently inside
         # the agent's process (defense 2 of the control-stack split).
-        from aeval.hooks.broker_lifecycle import parse_broker_spec
-
-        broker_spec = parse_broker_spec()
+        # ``broker_spec`` was parsed before composition, so the model it pins is
+        # already stated in the agent entry.
         # The generic facade is part of what runs, exactly like the DSH
         # control dist: when a selected adapter declares that stack, the
         # built dist is fingerprinted into the lock. A missing dist is

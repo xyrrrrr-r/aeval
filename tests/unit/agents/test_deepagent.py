@@ -26,6 +26,7 @@ from aeval.agents.declaration import (
 from aeval.agents.deepagent.agent import (
     DeepgentAgent,
     DeepgentRunError,
+    _lease_model_name,
     default_deepagent_registry_entry,
     facade_routing_env,
 )
@@ -140,6 +141,62 @@ class TestContract:
         agent = _agent(tmp_path)
         assert DeepgentAgent.name() == "deepagent"
         assert agent.version() == "0.1.78"
+
+
+class TestLeaseModelIsToldToTheCli:
+    """dcode picks its own codex-profile default when nobody tells it.
+
+    That default asks langchain for the Responses API, whose requests carry
+    responses-only arguments; the generic facade serves chat completions, so the
+    first real run of this flavor died at ``POST /v1/responses`` with a 404 — and
+    the lease would refuse any name but its own anyway. The model is per-job, so
+    it is stated once by the owner and turned into a launch argument here.
+    """
+
+    def test_bare_name_is_what_the_wire_carries(self) -> None:
+        assert _lease_model_name("deepseek/deepseek-chat") == "deepseek-chat"
+        assert _lease_model_name("deepseek-chat") == "deepseek-chat"
+        assert _lease_model_name(None) is None
+        assert _lease_model_name("   ") is None
+        assert _lease_model_name("deepseek/") is None
+
+    def test_default_entry_carries_the_model_when_given_one(self) -> None:
+        entry = default_deepagent_registry_entry("deepseek-chat")
+        assert entry["distribution"]["local"]["args"] == [
+            "--acp",
+            "--model",
+            "deepseek-chat",
+        ]
+        # no lease model -> no invented model name
+        assert default_deepagent_registry_entry()["distribution"]["local"]["args"] == [
+            "--acp"
+        ]
+
+    def test_job_model_becomes_a_launch_argument(self, tmp_path: Path) -> None:
+        agent = _agent(tmp_path, model_name="deepseek/deepseek-chat")
+        local = getattr(agent, "_registry_entry", None)
+        assert local is not None
+        assert list(local.distribution.local.args) == [
+            "--acp",
+            "--model",
+            "deepseek-chat",
+        ]
+
+    def test_explicit_registry_entry_is_not_second_guessed(self, tmp_path: Path) -> None:
+        agent = _agent(
+            tmp_path,
+            registry_entry=default_deepagent_registry_entry(),
+            model_name="deepseek/deepseek-chat",
+        )
+        entry = getattr(agent, "_registry_entry", None)
+        assert entry is not None
+        assert list(entry.distribution.local.args) == ["--acp"]
+
+    def test_a_job_without_a_model_is_not_given_one(self, tmp_path: Path) -> None:
+        agent = _agent(tmp_path)
+        entry = getattr(agent, "_registry_entry", None)
+        assert entry is not None
+        assert list(entry.distribution.local.args) == ["--acp"]
 
 
 class TestReadTrialSession:

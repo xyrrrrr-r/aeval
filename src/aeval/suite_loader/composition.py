@@ -223,6 +223,25 @@ def _check_session_record_pairing(
             )
 
 
+def lease_model_name(spec: Any) -> str | None:
+    """The model a run's lease serves, as ``provider/name``.
+
+    The broker spec's ``identity`` is what the facade validates every request
+    model against, so it is the only name an agent may be told to use — the
+    agent and its meter must agree, and neither may guess.
+    """
+    identity = getattr(spec, "identity", None)
+    if not isinstance(identity, dict):
+        return None
+    model = identity.get("model")
+    if not isinstance(model, str) or not model.strip():
+        return None
+    provider = identity.get("provider")
+    if isinstance(provider, str) and provider.strip():
+        return f"{provider.strip()}/{model.strip()}"
+    return model.strip()
+
+
 def _declared_agent_entry(
     suite: ResolvedSuite,
     agent_id: str,
@@ -257,6 +276,7 @@ def compose_harbor_job(
     agent: str | None = None,
     agent_profile: str | None = None,
     agents_root: Path | None = None,
+    lease_model: str | None = None,
 ) -> JobConfig:
     """Compose the suite's Harbor job, optionally for a named agent.
 
@@ -265,6 +285,14 @@ def compose_harbor_job(
     backend, attempts, setup budget — and stops encoding which agent runs it, so
     pairing a suite with a new agent costs a declaration rather than a new job
     file (and the suite x agent matrix stops being a matrix of files).
+
+    ``lease_model`` is the run's model (the operator's broker identity), stated
+    once in the composed agent entry as Harbor's own ``model_name``. An adapter
+    that launches a CLI which would otherwise pick its own default turns it into
+    a launch argument; for every other adapter it is the same fact recorded in
+    the same place. Omitting it is how the generic facade flavor's first real
+    run ended up talking the Responses API to a facade that serves chat
+    completions (P2-5b).
     """
     root = Path(suite.suite_dir).resolve()
     inputs = resolve_harbor_inputs(suite)
@@ -282,6 +310,18 @@ def compose_harbor_job(
                 suite, agent, profile=agent_profile, agents_root=agents_root
             )
         ]
+    if lease_model:
+        # The run's model, stated once in the agent entry (Harbor's own
+        # ``model_name``, ``provider/name``). An adapter whose CLI would
+        # otherwise choose its own default consumes it; the lease serves exactly
+        # one name and refuses any other, so a run that never says it is a run
+        # whose agent cannot agree with its own meter.
+        job_data = deepcopy(job_data)
+        selected = job_data.get("agents")
+        if isinstance(selected, list):
+            for entry in selected:
+                if isinstance(entry, dict) and not entry.get("model_name"):
+                    entry["model_name"] = lease_model
     _check_env_templates(job_data)
     validate_harbor_job_shape(job_data, job_path)
     if any(key in job_data for key in ("tasks", "datasets", "source_jobs")):
