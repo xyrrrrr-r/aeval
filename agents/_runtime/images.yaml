@@ -1,0 +1,44 @@
+# Runtime → sandbox image table (方案二).
+#
+# Each agent declaration says WHAT its sandbox must provide
+# (`runtime: {key: <slug>, needs: [...]}`); this table says WHERE that is met
+# for a given suite. It is checked at composition time: a pairing with no row is
+# refused (add one here, or pass `--sandbox-image` explicitly), and a pairing
+# whose row pins an image must run with exactly that image and platform.
+#
+# `image: null` is a deliberate row: the pairing relies on the task's own
+# Dockerfile (the pre-existing behavior) — writing it down means the decision is
+# visible instead of implicit. Pin an image (ref@sha256:…) when the runtime is
+# baked into a published variant; the platform is then required, because the
+# observed identity binds the architecture too.
+schema_version: 1
+
+images:
+  - suite: e2e-hello
+    runtime: dsh
+    image: null
+    note: >-
+      dsh 由 Harbor 的 installed-agent 走 npm 装进沙箱（launch kwargs 指向
+      /dev/shm/dshpkg + /dev/shm/npmcache），镜像就是任务自己的 Dockerfile。
+
+  - suite: tbench-pilot
+    runtime: dsh
+    image: null
+    note: >-
+      同 e2e-hello：镜像由 suites/tbench-pilot/images/build-bases.py 构建并按
+      缓存 alias 复用（--force-build 时重建），DSH 的 node 与 npm 缓存由
+      images/base-image.Dockerfile 烘焙。
+
+  - suite: deepagent-hello
+    runtime: deepagents-code
+    image: null
+    note: >-
+      deepagents-code 烘焙在任务镜像里（COPY wheelhouse + 离线 pip 装
+      /opt/deepagents）。若改用推送到内网 registry 的镜像变体，把 image/
+      platform 填在这里，run 就必须用同一摘要。
+
+  - suite: deepagent-budget
+    runtime: deepagents-code
+    image: null
+    note: >-
+      同 deepagent-hello。

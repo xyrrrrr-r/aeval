@@ -952,6 +952,11 @@ class RunManifest(BaseModel):
     # ``--session-record``: use the selected adapter's slot instead of the
     # suite's declared one, recorded so a run never silently changes shape.
     session_record_override: str | None = None
+    # The runtime keys the selected adapters declared (``runtime.key``). The
+    # image they were mapped to is in the runtime lock; this is the CONTRACT the
+    # image was chosen against, so a bundle can be audited for "which runtime
+    # did this run assume".
+    runtime_keys: list[str] = Field(default_factory=list)
     artifact_digest: str | None = None
     exclusions: ExclusionSummary | None = None
 

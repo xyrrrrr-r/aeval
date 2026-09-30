@@ -79,6 +79,15 @@ sandbox_session_record: /logs/agent/acp-summary.json
 # package needs a generous setup window. Model routing (OPENAI_BASE_URL /
 # OPENAI_API_KEY / …) is supplied per job via the adapter's model_env kwarg,
 # which lands in the launcher env — never baked into a committed file.
+# 运行时需求（方案二）：沙箱里必须存在这个 CLI 才能跑起来。key 在组合期
+# 与 agents/_runtime/images.yaml 对账——没有对应行、或行的镜像摘要与
+# --sandbox-image 不一致，都在建沙箱之前拒绝，而不是在 trial 里炸
+# "command not found"。needs 是人类可读的供给事实，用于报错与审计。
+runtime:
+  key: deepagents-code
+  needs:
+    - node>=18（façade 在沙箱内跑）
+    - dcode CLI 已烘焙进镜像
 launch:
   default:
     override_setup_timeout_sec: 900

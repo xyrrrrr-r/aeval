@@ -29,6 +29,7 @@ from aeval.agents.contract import (
     MODEL_ROUTING_PROTOCOLS,
     session_record_slot_well_formed,
 )
+from aeval.agents.runtime import RuntimeDeclaration
 from aeval.suite_loader.inheritance import (
     MAX_INHERITANCE_DEPTH,
     merge_declarations,
@@ -299,6 +300,11 @@ class AgentDeclaration(BaseModel):
     #: How the agent's model traffic reaches the broker (absent = the agent
     #: declares no routing and its control stack, if any, is gateway-native).
     model_routing: ModelRoutingDeclaration | None = None
+    #: What the sandbox must provide for this agent's CLI to exist at all
+    #: (`aeval.agents.runtime`): the key is checked against the runtime image
+    #: table at composition time, so "dcode: not found" is a refusal before the
+    #: sandbox is built rather than a surprise inside a running trial.
+    runtime: RuntimeDeclaration | None = None
     #: Named launch profiles (``default`` is used when none is named).
     launch: dict[str, LaunchProfile] = Field(default_factory=dict)
 

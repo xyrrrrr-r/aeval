@@ -73,6 +73,163 @@ def _die(message: str, code: int) -> int:
     raise typer.Exit(code=code)
 
 
+def _selected_runtime_keys(
+    job: Any, *, agents_root: Path
+) -> tuple[list[tuple[str, Any]], list[str]]:
+    """``(runtime declarations, adapters with no resolvable declaration)``.
+
+    Harbor-native ``name:`` agents and adapters that declare no runtime are
+    skipped quietly: there is nothing to host, so nothing to check. An adapter
+    WITH an import_path whose declaration cannot be resolved is reported to the
+    caller — the runtime guard cannot run for it, and that must be visible
+    rather than a silent pass. A wrong ``--agents-dir`` falls back to the
+    discovered agents root instead of silently finding nothing.
+    """
+    from aeval.agents.declaration import default_agents_root, find_declaration_for
+
+    root = Path(agents_root)
+    if not root.is_dir():
+        root = default_agents_root()
+    found: list[tuple[str, Any]] = []
+    unresolved: list[str] = []
+    for entry in getattr(job, "agents", None) or []:
+        import_path = getattr(entry, "import_path", None)
+        if not import_path:
+            continue
+        resolved = find_declaration_for(import_path, agents_root=root)
+        if resolved is None:
+            unresolved.append(str(import_path))
+            continue
+        if resolved.declaration.runtime is None:
+            continue
+        found.append((resolved.declaration.id, resolved.declaration.runtime))
+    return found, unresolved
+
+
+def _check_runtime_images(
+    suite_id: str,
+    job: Any,
+    *,
+    agents_root: Path,
+    sandbox_image: str | None,
+    sandbox_platform: str | None,
+    table_path: Path | None = None,
+) -> list[str]:
+    """Refuse a pairing whose sandbox cannot host the agent's CLI (方案二).
+
+    The declaration says what the agent needs, the table says where that is met;
+    an unmapped pairing is refused here — before Harbor builds anything — with
+    the fix spelled out, instead of failing inside the sandbox as
+    "command not found" once the budget is already running.
+    """
+    from aeval.agents.runtime import image_problem_for, load_runtime_images
+    from aeval.suite_models import SuiteError
+
+    table = load_runtime_images(table_path)
+    keys: list[str] = []
+    declared, unresolved = _selected_runtime_keys(job, agents_root=agents_root)
+    for import_path in unresolved:
+        typer.echo(
+            f"note: no agent declaration found for {import_path} — its declared "
+            "runtime cannot be checked against the image table"
+        )
+    for agent_id, runtime in declared:
+        problem = image_problem_for(
+            table,
+            suite_id=suite_id,
+            runtime=runtime,
+            image=sandbox_image,
+            platform=sandbox_platform,
+            table_path=table_path,
+        )
+        if problem:
+            raise SuiteError(f"agent {agent_id!r}: {problem}")
+        keys.append(runtime.key)
+    return keys
+
+
+@app.command("check")
+def check_cmd(
+    suite: Annotated[Path, typer.Option(help="Suite directory (contains suite.yaml)")],
+    agent: Annotated[str, typer.Option(help="Declared agent id to drive the suite")],
+    profile: Annotated[
+        str | None, typer.Option(help="Launch profile declared by the agent")
+    ] = None,
+    agents_dir: Annotated[
+        Path, typer.Option(help="Directory holding agents/<id>.yaml")
+    ] = Path("agents"),
+    sandbox_image: Annotated[
+        str | None, typer.Option(help="Digest-pinned sandbox image to check against the table")
+    ] = None,
+    sandbox_platform: Annotated[
+        str | None, typer.Option(help="Platform of that image (e.g. arm64)")
+    ] = None,
+) -> None:
+    """Report whether a (suite, agent) pairing can run — read-only, nothing built.
+
+    Answers the two questions that used to be discovered late: does the pairing
+    pass the composition gates (capabilities / session-record slot / budget), and
+    does the suite's runtime→image table cover the agent's declared runtime.
+    """
+    from aeval.agents.runtime import default_runtime_images_path, load_runtime_images
+    from aeval.suite_loader.composition import compose_harbor_job
+    from aeval.suite_loader.loader import load_suite
+    from aeval.suite_models import SuiteError
+
+    try:
+        resolved = load_suite(suite)
+        job = compose_harbor_job(
+            resolved, agent=agent, agent_profile=profile, agents_root=agents_dir
+        )
+    except (SuiteError, ValueError, OSError) as exc:
+        typer.echo(f"pairing {agent} × {suite}: REFUSED")
+        typer.echo(f"  {exc}")
+        raise typer.Exit(code=EXIT_VALIDATION_ERROR) from exc
+
+    typer.echo(
+        f"pairing {agent} × {resolved.id}: composed "
+        f"(impl={job.agents[0].import_path}, attempts={job.n_attempts})"
+    )
+    table = load_runtime_images()
+    picks, unresolved = _selected_runtime_keys(job, agents_root=agents_dir)
+    for import_path in unresolved:
+        typer.echo(
+            f"runtime: no declaration found for {import_path} — not checked"
+        )
+    if not picks:
+        typer.echo("runtime: none declared — nothing to host, nothing to check")
+        raise typer.Exit(code=0)
+    problems: list[str] = []
+    for agent_id, runtime in picks:
+        entry = table.lookup(resolved.id, runtime.key)
+        if entry is None:
+            shown = "(no row)"
+        elif entry.image is None:
+            shown = "(rides the task image)"
+        else:
+            shown = f"{entry.image} ({entry.platform})"
+        typer.echo(f"runtime {runtime.key} for {agent_id}: {shown}")
+        from aeval.agents.runtime import image_problem_for
+
+        problem = image_problem_for(
+            table,
+            suite_id=resolved.id,
+            runtime=runtime,
+            image=sandbox_image,
+            platform=sandbox_platform,
+            table_path=default_runtime_images_path(),
+        )
+        if problem:
+            problems.append(problem)
+    if problems:
+        typer.echo("runtime image check: FAILED")
+        for problem in problems:
+            typer.echo(f"  {problem}")
+        raise typer.Exit(code=EXIT_VALIDATION_ERROR)
+    typer.echo("runtime image check: OK")
+    raise typer.Exit(code=0)
+
+
 @app.command("run")
 def run_cmd(
     suite: Annotated[Path, typer.Option(help="Suite directory (contains suite.yaml)")],
@@ -167,6 +324,13 @@ def run_cmd(
                 f"composed for agent {agent} (profile {profile or 'default'}): "
                 f"{job.agents[0].import_path}"
             )
+        runtime_keys = _check_runtime_images(
+            resolved.id,
+            job,
+            agents_root=agents_dir,
+            sandbox_image=sandbox_image,
+            sandbox_platform=sandbox_platform,
+        )
         if session_record is not None:
             declared = getattr(
                 getattr(resolved.overlay, "driver", None), "session_record", None
@@ -272,6 +436,7 @@ def run_cmd(
             budget_enforcement_point=budget_point,
             accepted_unmetered_budget=accept_unmetered_budget,
             session_record_override=session_record,
+            runtime_keys=runtime_keys,
             overlay=OverlayIdentity(
                 suite_id=resolved.id,
                 suite_version=resolved.version,

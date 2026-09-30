@@ -59,6 +59,15 @@ artifacts:
 # (install prefix, npm cache, where the official session reader is mounted), so
 # they bind to an environment rather than to the adapter's identity — which is
 # exactly why they live here instead of in every job file that runs DSH.
+# 运行时需求（方案二）：沙箱里必须存在这个 CLI 才能跑起来。key 在组合期
+# 与 agents/_runtime/images.yaml 对账——没有对应行、或行的镜像摘要与
+# --sandbox-image 不一致，都在建沙箱之前拒绝，而不是在 trial 里炸
+# "command not found"。needs 是人类可读的供给事实，用于报错与审计。
+runtime:
+  key: dsh
+  needs:
+    - node (Harbor installed-agent 提供)
+    - npm 缓存或内网 registry 可达
 launch:
   # Verified on example-lab (openEuler 24.03 SP1 aarch64); matches the paths the
   # hand-written jobs/e2e-hello/jobs/dsh.yaml used.

@@ -690,3 +690,83 @@ def test_an_override_that_does_not_match_the_agent_is_refused(
     assert result.exit_code == 3, result.output
     assert "session-record flavor mismatch" in result.output
     assert harbor_calls == []
+
+
+def test_check_reports_a_runnable_pairing(native_suite_dir, monkeypatch):
+    """``aeval check`` answers "can this pairing run" before anything is built."""
+    # the native fixture's tasks are not in the table: name the image explicitly
+    result = runner.invoke(
+        app,
+        [
+            "check", "--suite", str(native_suite_dir), "--agent", "dsh",
+            "--agents-dir", str(_REPO / "agents"),
+            "--sandbox-image", "ref@sha256:" + "a" * 64,
+            "--sandbox-platform", "arm64",
+        ],
+    )
+    assert result.exit_code == 0, result.output
+    assert "runtime dsh" in result.output
+    assert "runtime image check: OK" in result.output
+
+
+def test_check_refuses_an_unmapped_pairing_with_the_fix(native_suite_dir):
+    """No row for (suite, runtime) and no explicit image: refused, with the fix."""
+    result = runner.invoke(
+        app,
+        [
+            "check", "--suite", str(native_suite_dir), "--agent", "dsh",
+            "--agents-dir", str(_REPO / "agents"),
+        ],
+    )
+    assert result.exit_code == 3, result.output
+    assert "no sandbox image is mapped" in result.output
+    assert "images.yaml" in result.output and "--sandbox-image" in result.output
+
+
+def test_check_refuses_a_pairing_the_slot_does_not_allow(native_suite_dir):
+    """The composition gates run first: an ad-hoc pairing still needs the slot
+    override, and `check` says so instead of reporting the runtime."""
+    result = runner.invoke(
+        app,
+        [
+            "check", "--suite", str(native_suite_dir), "--agent", "fakeagent",
+            "--agents-dir", str(_REPO / "agents"),
+        ],
+    )
+    assert result.exit_code == 3, result.output
+    assert "session-record flavor mismatch" in result.output
+
+
+def test_check_honours_a_pinned_row(tmp_path, native_suite_dir, monkeypatch):
+    """A row that pins an image must be used exactly — a different image is
+    refused, the mapped one passes."""
+    pinned = "ref@sha256:" + "b" * 64
+    table = tmp_path / "images.yaml"
+    table.write_text(
+        "schema_version: 1\nimages:\n"
+        "  - {suite: native-example, runtime: dsh, image: \"" + pinned + "\", platform: arm64}\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("AEVAL_RUNTIME_IMAGES", str(table))
+
+    mismatch = runner.invoke(
+        app,
+        [
+            "check", "--suite", str(native_suite_dir), "--agent", "dsh",
+            "--agents-dir", str(_REPO / "agents"),
+            "--sandbox-image", "ref@sha256:" + "c" * 64, "--sandbox-platform", "arm64",
+        ],
+    )
+    assert mismatch.exit_code == 3, mismatch.output
+    assert "must match" in mismatch.output
+
+    matching = runner.invoke(
+        app,
+        [
+            "check", "--suite", str(native_suite_dir), "--agent", "dsh",
+            "--agents-dir", str(_REPO / "agents"),
+            "--sandbox-image", pinned, "--sandbox-platform", "arm64",
+        ],
+    )
+    assert matching.exit_code == 0, matching.output
+    assert "runtime image check: OK" in matching.output
