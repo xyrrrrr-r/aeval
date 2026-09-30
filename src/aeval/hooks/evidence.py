@@ -33,7 +33,12 @@ import json
 from pathlib import Path
 from typing import Any
 
-from aeval.agents.dsh.agent import find_session_record
+from aeval.agents.contract import (
+    describe_adapter,
+    locate_session_record,
+    session_record_output_of,
+)
+from aeval.agents.dsh.agent import DshAgent
 from aeval.contracts import (
     ArtifactRef,
     CollectOutcome,
@@ -261,6 +266,8 @@ def verify_evidence_bundle(
     trial_dir: Path,
     lock: RuntimeLock,
     plan: list[str],
+    *,
+    adapter: Any = None,
 ) -> EvidenceBundle:
     """Build the sealed EvidenceBundle or raise EvidenceIntegrityError.
 
@@ -399,28 +406,54 @@ def verify_evidence_bundle(
     # artifact is a copy — the invariant that matters is that it IS the
     # official record of this descriptor's session, which is a strictly
     # stronger statement than "the file sits under session_root".
-    record = find_session_record(session_root, descriptor.session_id)
+    # Session ownership is ADAPTER-flavored (P1-2b): DSH persists one record per
+    # session id under a project-nested tree; the ACP flavor has a single summary
+    # whose own session id is the identity. The gate asks the adapter whose trial
+    # this is — the live handle, or the DSH adapter for offline/replay callers
+    # that only ever carry the historical bundle shape. Encoding the first
+    # agent's layout here is what made the second adapter expensive.
+    record_owner = adapter if adapter is not None else DshAgent
+    slot = session_record_output_of(record_owner)
+    record = locate_session_record(record_owner, session_root, descriptor.session_id)
     if record is None:
         raise EvidenceIntegrityError(
             "the descriptor's session_root "
             f"({descriptor.session_root}) holds no official record for "
-            f"session {descriptor.session_id}"
+            f"session {descriptor.session_id} — "
+            f"{describe_adapter(record_owner)} located none"
         )
-    artifact = bundle.artifacts.get(FIXED_OUTPUT_PATHS["dsh_session"])
+    artifact = bundle.artifacts.get(FIXED_OUTPUT_PATHS[slot])
     if artifact is None:
         raise EvidenceIntegrityError(
-            "dsh_session artifact missing from the evidence bundle"
+            f"{slot} artifact missing from the evidence bundle"
         )
     expected = hashlib.sha256(record.read_bytes()).hexdigest()
     if artifact.sha256 != expected:
         raise EvidenceIntegrityError(
-            "dsh_session artifact is not this trial's official session "
+            f"{slot} artifact is not this trial's official session "
             f"record (artifact {artifact.sha256[:12]}…, official {expected[:12]}…)"
         )
     bundle.bundle_descriptor = descriptor
     bundle.stop_reason = descriptor.stop_reason
 
     return bundle
+
+
+def _live_adapter(context: Any, trial_id: str) -> Any:
+    """The trial's live agent handle, or None when it is unreachable.
+
+    The gate needs it to know how THIS adapter's session record is shaped
+    (P1-2b). An unreachable handle is not an error here: the historical bundle
+    shape is the fallback, and every other check still has to pass.
+    """
+    environments = getattr(context, "environments", None)
+    getter = getattr(environments, "agent", None)
+    if not callable(getter):
+        return None
+    try:
+        return getter(trial_id)
+    except Exception:  # noqa: BLE001 - evidence must not depend on liveness
+        return None
 
 
 async def gate_verification(event: Any, context: Any) -> None:
@@ -460,7 +493,9 @@ async def gate_verification(event: Any, context: Any) -> None:
 
     plan = build_required_collect_plan(context.suite)
     try:
-        bundle = verify_evidence_bundle(trial_dir, context.runtime_lock, plan)
+        bundle = verify_evidence_bundle(
+            trial_dir, context.runtime_lock, plan, adapter=_live_adapter(context, trial_id)
+        )
     except EvidenceIntegrityError as exc:
         state.evidence_ok = False
         state.evidence_issues.append(str(exc))

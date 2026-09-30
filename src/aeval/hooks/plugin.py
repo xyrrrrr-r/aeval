@@ -10,7 +10,11 @@ from hashlib import sha256
 from pathlib import Path, PurePosixPath
 from typing import Any
 
-from aeval.agents.contract import control_stack_of
+from aeval.agents.contract import (
+    sandbox_session_record,
+    session_id_from_record,
+    terminal_descriptor_owner,
+)
 from aeval.bundle.manifest import _atomic_write_json
 from aeval.contracts import OverlayIdentity, RunBinding, RunManifest, RuntimeLock, job_config_hash
 from aeval.hooks.baseline_arrival import on_environment_started
@@ -218,13 +222,10 @@ def register_trial_hooks(job: Any, context: EvaluationContext) -> None:
         state = context.state_for_event(event)
         if state.terminal:
             return
-        # The terminal bundle descriptor, for a control stack that has no
-        # sandbox-side component to write it (the generic facade flavor). This
-        # is the last moment where it can be written truthfully: Harbor emits
-        # AGENT_END and only THEN downloads the agent logs directory that carries
-        # the descriptor. example-lab: without it every real run died at the evidence
-        # gate with "bundle descriptor missing (host-side control plugin)" —
-        # the DSH flavor writes its own inside the sandbox, this one cannot.
+        # Terminal descriptor: written here only when the adapter declares the
+        # OWNER as the terminal observer (a stack with no sandbox-side witness).
+        # example-lab: without it every real run died at the evidence gate with
+        # "bundle descriptor missing (host-side control plugin)".
         await _write_terminal_descriptor(context, state)
         if state.infra_invalid_reasons:
             issue = "agent ended with infra failures recorded"
@@ -327,52 +328,57 @@ def register_trial_hooks(job: Any, context: EvaluationContext) -> None:
 TEST_STAGE_DIR = "/tests"
 
 
-#: The stack that has no sandbox-side component able to write the descriptor.
-GENERIC_FACADE_STACK = "deepagent-facade"
+async def _observed_session_identity(
+    exec_fn: Any, adapter: type, record_path: str
+) -> tuple[str | None, bool]:
+    """Read the adapter's own record from the live sandbox before it downloads.
 
-#: The agent-side log directory Harbor downloads as ``<trial_dir>/agent``.
-AGENT_LOG_DIR = "/logs/agent"
-
-#: The agent's own session summary, written by Harbor's ACP runtime.
-AGENT_ACP_SUMMARY = f"{AGENT_LOG_DIR}/acp-summary.json"
-
-
-async def _observed_agent_reason(exec_fn: Any) -> str:
-    """The terminal reason the trusted host can defend, from the sandbox.
-
-    ``agent_exit_0`` is claimed only when the agent's ACP runner left a completed
-    session summary behind. Anything weaker would be the host asserting an exit it
-    never observed; ``infra_error`` suppresses the judge, so it is reserved for
-    trials the owner already knows are infra-invalid.
+    Returns ``(observed_session_id, recorded)``. When the adapter's recorder is
+    a foreign runtime that mints its own session id (the ACP runner), the record
+    is the only place that identity exists — reading it here is what lets the
+    owner write a descriptor the adapter itself can later locate and verify.
     """
-    probe = await exec_fn(f"test -s {shlex.quote(AGENT_ACP_SUMMARY)}")
-    code = getattr(probe, "return_code", getattr(probe, "exit_code", 1))
-    return "agent_exit_0" if code == 0 else "crashed"
+    read = await exec_fn(f"cat {shlex.quote(record_path)}")
+    code = getattr(read, "return_code", getattr(read, "exit_code", 1))
+    if code != 0:
+        return None, False
+    stdout = getattr(read, "stdout", "") or ""
+    payload = stdout if isinstance(stdout, bytes) else stdout.encode("utf-8", "replace")
+    return session_id_from_record(adapter, payload), True
 
 
 async def _write_terminal_descriptor(context: EvaluationContext, state: Any) -> None:
-    """Write the sandbox's bundle descriptor for a host-described control stack.
+    """Write the bundle descriptor when the OWNER is the terminal observer.
 
-    Only the generic facade flavor is host-described. DSH ships a sandbox-side
-    control plugin that owns its descriptor and its own first-hand observations;
-    overwriting that from the host would replace first-hand evidence with a
-    second-hand guess. For the generic flavor nothing inside the sandbox knows
-    how the agent's session ended, and the evidence gate requires a descriptor —
-    so the trusted owner states what it observed, at the last moment it can:
-    Harbor emits AGENT_END and only then downloads the agent log directory.
-    A descriptor that cannot be written is infra-invalid, not a warning: the run
-    would otherwise be refused later with a message about a missing file.
+    WHICH component can state a trial's terminal outcome is the adapter's
+    declaration (``aeval.agents.contract.TERMINAL_DESCRIPTOR_OWNER``), not a
+    flavor branch here: a stack that owns the session states it from inside the
+    sandbox (DSH writes its own descriptor, and overwriting that from the host
+    would replace a first-hand statement with a second-hand one); a stack that
+    only proxies model traffic never observes an exit, so the owner observes
+    what it can and states it. The timing is forced by Harbor: AGENT_END is
+    emitted and only THEN is the agent log directory downloaded, so this hook is
+    the last moment before the evidence gate looks for the descriptor.
     """
     if state.binding is None:
         return
     environments = context.environments
-    agent = environments.agent(state.trial_id) if environments is not None else None
+    handle = environments.agent(state.trial_id) if environments is not None else None
+    if handle is None:
+        return
+    adapter = handle if isinstance(handle, type) else type(handle)
     try:
-        stack = control_stack_of(type(agent)) if agent is not None else None
+        if terminal_descriptor_owner(adapter) != "host":
+            return
+        record_path = sandbox_session_record(adapter)
     except Exception as exc:  # noqa: BLE001 - a bad declaration cannot be skipped
         state.mark_infra_invalid(f"bundle descriptor: adapter declaration invalid: {exc}")
         return
-    if stack != GENERIC_FACADE_STACK:
+    if record_path is None:
+        state.mark_infra_invalid(
+            "bundle descriptor: the adapter appoints the host as the terminal "
+            "observer but declares no sandbox session record to observe"
+        )
         return
     environment = (
         environments.environment(state.trial_id) if environments is not None else None
@@ -385,16 +391,30 @@ async def _write_terminal_descriptor(context: EvaluationContext, state: Any) -> 
         )
         return
     try:
-        reason = (
-            "infra_error"
-            if state.infra_invalid_reasons
-            else await _observed_agent_reason(exec_fn)
+        observed, recorded = await _observed_session_identity(
+            exec_fn, adapter, record_path
         )
+        if not recorded:
+            reason = "crashed"
+        elif observed is None:
+            state.mark_infra_invalid(
+                f"bundle descriptor: the adapter's record at {record_path} "
+                "carries no session id, so this trial's session cannot be stated"
+            )
+            reason = "infra_error"
+        else:
+            # The owner watched this trial's own record complete: the only
+            # completion claim it can defend. Nothing observed → no claim;
+            # infra failures suppress the judge (infra_error), as everywhere.
+            state.observed_agent_session_id = observed
+            reason = "agent_exit_0"
+        if state.infra_invalid_reasons:
+            reason = "infra_error"
         descriptor = {
             "schema_version": 2,
             "run": state.binding.run.model_dump(mode="json"),
             "trial_id": state.binding.trial_id,
-            "session_id": state.binding.session_id,
+            "session_id": observed or state.binding.session_id,
             "session_root": state.binding.paths.session_root,
             "stop_reason": reason,
             "config_digest": state.binding.config_digest,

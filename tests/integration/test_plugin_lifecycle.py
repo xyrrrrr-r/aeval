@@ -621,27 +621,66 @@ async def test_agent_start_derives_control_paths_from_the_adapter(owned_job, mon
 
 
 class _RecordingEnvironment:
-    """A sandbox that records commands, with optional canned exit codes."""
+    """A sandbox that records commands, with optional canned behaviours."""
 
-    def __init__(self, *, summary_present=True, fail_write=False):
+    def __init__(self, *, summary_present=True, fail_write=False, summary=b'{"session_id": "acp-1"}'):
         self.commands: list[str] = []
         self.summary_present = summary_present
+        self.summary = summary
         self.fail_write = fail_write
 
     async def exec(self, command: str):
         self.commands.append(command)
-        if command.startswith("test -s "):
-            return SimpleNamespace(
-                return_code=0 if self.summary_present else 1, stdout="", stderr=""
-            )
+        if command.startswith("cat "):
+            if not self.summary_present:
+                return SimpleNamespace(return_code=1, stdout="", stderr="No such file")
+            body = self.summary.decode("utf-8")
+            return SimpleNamespace(return_code=0, stdout=body, stderr="")
         if self.fail_write and "bundle_descriptor.json" in command:
             return SimpleNamespace(return_code=1, stdout="", stderr="read-only fs")
         return SimpleNamespace(return_code=0, stdout="", stderr="")
 
 
-def _declared_agent(stack: str):
-    """An adapter double whose CONTROL_STACK is a CLASS member, as declared."""
-    return type("DeclaredAgent", (), {"CONTROL_STACK": stack})()
+class _HostDescriptorAgent:
+    """An adapter double that appoints the HOST as terminal observer.
+
+    Every fact the host needs is declared here — the framework must not know
+    this agent's record filename, its session root or how to read an identity
+    out of it (P1-2b adapter layer).
+    """
+
+    SESSION_RECORD_OUTPUT = "agent_session_record"
+    SESSION_ARTIFACT_DIR = "."
+    TERMINAL_DESCRIPTOR_OWNER = "host"
+    SANDBOX_SESSION_RECORD = "/logs/agent/summary.json"
+
+    @staticmethod
+    def session_id_from_record(record_bytes: bytes) -> str | None:
+        import json as _json
+
+        try:
+            payload = _json.loads(record_bytes.decode("utf-8"))
+        except (UnicodeDecodeError, ValueError):
+            return None
+        if not isinstance(payload, dict):
+            return None
+        value = payload.get("session_id")
+        return value if isinstance(value, str) else None
+
+    @classmethod
+    def locate_session_record(cls, record_root, session_id: str):
+        record = Path(record_root) / "summary.json"
+        if not record.is_file():
+            return None
+        return record if cls.session_id_from_record(record.read_bytes()) == session_id else None
+
+
+class _SandboxDescriptorAgent:
+    """The historical shape: the in-sandbox stack owns and states the session."""
+
+    SESSION_RECORD_OUTPUT = "dsh_session"
+    SESSION_ARTIFACT_DIR = "dsh-home"
+    TERMINAL_DESCRIPTOR_OWNER = "sandbox"
 
 
 def _binding_for(state):
@@ -658,20 +697,18 @@ def _binding_for(state):
         paths=TrialPaths(
             sandbox_cwd="/workspace", dsh_home="/root/.deepagents",
             bundle_path="/logs/agent/bundle_descriptor.json",
-            session_root="deepagent-home", download_root="trials/t/agent",
+            session_root=".", download_root="trials/t/agent",
         ),
     )
 
 
-async def _agent_end_with_stack(owned_job, monkeypatch, name, stack, env):
+async def _agent_end_with_adapter(owned_job, monkeypatch, name, adapter_cls, env):
     plugin, context, event = await _agent_start_with_neutral_audit(
         owned_job, monkeypatch, name
     )
     state = context.trials[str(event.trial_id)]
     state.binding = _binding_for(state)
-    context.environments.capture(
-        _FakeTrial(state.trial_id, env, agent=_declared_agent(stack))
-    )
+    context.environments.capture(_FakeTrial(state.trial_id, env, agent=adapter_cls()))
     await emit(
         owned_job, event.model_copy(update={"event": TrialEvent.AGENT_END}),
         TrialEvent.AGENT_END,
@@ -679,60 +716,78 @@ async def _agent_end_with_stack(owned_job, monkeypatch, name, stack, env):
     return state, env
 
 
-async def test_agent_end_writes_the_terminal_descriptor_for_the_generic_facade(
-    owned_job, monkeypatch
-):
-    """The generic facade has no sandbox-side writer: the owner writes it.
-
-    Harbor emits AGENT_END and only then downloads the agent log directory that
-    carries the descriptor, so this is the last moment it can be written. Without
-    it a real run dies at the evidence gate with "bundle descriptor missing".
-    """
+def _descriptor_from(env):
     import base64
     import json as _json
-
-    env = _RecordingEnvironment()
-    state, env = await _agent_end_with_stack(
-        owned_job, monkeypatch, "generic-descriptor", "deepagent-facade", env
-    )
 
     writes = [c for c in env.commands if "bundle_descriptor.json" in c]
     assert len(writes) == 1, env.commands
     encoded = writes[0].split("printf %s ", 1)[1].split(" |", 1)[0]
-    descriptor = _json.loads(base64.b64decode(encoded))
+    return _json.loads(base64.b64decode(encoded))
+
+
+async def test_agent_end_writes_the_terminal_descriptor_for_a_host_observer(
+    owned_job, monkeypatch
+):
+    """A stack with no sandbox-side witness: the owner writes the descriptor.
+
+    Harbor emits AGENT_END and only then downloads the agent log directory that
+    carries the descriptor, so this hook is the last moment it can be written.
+    Without it every real run died at the evidence gate with "bundle descriptor
+    missing (host-side control plugin)".
+    """
+    env = _RecordingEnvironment()
+    state, env = await _agent_end_with_adapter(
+        owned_job, monkeypatch, "host-descriptor", _HostDescriptorAgent, env
+    )
+
+    descriptor = _descriptor_from(env)
     assert descriptor["schema_version"] == 2
     assert descriptor["trial_id"] == state.trial_id
-    assert descriptor["session_id"] == state.session_id
-    assert descriptor["session_root"] == "deepagent-home"
+    # the identity is the AGENT's own (read out of the trial's record), not the
+    # id aeval minted for the control wire
+    assert descriptor["session_id"] == "acp-1" != state.session_id
+    assert state.observed_agent_session_id == "acp-1"
+    assert descriptor["session_root"] == "."
     assert descriptor["config_digest"] == "e" * 64
     assert descriptor["run"]["run_id"] == "run-hello"
-    # the ACP summary was present, so the host can defend a completed session
+    # the record was present, so a completed session can be defended
     assert descriptor["stop_reason"] == "agent_exit_0"
     assert not state.infra_invalid_reasons
 
 
-async def test_agent_end_states_a_non_completion_when_no_summary_exists(
+async def test_agent_end_states_a_non_completion_when_the_record_is_absent(
     owned_job, monkeypatch
 ):
-    """No summary means the session did not complete: never claim exit 0."""
-    import base64
-    import json as _json
-
+    """No record means the session did not complete: never claim exit 0."""
     env = _RecordingEnvironment(summary_present=False)
-    _, env = await _agent_end_with_stack(
-        owned_job, monkeypatch, "generic-no-summary", "deepagent-facade", env
+    state, env = await _agent_end_with_adapter(
+        owned_job, monkeypatch, "host-no-record", _HostDescriptorAgent, env
     )
-    writes = [c for c in env.commands if "bundle_descriptor.json" in c]
-    encoded = writes[0].split("printf %s ", 1)[1].split(" |", 1)[0]
-    assert _json.loads(base64.b64decode(encoded))["stop_reason"] == "crashed"
+    descriptor = _descriptor_from(env)
+    assert descriptor["stop_reason"] == "crashed"
+    assert descriptor["session_id"] == state.session_id
+    assert state.observed_agent_session_id is None
+
+
+async def test_an_unreadable_identity_is_infra_invalid_and_suppresses_the_judge(
+    owned_job, monkeypatch
+):
+    """A record that carries no identity cannot state this trial's session."""
+    env = _RecordingEnvironment(summary=b"not-json")
+    state, env = await _agent_end_with_adapter(
+        owned_job, monkeypatch, "host-unreadable", _HostDescriptorAgent, env
+    )
+    assert _descriptor_from(env)["stop_reason"] == "infra_error"
+    assert any("carries no session id" in r for r in state.infra_invalid_reasons)
 
 
 async def test_a_sandbox_side_stack_owns_its_own_descriptor(owned_job, monkeypatch):
     """DSH writes its descriptor in the sandbox: the owner must not overwrite
     a first-hand statement with a second-hand one."""
     env = _RecordingEnvironment()
-    state, env = await _agent_end_with_stack(
-        owned_job, monkeypatch, "dsh-descriptor", "dsh", env
+    state, env = await _agent_end_with_adapter(
+        owned_job, monkeypatch, "sandbox-descriptor", _SandboxDescriptorAgent, env
     )
     assert not [c for c in env.commands if "bundle_descriptor.json" in c]
     assert not state.infra_invalid_reasons
@@ -742,8 +797,8 @@ async def test_a_descriptor_that_cannot_be_written_is_infra_invalid(
     owned_job, monkeypatch
 ):
     env = _RecordingEnvironment(fail_write=True)
-    state, _ = await _agent_end_with_stack(
-        owned_job, monkeypatch, "generic-write-fails", "deepagent-facade", env
+    state, _ = await _agent_end_with_adapter(
+        owned_job, monkeypatch, "host-write-fails", _HostDescriptorAgent, env
     )
     assert any("bundle descriptor could not be written" in r
                for r in state.infra_invalid_reasons), state.infra_invalid_reasons

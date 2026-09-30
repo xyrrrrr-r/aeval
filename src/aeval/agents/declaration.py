@@ -17,6 +17,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from importlib import import_module
 from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -79,6 +80,13 @@ class AgentDeclaration(BaseModel):
     artifacts: list[dict] = Field(default_factory=list)
     #: In-sandbox control stack needed, if any (absent = none).
     control_stack: str | None = None
+    #: Which component states the trial's terminal outcome and therefore writes
+    #: the bundle descriptor (aeval.agents.contract): ``sandbox`` when the stack
+    #: owns the session, ``host`` when it only proxies model traffic.
+    terminal_descriptor_owner: str = "sandbox"
+    #: The sandbox file holding the official session record, when it is one
+    #: known file (so the owner can observe its identity before log download).
+    sandbox_session_record: str | None = None
     #: Named launch profiles (``default`` is used when none is named).
     launch: dict[str, LaunchProfile] = Field(default_factory=dict)
 
@@ -378,6 +386,24 @@ def declaration_class_mismatches(
             f"control_stack: declaration={declaration.control_stack!r} "
             f"adapter={_control_stack_of(adapter)!r}"
         )
+    contract = import_module("aeval.agents.contract")
+    for name, declared, on_class in (
+        ("control_stack", declaration.control_stack, _control_stack_of(adapter)),
+        (
+            "terminal_descriptor_owner",
+            declaration.terminal_descriptor_owner,
+            contract.terminal_descriptor_owner(adapter),
+        ),
+        (
+            "sandbox_session_record",
+            declaration.sandbox_session_record,
+            contract.sandbox_session_record(adapter),
+        ),
+    ):
+        if declared != on_class:
+            mismatches.append(
+                f"{name}: declaration={declared!r} adapter={on_class!r}"
+            )
     for attr, value in (
         ("SANDBOX_HOME", declaration.sandbox_home),
         ("SESSION_ARTIFACT_DIR", declaration.session_artifact_dir),

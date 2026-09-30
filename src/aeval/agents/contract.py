@@ -43,6 +43,10 @@ __all__ = [
     "capabilities_of",
     "declared_capabilities",
     "session_record_output_of",
+    "terminal_descriptor_owner",
+    "sandbox_session_record",
+    "session_id_from_record",
+    "locate_session_record",
     "load_adapter_class",
     "required_capability_gaps",
     "adapter_declaration_gap",
@@ -94,6 +98,36 @@ SESSION_RECORD_OUTPUT_ATTR = "SESSION_RECORD_OUTPUT"
 #: The session-record collect outputs an adapter may declare. Must match the
 #: suite's ``driver.session_record`` — the pairing is refused at composition.
 SESSION_RECORD_OUTPUTS = frozenset({"dsh_session", "agent_session_record"})
+
+#: Contract hook: locate THIS adapter's official session record. Session-record
+#: shape is adapter-flavored (DSH nests one file per session id in a project
+#: tree; an ACP runner writes a single summary whose own session id is the
+#: identity), so the framework asks the adapter instead of encoding its first
+#: agent's layout a second time in the gate. Signature:
+#: ``(record_root: Path, session_id: str) -> Path | None``.
+SESSION_RECORD_LOCATOR_ATTR = "locate_session_record"
+
+#: Contract hook: the session id the record itself carries, or None when the
+#: adapter's identity is the id aeval minted and handed to the stack (DSH).
+#: Only an adapter whose record is inscribed by a foreign runtime needs this:
+#: it is how the owner learns which session the record belongs to. Signature:
+#: ``(record_bytes: bytes) -> str | None``.
+SESSION_ID_FROM_RECORD_ATTR = "session_id_from_record"
+
+#: Declaration: the sandbox path of the official record when it is one known
+#: file (so the owner can observe its identity before Harbor downloads the
+#: agent logs). Absent means the record is a tree the host never reads live.
+SANDBOX_SESSION_RECORD_ATTR = "SANDBOX_SESSION_RECORD"
+
+#: Declaration: which component can state the trial's terminal session outcome,
+#: and therefore writes the bundle descriptor. ``sandbox`` is the historical
+#: default — the in-sandbox control stack owns the session, so it owns the
+#: statement (DSH). ``host`` is for a stack that only proxies model traffic and
+#: never observes an exit: then the owner observes what it can and states it,
+#: because the evidence gate refuses to grade without a descriptor.
+TERMINAL_DESCRIPTOR_OWNER_ATTR = "TERMINAL_DESCRIPTOR_OWNER"
+TERMINAL_DESCRIPTOR_OWNERS = frozenset({"sandbox", "host"})
+TERMINAL_DESCRIPTOR_OWNERS_DEFAULT = "sandbox"
 
 
 def load_adapter_class(import_path: str) -> type:
@@ -173,6 +207,77 @@ def session_record_output_of(adapter: type) -> str:
             "read_session_record() bytes belong to."
         )
     return value
+
+
+def terminal_descriptor_owner(adapter: type) -> str:
+    """Which component must write this adapter's terminal bundle descriptor.
+
+    Optional, defaulting to ``sandbox``: an adapter whose control stack owns the
+    session also owns the terminal statement about it, and an adapter with no
+    declaration cannot silently appoint the host as the observer.
+    """
+    value = getattr(adapter, TERMINAL_DESCRIPTOR_OWNER_ATTR, TERMINAL_DESCRIPTOR_OWNERS_DEFAULT)
+    if not isinstance(value, str) or value not in TERMINAL_DESCRIPTOR_OWNERS:
+        raise SuiteError(
+            f"Agent adapter {describe_adapter(adapter)} declares "
+            f"{TERMINAL_DESCRIPTOR_OWNER_ATTR}={value!r}. Declare one of "
+            f"{sorted(TERMINAL_DESCRIPTOR_OWNERS)} — the component that can "
+            "state the terminal session outcome."
+        )
+    return value
+
+
+def sandbox_session_record(adapter: type) -> str | None:
+    """The sandbox path of the adapter's official record, when it is one file."""
+    value = getattr(adapter, SANDBOX_SESSION_RECORD_ATTR, None)
+    if value is None:
+        return None
+    if not isinstance(value, str) or not value.startswith("/"):
+        raise SuiteError(
+            f"Agent adapter {describe_adapter(adapter)} declares "
+            f"{SANDBOX_SESSION_RECORD_ATTR}={value!r}; it must be an absolute "
+            "sandbox path, or absent."
+        )
+    return value
+
+
+def session_id_from_record(adapter: type, record_bytes: bytes) -> str | None:
+    """The session id inscribed in the adapter's own record, if it has one."""
+    hook = getattr(adapter, SESSION_ID_FROM_RECORD_ATTR, None)
+    if hook is None:
+        return None
+    if not callable(hook):
+        raise SuiteError(
+            f"Agent adapter {describe_adapter(adapter)} declares "
+            f"{SESSION_ID_FROM_RECORD_ATTR} as a non-callable; it must be a "
+            "function of the record bytes."
+        )
+    value = hook(record_bytes)
+    if value is not None and not isinstance(value, str):
+        raise SuiteError(
+            f"{describe_adapter(adapter)}.{SESSION_ID_FROM_RECORD_ATTR} returned "
+            f"{type(value).__name__}; return the session id string or None."
+        )
+    return value
+
+
+def locate_session_record(adapter: type, record_root: Any, session_id: str) -> Any:
+    """The adapter's official session record for ``session_id``, or None.
+
+    Fail closed on a missing hook rather than assuming a layout: an adapter that
+    declares a session-record output but cannot say where its record lives would
+    otherwise be graded against whatever file happened to be there.
+    """
+    hook = getattr(adapter, SESSION_RECORD_LOCATOR_ATTR, None)
+    if not callable(hook):
+        raise SuiteError(
+            f"Agent adapter {describe_adapter(adapter)} declares "
+            f"SESSION_RECORD_OUTPUT="
+            f"{getattr(adapter, SESSION_RECORD_OUTPUT_ATTR, None)!r} without a "
+            f"{SESSION_RECORD_LOCATOR_ATTR}() — the framework cannot verify a "
+            "record it cannot locate."
+        )
+    return hook(record_root, session_id)
 
 
 def declared_capabilities(import_path: str) -> frozenset[str]:

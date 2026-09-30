@@ -341,6 +341,12 @@ class DshAgent(BaseInstalledAgent):
     SANDBOX_HOME = "/logs/agent/dsh-home"
     SESSION_ARTIFACT_DIR = "dsh-home"
 
+    # Contract hook (aeval.agents.contract.SESSION_RECORD_LOCATOR_ATTR): the
+    # official record is one session file per id under a project-nested tree.
+    # DSH's identity is the id aeval minted and handed to the stack, so this
+    # adapter declares no session_id_from_record — there is nothing to observe.
+    locate_session_record = staticmethod(find_session_record)
+
     ADAPTER_ID = "dsh"
     ADAPTER_VERSION = "1"
     ADAPTER_MODE = "acp_stdio"

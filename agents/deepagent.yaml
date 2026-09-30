@@ -44,7 +44,18 @@ transcript:
 observations: []
 
 sandbox_home: /root/.deepagents
-session_artifact_dir: deepagent-home
+# Relative to the DESCRIPTOR's directory, i.e. to Harbor's agent log directory
+# (/logs/agent, downloaded to <trial_dir>/agent/): the ACP runner writes its
+# summary at that root. There is no deepagent-home tree — declaring one made
+# every real run fail with "session_root does not exist" (example-lab, P2-5b).
+session_artifact_dir: "."
+
+# The generic facade only proxies model traffic: nothing in the sandbox ever
+# sees an exit, so the owner observes the agent's own record at agent end and
+# states the terminal outcome itself (aeval.agents.contract). Which file that
+# record is belongs to the adapter, not to the framework.
+terminal_descriptor_owner: host
+sandbox_session_record: /logs/agent/acp-summary.json
 
 # How this adapter is launched in a deployment. The registry entry (uvx
 # deepagents-code==0.1.78 --acp) is built by the adapter itself, so the

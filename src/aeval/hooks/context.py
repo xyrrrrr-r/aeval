@@ -32,6 +32,11 @@ class TrialState:
     # attribution). Evidence only — never used for scoring.
     broker_diagnostics: list[str] = field(default_factory=list)
     session_id: str = field(default_factory=lambda: str(uuid4()))
+    # The agent-side identity, read by the owner out of this trial's own session
+    # record when the adapter's recorder is a foreign runtime that mints its own
+    # id (the ACP runner). None until observed; never set from anywhere but the
+    # trial's live record (P1-2b observed identity).
+    observed_agent_session_id: str | None = None
     phase: Literal["created", "running", "ended", "failed", "cancelled"] = "created"
     trial_dir: Path | None = None
     event_identity: str | None = None
@@ -202,7 +207,19 @@ class EvaluationContext:
         try:
             state.binding.verify_descriptor(descriptor)
         except ValueError as exc:
-            raise LifecycleError(str(exc)) from exc
+            observed = state.observed_agent_session_id
+            if observed is None or descriptor.session_id != observed:
+                raise LifecycleError(str(exc)) from exc
+            # Observed identity: the descriptor states the session the AGENT
+            # recorded, which is not the id aeval minted for the control wire.
+            # Re-verify by construction, with that identity substituted — every
+            # other field must still match the trusted binding exactly.
+            try:
+                state.binding.model_copy(
+                    update={"session_id": observed}
+                ).verify_descriptor(descriptor)
+            except ValueError as strict:
+                raise LifecycleError(str(strict)) from strict
 
     def exclusion_lines(self) -> list[str]:
         return [

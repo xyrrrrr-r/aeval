@@ -67,7 +67,17 @@ _DEEPAGENTS_CODE_VERSION = "0.1.78"
 # the state is not part of the sealed transcript (the trajectory comes from
 # the host-side runner), so nothing downloads it in P2-5a.
 _SANDBOX_HOME = "/root/.deepagents"
-_SESSION_ARTIFACT_DIR = "deepagent-home"
+# The session artifact directory RELATIVE TO THE DESCRIPTOR's directory, i.e.
+# to Harbor's agent log directory (the framework's "/logs/agent", which Harbor
+# downloads to <trial_dir>/agent/). The ACP runner writes its summary at that
+# root — there is no deepagent-home tree, and declaring one made every real run
+# fail with "session_root does not exist" until a strong test caught it (the
+# declared artifact dir must be where the adapter's record actually is).
+_SESSION_ARTIFACT_DIR = "."
+
+# Where the ACP runner's artifacts live INSIDE the sandbox (harbor
+# acp.py:377-378 mirrors this as the agent environment's log dir).
+_SANDBOX_LOGS_DIR = "/logs/agent"
 
 # Mirror of AcpAgent's artifacts (harbor acp.py:377-378, :1622). Defined here
 # so a Harbor rename fails loudly at read time instead of silently reading a
@@ -218,6 +228,17 @@ class DeepgentAgent(AcpAgent):
     SANDBOX_HOME = _SANDBOX_HOME
     SESSION_ARTIFACT_DIR = _SESSION_ARTIFACT_DIR
 
+    # Which component can state the trial's terminal session outcome
+    # (aeval.agents.contract.TERMINAL_DESCRIPTOR_OWNER_ATTR): the generic facade
+    # only proxies model traffic — nothing inside the sandbox ever sees an exit
+    # — so the owner observes what it can and writes the descriptor itself.
+    TERMINAL_DESCRIPTOR_OWNER = "host"
+
+    # The official record, as one known sandbox file: the owner reads it at
+    # agent end (before Harbor downloads the logs) to learn the ACP session id
+    # and to state whether the session completed.
+    SANDBOX_SESSION_RECORD = f"{_SANDBOX_LOGS_DIR}/{_SUMMARY_FILENAME}"
+
     # The collect slot this adapter's official session record belongs to
     # (aeval.agents.contract). deepagent's record is Harbor's ACP runner
     # summary — not a DSH session file, so it takes the generic slot.
@@ -292,6 +313,45 @@ class DeepgentAgent(AcpAgent):
             if isinstance(value, str) and value:
                 return value
         return None
+
+    @staticmethod
+    def session_id_from_record(record_bytes: bytes) -> str | None:
+        """The session id inscribed in the runner's summary, or None.
+
+        The ACP runtime mints its own session id; aeval's trial session id is
+        the control-wire identity and never appears in the record. So the record
+        is the only source of the identity the descriptor has to carry —
+        declared here instead of parsed in the framework (P1-2b: observed
+        identity belongs to the adapter that observes it).
+        """
+        try:
+            summary = json.loads(record_bytes.decode("utf-8"))
+        except (UnicodeDecodeError, ValueError):
+            return None
+        if not isinstance(summary, dict):
+            return None
+        session = summary.get("session")
+        if not isinstance(session, dict):
+            return None
+        session_id = session.get("sessionId")
+        return session_id if isinstance(session_id, str) and session_id else None
+
+    @classmethod
+    def locate_session_record(cls, record_root: Any, session_id: str) -> Path | None:
+        """``<record_root>/acp-summary.json`` when it records ``session_id``.
+
+        The ACP runner writes exactly one summary per run at the root of the
+        agent log directory — the same directory the descriptor is written to —
+        so ``SESSION_ARTIFACT_DIR`` is ``"."`` and the record is found here.
+        """
+        record = Path(record_root) / _SUMMARY_FILENAME
+        if not record.is_file():
+            return None
+        try:
+            recorded = cls.session_id_from_record(record.read_bytes())
+        except OSError:
+            return None
+        return record if recorded == session_id else None
 
     def read_session_record(self) -> bytes:
         """Contract member: Harbor's official session record for the last run.
