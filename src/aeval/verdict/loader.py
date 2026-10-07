@@ -21,7 +21,35 @@ from aeval.contracts import GradeResult, TrialRecord
 from aeval.suite_models import GraderDeclaration
 from aeval.verdict.base import Grader, ResolvedGrader
 
-__all__ = ["GraderLoadError", "LoadedModuleGrader", "load_grader", "split_impl"]
+__all__ = [
+    "GraderLoadError",
+    "LoadedModuleGrader",
+    "load_grader",
+    "load_grader_module",
+    "split_impl",
+]
+
+
+def load_grader_module(
+    reference: Path, declared: GraderDeclaration
+) -> Any:
+    """Load and verify a grader module, returning the module itself.
+
+    轨迹分析（turn 切面）需要的不止 ``grade``——套件模块可能声明
+    ``turn_metrics(task_id)`` 之类的分析入口。身份校验与
+    :func:`load_grader` 完全一致（模块必须自证 id/version），只是
+    返回模块对象而非协议包装。
+    """
+    reference = Path(reference)
+    module = _load_module(reference)
+    grader_id = _required_text(module, "GRADER_ID")
+    grader_version = _required_text(module, "GRADER_VERSION")
+    if declared.version is not None and grader_version != declared.version:
+        raise GraderLoadError(
+            f"grader module {grader_id} declares version {grader_version!r} "
+            f"but the suite declared {declared.version!r}"
+        )
+    return module
 
 
 class GraderLoadError(RuntimeError):

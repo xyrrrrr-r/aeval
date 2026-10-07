@@ -453,6 +453,15 @@ class TrajectoryGrader:
         self.veto = veto
         self._metrics = list(metrics)
 
+    @property
+    def metrics(self) -> tuple[Any, ...]:
+        """The declared metric objects (read-only view).
+
+        轨迹分析（turn 切面）复用这同一批对象做逐条归因——判分器与
+        分析面板之间不存在第二套指标构建。
+        """
+        return tuple(self._metrics)
+
     async def grade(self, record: TrialRecord):  # -> GradeResult
         from aeval.contracts import GradeResult, Score
         from aeval.verdict.trajectory.aggregate import fold_outcomes
