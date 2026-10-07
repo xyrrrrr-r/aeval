@@ -36,17 +36,22 @@ from typing import Any, Literal, Sequence
 from aeval.contracts import CanonicalTranscript, TrialRecord
 
 __all__ = [
+    "SealedArtifactError",
     "SealedTranscriptError",
     "ToolEvent",
     "TrajectoryEvidence",
     "TrajectoryGrader",
+    "TrajectoryMessage",
+    "load_sealed_anchors",
     "load_sealed_transcript",
     "build_evidence",
+    "agent_replies_from_steps",
+    "user_messages_from_steps",
 ]
 
 
-class SealedTranscriptError(RuntimeError):
-    """The sealed canonical transcript cannot be graded from.
+class SealedArtifactError(RuntimeError):
+    """A sealed artifact cannot be graded from.
 
     Raised for a missing artifact reference, a missing runtime base
     directory, path traversal, IO errors, digest mismatch, or a parse
@@ -57,6 +62,15 @@ class SealedTranscriptError(RuntimeError):
     def __init__(self, reason: str) -> None:
         super().__init__(reason)
         self.reason = reason
+
+
+class SealedTranscriptError(SealedArtifactError):
+    """The sealed canonical transcript cannot be graded from.
+
+    Kept as its own name for the transcript's established callers; the
+    shared failure mode (and the ``reason`` attribute) lives on the
+    sealed-artifact base.
+    """
 
 
 @dataclass(frozen=True)
@@ -72,6 +86,16 @@ class ToolEvent:
 
 
 @dataclass(frozen=True)
+class TrajectoryMessage:
+    """One conversation-surface message, positioned in the trajectory."""
+
+    step_id: int
+    source: str          # "agent" | "user" | "system" | "developer"
+    text: str
+    turn: int | None = None
+
+
+@dataclass(frozen=True)
 class TrajectoryEvidence:
     """Precomputed, read-only views over one sealed trajectory."""
 
@@ -83,6 +107,14 @@ class TrajectoryEvidence:
     total_prompt_tokens: int | None = None
     total_completion_tokens: int | None = None
     total_cached_tokens: int | None = None
+    # --- conversation-surface and timing views (integration P2) ---
+    # Additive with defaults: P1 metrics read ``transcript`` directly,
+    # so existing graders keep working unchanged.
+    agent_messages: tuple[TrajectoryMessage, ...] = ()
+    user_message_texts: tuple[str, ...] = ()
+    step_timestamps: tuple[str | None, ...] = ()
+    turn_count: int | None = None
+    wall_clock_seconds: float | None = None
     extras: dict[str, Any] = field(default_factory=dict)
 
     @property
@@ -94,6 +126,45 @@ class TrajectoryEvidence:
         return prompt + completion
 
 
+def _load_sealed_artifact(record: TrialRecord, name: str) -> bytes:
+    """Read one sealed artifact's bytes, verifying its recorded sha256.
+
+    The shared discipline behind every sealed-evidence loader: resolve
+    against the runtime-only ``artifact_base`` the grading pipeline
+    injects, refuse non-portable paths, and reject any digest mismatch.
+    """
+    ref = record.artifacts.get(name)
+    if ref is None:
+        raise SealedArtifactError(
+            f"record carries no {name!r} artifact — that evidence was "
+            "never sealed"
+        )
+    if not record.artifact_base:
+        raise SealedArtifactError(
+            "record carries no artifact_base; sealed artifact paths cannot "
+            "be resolved (pipeline must inject the trial directory)"
+        )
+    rel = Path(ref.path)
+    if rel.is_absolute() or ".." in rel.parts:
+        raise SealedArtifactError(
+            f"sealed artifact path is not portable: {ref.path!r}"
+        )
+    path = Path(record.artifact_base) / rel
+    try:
+        content = path.read_bytes()
+    except OSError as exc:
+        raise SealedArtifactError(
+            f"sealed artifact {name!r} unreadable at {rel}: {exc}"
+        ) from exc
+    digest = hashlib.sha256(content).hexdigest()
+    if digest != ref.sha256:
+        raise SealedArtifactError(
+            f"sealed artifact {name!r} digest mismatch for {rel}: recorded "
+            f"{ref.sha256[:16]}… but file hashes {digest[:16]}…"
+        )
+    return content
+
+
 def load_sealed_transcript(record: TrialRecord) -> CanonicalTranscript:
     """Load and verify the trial's sealed canonical transcript.
 
@@ -101,35 +172,10 @@ def load_sealed_transcript(record: TrialRecord) -> CanonicalTranscript:
     the grading pipeline injects; its sha256 must match the sealed
     ``ArtifactRef`` or the evidence is rejected.
     """
-    ref = record.artifacts.get("canonical_transcript")
-    if ref is None:
-        raise SealedTranscriptError(
-            "record carries no 'canonical_transcript' artifact — trajectory "
-            "evidence was never sealed"
-        )
-    if not record.artifact_base:
-        raise SealedTranscriptError(
-            "record carries no artifact_base; sealed artifact paths cannot "
-            "be resolved (pipeline must inject the trial directory)"
-        )
-    rel = Path(ref.path)
-    if rel.is_absolute() or ".." in rel.parts:
-        raise SealedTranscriptError(
-            f"sealed artifact path is not portable: {ref.path!r}"
-        )
-    path = Path(record.artifact_base) / rel
     try:
-        content = path.read_bytes()
-    except OSError as exc:
-        raise SealedTranscriptError(
-            f"sealed transcript unreadable at {rel}: {exc}"
-        ) from exc
-    digest = hashlib.sha256(content).hexdigest()
-    if digest != ref.sha256:
-        raise SealedTranscriptError(
-            f"sealed transcript digest mismatch for {rel}: recorded "
-            f"{ref.sha256[:16]}… but file hashes {digest[:16]}…"
-        )
+        content = _load_sealed_artifact(record, "canonical_transcript")
+    except SealedArtifactError as exc:
+        raise SealedTranscriptError(exc.reason) from exc
     try:
         data = json.loads(content)
     except (UnicodeDecodeError, json.JSONDecodeError) as exc:
@@ -148,6 +194,30 @@ def load_sealed_transcript(record: TrialRecord) -> CanonicalTranscript:
         raise SealedTranscriptError(
             f"sealed transcript does not match the canonical schema: {exc}"
         ) from exc
+
+
+def load_sealed_anchors(record: TrialRecord) -> dict[str, Any]:
+    """Load and verify the trial's sealed rubric anchors (P2 channel).
+
+    Returns the parsed ``rubric/task_anchors.json`` mapping (suites key
+    it by task_id); raises :class:`SealedArtifactError` when the anchors
+    were never sealed, cannot be read, fail their digest check, or are
+    not a JSON object — the caller translates that into
+    ``cannot_judge``, never into a guessed rubric.
+    """
+    content = _load_sealed_artifact(record, "task_anchors")
+    try:
+        data = json.loads(content)
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise SealedArtifactError(
+            f"sealed task anchors are not valid JSON: {exc}"
+        ) from exc
+    if not isinstance(data, dict):
+        raise SealedArtifactError(
+            "sealed task anchors are not a JSON object — the per-task "
+            "rubric table has no usable shape"
+        )
+    return data
 
 
 def _observation_text(observation: Any, call_id: str) -> tuple[str, bool]:
@@ -215,6 +285,15 @@ def build_evidence(
     if isinstance(atif_extra, dict):
         extras = dict(atif_extra)
 
+    # --- conversation-surface and timing views (integration P2) ---
+    agent_messages = agent_replies_from_steps(steps)
+    user_message_texts = user_message_texts_from_steps(steps)
+    step_timestamps = tuple(
+        getattr(step, "timestamp", None) for step in steps
+    )
+    turn_count = _turn_count(steps)
+    wall_clock_seconds = _wall_clock_seconds(step_timestamps)
+
     return TrajectoryEvidence(
         transcript=transcript,
         stop_reason=stop_reason,
@@ -224,8 +303,133 @@ def build_evidence(
         total_prompt_tokens=prompt,
         total_completion_tokens=completion,
         total_cached_tokens=cached,
+        agent_messages=agent_messages,
+        user_message_texts=user_message_texts,
+        step_timestamps=step_timestamps,
+        turn_count=turn_count,
+        wall_clock_seconds=wall_clock_seconds,
         extras=extras,
     )
+
+
+def _turn_marker_of(step: Any) -> int | None:
+    """The step's turn marker, adapter-anonymously.
+
+    Adapters stash session facts in ``step.extra`` under their own key;
+    the marker we need is the behavior — "an integer ``turn`` field in
+    some ``extra`` sub-object" — so we scan for the shape instead of
+    naming any concrete adapter (core code must stay agent-neutral).
+    """
+    extra = getattr(step, "extra", None)
+    if not isinstance(extra, dict):
+        return None
+    for value in extra.values():
+        if isinstance(value, dict):
+            turn = value.get("turn")
+            if isinstance(turn, int):
+                return turn
+    return None
+
+
+def agent_replies_from_steps(
+    steps: Sequence[Any],
+) -> tuple[TrajectoryMessage, ...]:
+    """Agent-surface messages, in step order, empty messages dropped.
+
+    The text is kept verbatim (not stripped) — length-sensitive metrics
+    must see what the adapter actually emitted.
+    """
+    out: list[TrajectoryMessage] = []
+    for step in steps:
+        if (step.source or "") != "agent":
+            continue
+        text = step.message or ""
+        if not text.strip():
+            continue
+        out.append(
+            TrajectoryMessage(
+                step_id=step.step_id,
+                source=step.source,
+                text=text,
+                turn=_turn_marker_of(step),
+            )
+        )
+    return tuple(out)
+
+
+def user_messages_from_steps(
+    steps: Sequence[Any],
+) -> tuple[TrajectoryMessage, ...]:
+    """User-surface messages, in step order, empty ones dropped.
+
+    Positioned (``step_id``-carrying) so probe-then-reply matching can
+    find the first agent answer after each user turn.
+    """
+    out: list[TrajectoryMessage] = []
+    for step in steps:
+        if (step.source or "") != "user":
+            continue
+        text = step.message or ""
+        if not text.strip():
+            continue
+        out.append(
+            TrajectoryMessage(
+                step_id=step.step_id,
+                source=step.source,
+                text=text,
+                turn=_turn_marker_of(step),
+            )
+        )
+    return tuple(out)
+
+
+def user_message_texts_from_steps(steps: Sequence[Any]) -> tuple[str, ...]:
+    """User-surface message texts, in step order, empty ones dropped."""
+    return tuple(message.text for message in user_messages_from_steps(steps))
+
+
+def _turn_count(steps: Sequence[Any]) -> int | None:
+    """Distinct turn markers observed, or None when none were recorded.
+
+    Counts the distinct marker values (sessions may interleave steps of
+    the same turn); None is honest — the transcript simply carries no
+    turn metadata, and turn-based metrics must skip rather than guess.
+    """
+    turns = {
+        marker for marker in (_turn_marker_of(step) for step in steps)
+        if marker is not None
+    }
+    return len(turns) if turns else None
+
+
+def _wall_clock_seconds(
+    step_timestamps: Sequence[str | None],
+) -> float | None:
+    """First-to-last-step wall time, or None when not computable.
+
+    Requires BOTH endpoints as parseable ISO timestamps: a span measured
+    from one endpoint only would be a fabrication. A negative span is
+    rejected the same way (clocks ran backwards — the data is not
+    trustworthy enough to score).
+    """
+    if not step_timestamps:
+        return None
+    from datetime import datetime
+
+    def _parse(value: str | None) -> datetime | None:
+        if not isinstance(value, str) or not value:
+            return None
+        try:
+            return datetime.fromisoformat(value)
+        except ValueError:
+            return None
+
+    first = _parse(step_timestamps[0])
+    last = _parse(step_timestamps[-1])
+    if first is None or last is None:
+        return None
+    delta = (last - first).total_seconds()
+    return delta if delta >= 0 else None
 
 
 class TrajectoryGrader:

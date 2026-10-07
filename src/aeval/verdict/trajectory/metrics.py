@@ -29,6 +29,8 @@ from aeval.verdict.trajectory.base import ToolEvent, TrajectoryEvidence
 __all__ = [
     "TrajectoryMetric",
     "StepEfficiency",
+    "TaskWallClock",
+    "TurnEfficiency",
     "TokenEfficiency",
     "ToolErrorRate",
     "LoopDetection",
@@ -180,6 +182,87 @@ class StepEfficiency(TrajectoryMetric):
             score,
             [f"agent used {used} of {self.max_steps} granted steps"],
             evidence=[f"agent_steps={used}"],
+        )
+
+
+class TaskWallClock(TrajectoryMetric):
+    """First-to-last-step wall time vs the suite-declared time budget.
+
+    Score = budget / elapsed clamped to 1 — the share of headroom left.
+    ``degraded`` once the budget is fully consumed, floored at 0.2 (an
+    efficiency metric never zeroes a verdict-relevant score). Skips
+    when no budget is declared, when the transcript carries no
+    timestamps, or when they do not parse into a non-negative span —
+    an unmeurable duration is never a guessed one.
+    """
+
+    name = "task_wall_clock"
+    category = "efficiency"
+
+    def __init__(self, max_seconds: float | None = None) -> None:
+        if max_seconds is not None and max_seconds <= 0:
+            raise ValueError(f"{self.name}: max_seconds must be positive")
+        self.max_seconds = max_seconds
+
+    def evaluate(self, evidence: TrajectoryEvidence) -> MetricOutcome:
+        if self.max_seconds is None:
+            return _outcome(self, "skipped", None, ["no time budget declared"])
+        elapsed = evidence.wall_clock_seconds
+        if elapsed is None:
+            return _outcome(
+                self,
+                "skipped",
+                None,
+                ["wall clock not computable from the sealed timestamps"],
+            )
+        score = _clamp01(self.max_seconds / elapsed) if elapsed > 0 else 1.0
+        detail = f"elapsed {elapsed:.1f}s of the {self.max_seconds:.0f}s budget"
+        if elapsed >= self.max_seconds:
+            return _outcome(
+                self, "degraded", score, [f"{detail} — no headroom left"],
+                evidence=[f"wall_clock_seconds={elapsed:.3f}"],
+            )
+        return _outcome(
+            self, "ok", score, [detail],
+            evidence=[f"wall_clock_seconds={elapsed:.3f}"],
+        )
+
+
+class TurnEfficiency(TrajectoryMetric):
+    """Conversation turns vs the suite-declared turn budget.
+
+    A turn-budget companion to :class:`StepEfficiency` for multi-turn
+    sessions: score = budget / used clamped to 1, ``degraded`` once the
+    budget is consumed. Skips when the transcript carries no turn
+    markers at all (single-shot drivers record none) — never a guess.
+    """
+
+    name = "turn_efficiency"
+    category = "efficiency"
+
+    def __init__(self, max_turns: int | None = None) -> None:
+        if max_turns is not None and max_turns <= 0:
+            raise ValueError(f"{self.name}: max_turns must be positive")
+        self.max_turns = max_turns
+
+    def evaluate(self, evidence: TrajectoryEvidence) -> MetricOutcome:
+        if self.max_turns is None:
+            return _outcome(self, "skipped", None, ["no turn budget declared"])
+        turns = evidence.turn_count
+        if turns is None:
+            return _outcome(
+                self, "skipped", None,
+                ["sealed transcript carries no turn markers"],
+            )
+        score = _clamp01(self.max_turns / turns)
+        detail = f"session used {turns} of {self.max_turns} granted turns"
+        if turns >= self.max_turns:
+            return _outcome(
+                self, "degraded", score, [f"{detail} — no headroom left"],
+                evidence=[f"turn_count={turns}"],
+            )
+        return _outcome(
+            self, "ok", score, [detail], evidence=[f"turn_count={turns}"],
         )
 
 

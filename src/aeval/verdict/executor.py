@@ -81,7 +81,8 @@ async def execute_exec_grader(
     There is no isolated execution environment in this codebase yet:
     calling this raises :class:`ExecIsolationUnavailableError` instead
     of silently grading in-process. Suites must declare pure graders
-    for the first closed loop (HARBOR_DSH_E2E_LINUX.md §11.3).
+    for the first closed loop (the historical E2E Linux plan's exec-
+    isolation clause; see docs/TESTS/E2E-suite-skeleton.md).
     """
     raise ExecIsolationUnavailableError(
         f"exec grader {grader.grader.id}@{grader.grader.version} refused: no "
