@@ -155,7 +155,7 @@ def _run_payload():
 def _paths_payload():
     return {
         "sandbox_cwd": "/workspace/任务",
-        "dsh_home": "/tmp/dsh-home",
+        "agent_home": "/tmp/dsh-home",
         "bundle_path": "/tmp/evidence/bundle_descriptor.json",
         "session_root": "sessions/s-1",
         "download_root": "downloads/trial-1",
@@ -235,7 +235,7 @@ def test_bindings_reject_invalid_digests(value):
         TrialBinding.model_validate({**_binding_payload(), "config_digest": value})
 
 
-@pytest.mark.parametrize("field", ["sandbox_cwd", "dsh_home", "bundle_path"])
+@pytest.mark.parametrize("field", ["sandbox_cwd", "agent_home", "bundle_path"])
 @pytest.mark.parametrize("path", [
     "", "relative/path", "C:/workspace", "C:workspace", "//server/share",
     "\\workspace", "/workspace\\child", "/workspace/../escape", "/workspace:ads",
@@ -247,7 +247,7 @@ def test_trial_paths_require_absolute_posix_sandbox_paths(field, path):
         TrialPaths.model_validate({**_paths_payload(), field: path})
 
 
-@pytest.mark.parametrize("field", ["sandbox_cwd", "dsh_home", "bundle_path"])
+@pytest.mark.parametrize("field", ["sandbox_cwd", "agent_home", "bundle_path"])
 def test_trial_paths_normalize_posix_paths_without_host_os_conversion(field):
     paths = TrialPaths.model_validate({**_paths_payload(), field: "/工作区//./模型-é/"})
     assert getattr(paths, field) == "/工作区/模型-é"

@@ -10,6 +10,8 @@ from __future__ import annotations
 from pathlib import Path, PurePosixPath, PureWindowsPath
 from typing import Sequence
 
+import yaml
+
 from aeval.suite_loader.inheritance import (
     chain_digest_of,
     check_no_harbor_overlap,
@@ -65,6 +67,78 @@ def discover_suites(suites_dirs: Sequence[Path]) -> list[Path]:
     return found
 
 
+def _read_titles_file(path: Path) -> dict[str, str]:
+    """读一个 task 标题文件：缺失返回空；内容必须是纯 str→str 映射。
+
+    坏文件立刻报错而不是静默忽略——显示名错了和判分锚错了一样误
+    导人。
+    """
+    if not path.is_file():
+        return {}
+    try:
+        data = yaml.safe_load(path.read_text("utf-8")) or {}
+    except yaml.YAMLError as exc:
+        raise SuiteError(f"{path}: invalid YAML: {exc}") from exc
+    if not isinstance(data, dict) or not all(
+        isinstance(key, str) and isinstance(value, str) for key, value in data.items()
+    ):
+        raise SuiteError(
+            f"{path}: expected a flat task_id -> title string mapping"
+        )
+    return data
+
+
+def _load_task_titles(suite_dir: Path) -> dict[str, str]:
+    """套件的中文任务显示名（task_id → 标题），报告渲染用。
+
+    两个来源、互不干扰：``task_titles.yaml`` 是套件自写的（它自有任
+    务的显示名），``task_titles.cases.yaml`` 是共享用例库注入器生成
+    的（库属任务，标题来自各类别 checker 的 CASES）。合并时套件侧
+    优先——混合套件里同名任务的命名权在套件。
+    """
+    titles: dict[str, str] = {}
+    titles.update(_read_titles_file(suite_dir / "task_titles.cases.yaml"))
+    titles.update(_read_titles_file(suite_dir / "task_titles.yaml"))
+    return titles
+
+
+def _load_task_categories(suite_dir: Path) -> tuple[dict[str, str], str | None]:
+    """类别聚合声明：task_categories.yaml（套件自写）与注入器生成的
+    task_categories.cases.yaml 合并，套件侧优先。
+
+    结构：``categories:``（类别键 → 中文显示名）+ 可选 ``default:``
+    （无点分前缀任务归到的类别键）。报告按 task_id 首个点前的前缀
+    归组，无点的归 default——确定性规则，无需逐任务映射。
+    """
+    merged: dict[str, str] = {}
+    default: str | None = None
+    for name in ("task_categories.cases.yaml", "task_categories.yaml"):
+        path = suite_dir / name
+        if not path.is_file():
+            continue
+        try:
+            data = yaml.safe_load(path.read_text("utf-8")) or {}
+        except yaml.YAMLError as exc:
+            raise SuiteError(f"{path}: invalid YAML: {exc}") from exc
+        if not isinstance(data, dict):
+            raise SuiteError(f"{path}: expected a mapping with 'categories'")
+        categories = data.get("categories")
+        if not isinstance(categories, dict) or not all(
+            isinstance(key, str) and isinstance(value, str)
+            for key, value in categories.items()
+        ):
+            raise SuiteError(
+                f"{path}: categories must be a flat key -> name string mapping"
+            )
+        merged.update(categories)
+        raw_default = data.get("default")
+        if raw_default is not None:
+            if not isinstance(raw_default, str):
+                raise SuiteError(f"{path}: default must be a category key")
+            default = raw_default
+    return merged, default
+
+
 def load_suite(path: Path, suites_root: Path | None = None) -> ResolvedSuite:
     """Load a suite: resolve its inheritance chain, then validate the overlay.
 
@@ -84,6 +158,7 @@ def load_suite(path: Path, suites_root: Path | None = None) -> ResolvedSuite:
         raise
     except Exception as exc:
         raise SuiteError(f"{suite_yaml}: invalid suite overlay: {exc}") from exc
+    category_names, default_category = _load_task_categories(path)
     return ResolvedSuite(
         overlay=overlay,
         suite_dir=path,
@@ -92,6 +167,9 @@ def load_suite(path: Path, suites_root: Path | None = None) -> ResolvedSuite:
         suite_yaml_digest=overlay_digest_of(suite_yaml),
         overlay_chain_digest=chain_digest_of(resolution.sources, resolution.data),
         sources=list(resolution.sources),
+        task_titles=_load_task_titles(path),
+        category_names=category_names,
+        default_category=default_category,
     )
 
 

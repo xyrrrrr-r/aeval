@@ -41,8 +41,6 @@ __all__ = [
     "CompletenessStatus",
     "RequirementStatus",
     "AEVAL_EXTRA_KEY",
-    "DSH_EXTRA_KEY",
-    "DSH_PRESERVED_EVENT_EXTRA_KEY",
     "RequirementBitmap",
     "FieldCompleteness",
     "CompletenessRecord",
@@ -123,8 +121,6 @@ REQUIREMENT_FIELDS: tuple[str, ...] = (
 )
 
 AEVAL_EXTRA_KEY = "aeval"
-DSH_EXTRA_KEY = "dsh"
-DSH_PRESERVED_EVENT_EXTRA_KEY = "dsh_preserved_events"
 
 
 def canonical_json(value: Any) -> bytes:
@@ -489,14 +485,17 @@ class TrialPaths(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
 
     sandbox_cwd: str
-    dsh_home: str
+    #: The agent's own home inside the sandbox (renamed from ``dsh_home`` in
+    #: the agent-neutrality cleanup C1 — the framework stores whatever home
+    #: the selected agent declares; the dsh adapter fills in its DSH home).
+    agent_home: str
     bundle_path: str
     session_root: str
     download_root: str
 
     _relative = field_validator("session_root", "download_root")(_bundle_relative_path)
 
-    @field_validator("sandbox_cwd", "dsh_home", "bundle_path")
+    @field_validator("sandbox_cwd", "agent_home", "bundle_path")
     @classmethod
     def _sandbox_path(cls, value: str) -> str:
         import re
@@ -959,6 +958,23 @@ class RunManifest(BaseModel):
     runtime_keys: list[str] = Field(default_factory=list)
     artifact_digest: str | None = None
     exclusions: ExclusionSummary | None = None
+    # 中文任务显示名（task_id → 标题），来自套件侧 task_titles.yaml，封
+    # 存进清单后报告不依赖套件目录即可渲染。空时不参与摘要：清单是密
+    # 封证据，加字段不能让旧清单的重算值漂移。
+    task_titles: dict[str, str] = Field(default_factory=dict)
+    # 类别聚合（报告的「按类别结果」）：类别键 → 中文显示名，以及无点
+    # 分前缀任务的默认类别。任务归组规则是确定性的（task_id 首个点前
+    # 的前缀，无点归 default），所以只需封存名字与默认值。同 task_titles
+    # 的摘要纪律：空值不进摘要。
+    category_names: dict[str, str] = Field(default_factory=dict)
+    default_category: str | None = None
 
     def digest(self) -> str:
-        return _digest(self.model_dump(mode="json", exclude={"created_at"}))
+        exclude = {"created_at"}
+        if not self.task_titles:
+            exclude.add("task_titles")
+        if not self.category_names:
+            exclude.add("category_names")
+        if self.default_category is None:
+            exclude.add("default_category")
+        return _digest(self.model_dump(mode="json", exclude=exclude))

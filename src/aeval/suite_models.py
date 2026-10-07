@@ -149,6 +149,14 @@ class VerdictSpec(_SuiteModel):
     graders: (
         dict[str, GraderDeclaration | list[GraderDeclaration]] | list[GraderDeclaration]
     ) = Field(default_factory=dict)
+    # Opt-in sealed rubric-anchors channel (integration P2): when set,
+    # every trial's evidence bundle must seal the suite's
+    # ``rubric/task_anchors.json`` as the ``task_anchors`` fixed output,
+    # and trajectory graders read their anchors from the sealed copy —
+    # a regrade then depends only on sealed bytes, never on the suite
+    # repo's current state. None (the default) keeps every suite
+    # sealed before the channel existed byte-identical.
+    anchors: Literal["task_anchors"] | None = None
 
     @field_validator("graders")
     @classmethod
@@ -349,6 +357,13 @@ class ResolvedSuite(_SuiteModel):
     # This is what identity and comparability use.
     overlay_chain_digest: str = ""
     sources: list[SuiteSource] = Field(default_factory=list)
+    # 中文任务显示名（task_id → 标题）：套件目录 task_titles.yaml 的内
+    # 容，随清单封存。显示层专用——坐标/判分/存储永远用原 task_id。
+    task_titles: dict[str, str] = Field(default_factory=dict)
+    # 类别聚合（报告用）：类别键 → 中文显示名 + 无点分前缀任务的默认
+    # 类别。归组规则在报告侧确定性推导（task_id 首个点前的前缀）。
+    category_names: dict[str, str] = Field(default_factory=dict)
+    default_category: str | None = None
 
     @property
     def id(self) -> str:

@@ -25,7 +25,7 @@ from aeval.suite_loader.loader import (
 
 app = typer.Typer(
     name="aeval",
-    help="Agent trajectory evaluation on Harbor (experimental DSH adapter).",
+    help="Agent trajectory evaluation on Harbor (experimental, agent-neutral core).",
     no_args_is_help=True,
 )
 
@@ -43,27 +43,34 @@ EXIT_SYSTEM_ERROR = 4
 EXIT_E2E_INCOMPLETE = 5
 
 
-def _declared_adapter(entry):
-    """The AdapterSpec an import_path agent entry declares (aeval.agents.contract)."""
+def _declared_adapter(import_path: str):
+    """The AdapterSpec an agent's import_path declares (aeval.agents.contract)."""
     from aeval.agents.contract import build_adapter_spec, load_adapter_class
 
-    import_path = str(entry.import_path)
     return build_adapter_spec(load_adapter_class(import_path), import_path=import_path)
 
 
 def _declares_facade_stack(agents) -> bool:
-    """Does any selected agent declare the generic facade control stack?
+    """Does any selected agent declare a stack that translates OpenAI wires?
 
-    Reads the same declaration the plugin's bootstrap dispatches on, so the
-    lock and the deployment can never disagree about whether a facade ran.
+    Reads the flavor registry's ``serves_protocols`` capability — the same
+    declaration the plugin's bootstrap dispatches on — so the lock and the
+    deployment can never disagree about whether a facade ran. The generic
+    facade is the only registered translating stack today; a second one
+    extends the lock with its own artifact field rather than reusing this
+    predicate blindly.
     """
-    from aeval.agents.contract import control_stack_of, load_adapter_class
+    from aeval.agents.contract import (
+        control_stack_of,
+        load_adapter_class,
+        stack_serves_any_openai,
+    )
 
     for entry in agents:
         import_path = getattr(entry, "import_path", None)
         if not import_path:
             continue
-        if control_stack_of(load_adapter_class(str(import_path))) == "deepagent-facade":
+        if stack_serves_any_openai(control_stack_of(load_adapter_class(str(import_path)))):
             return True
     return False
 
@@ -341,10 +348,16 @@ def run_cmd(
             )
         # Declared adapter identity, resolved before anything runs: a run whose
         # records cannot name its agent is refused here, not discovered later.
+        from aeval.agents.contract import load_adapter_class
+
+        selected = []
+        for entry in job.agents:
+            import_path = getattr(entry, "import_path", None)
+            if not import_path:
+                continue
+            selected.append((load_adapter_class(str(import_path)), str(import_path)))
         adapters = [
-            _declared_adapter(entry)
-            for entry in job.agents
-            if getattr(entry, "import_path", None)
+            _declared_adapter(import_path) for _cls, import_path in selected
         ]
         from aeval.agents.contract import budget_enforcement_point, budget_gate_violation
 
@@ -398,9 +411,20 @@ def run_cmd(
                     platform=sandbox_platform,
                 ),
             }
-        # Which agents this run selects decides whether a DSH release belongs in
-        # the lock at all: without this a non-Node agent could not produce a lock
-        # (a lock without a DSH section used to be rejected outright).
+        # Which agents this run selects decides which agent releases belong in
+        # the lock: each selected adapter's OFFICIAL_RELEASE_LOCK hook
+        # contributes its own pin (the dsh adapter declares the official DSH
+        # slice; an agent without a pinned release contributes nothing), so the
+        # lock builder itself names no agent — without this a non-Node agent
+        # could not produce a lock at all (a lock without a DSH section used
+        # to be rejected outright).
+        from aeval.agents.contract import official_release_lock_of
+
+        release_locks = {}
+        for (adapter_class, _import_path), spec in zip(selected, adapters):
+            pinned = official_release_lock_of(adapter_class)
+            if pinned is not None:
+                release_locks[spec.id] = pinned
         # The control dist the operator's broker spec provides is part of what
         # ran: fingerprint it into the lock so a changed control build breaks
         # comparability loudly instead of shifting behavior silently inside
@@ -421,7 +445,7 @@ def run_cmd(
                 raise SuiteError(str(exc)) from exc
         lock = build_runtime_lock(
             images=images,
-            agent_ids=[spec.id for spec in adapters],
+            release_locks=release_locks,
             control_dist=broker_spec.control_dist if broker_spec else None,
             facade_dist=facade_dist,
         )
@@ -444,6 +468,9 @@ def run_cmd(
                 overlay_chain_digest=resolved.identity_digest,
                 source_commit=source_commit,
             ),
+            task_titles=resolved.task_titles,
+            category_names=resolved.category_names,
+            default_category=resolved.default_category,
             versions=VersionsBundle(
                 aeval_version=version("aeval"),
                 converter_version=resolved.overlay.provenance.converter_version,

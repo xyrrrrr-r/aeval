@@ -644,3 +644,49 @@ def test_invalid_native_mapping_rejected(tmp_path, field, suffix, text, message)
     _edit(suite_dir, lambda d: d["harbor"].update({field: reference}))
     with pytest.raises(SuiteError, match=message):
         resolve_harbor_inputs(load_suite(suite_dir))
+
+
+def test_task_titles_merge_with_suite_side_priority(tmp_path):
+    """中文任务显示名：注入器生成的 task_titles.cases.yaml 与套件自写
+    的 task_titles.yaml 合并，套件侧优先（混合套件里命名权在套件）；
+    两个文件都没有时为空。坏文件报错，不静默忽略。"""
+    suite_dir = _copy_demo(tmp_path)
+    assert load_suite(suite_dir).task_titles == {}
+    (suite_dir / "task_titles.cases.yaml").write_text(
+        "native-task: 注入名\nextra-task: 库属名\n", encoding="utf-8"
+    )
+    (suite_dir / "task_titles.yaml").write_text(
+        "native-task: 套件名\n", encoding="utf-8"
+    )
+    suite = load_suite(suite_dir)
+    assert suite.task_titles == {
+        "native-task": "套件名", "extra-task": "库属名",
+    }
+    (suite_dir / "task_titles.yaml").write_text("- 不是映射\n", encoding="utf-8")
+    with pytest.raises(SuiteError, match="flat task_id -> title"):
+        load_suite(suite_dir)
+
+
+def test_task_categories_merge_and_default(tmp_path):
+    """类别聚合声明：注入器生成的 task_categories.cases.yaml 与套件
+    自写的 task_categories.yaml 合并（套件侧优先），default 只认显式
+    声明；坏结构报错。"""
+    suite_dir = _copy_demo(tmp_path)
+    (suite_dir / "task_categories.cases.yaml").write_text(
+        "categories:\n  a2a: 注入名\n  native-cat: 库属类别\n",
+        encoding="utf-8",
+    )
+    suite = load_suite(suite_dir)
+    assert suite.category_names == {"a2a": "注入名", "native-cat": "库属类别"}
+    assert suite.default_category is None
+    (suite_dir / "task_categories.yaml").write_text(
+        "categories:\n  a2a: 套件名\ndefault: a2a\n", encoding="utf-8"
+    )
+    suite = load_suite(suite_dir)
+    assert suite.category_names["a2a"] == "套件名"  # 套件侧优先
+    assert suite.default_category == "a2a"
+    (suite_dir / "task_categories.yaml").write_text(
+        "categories:\n  a2a:\n    - 不是映射\n", encoding="utf-8"
+    )
+    with pytest.raises(SuiteError, match="flat key -> name"):
+        load_suite(suite_dir)
