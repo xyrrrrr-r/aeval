@@ -11,6 +11,12 @@ from __future__ import annotations
 
 from aeval.contracts import AgentReleaseLock, RuntimeLock, _digest
 from aeval.provenance import build_runtime_lock
+from aeval.agents.dsh.release import build_official_dsh_lock
+
+
+def _dsh_run() -> RuntimeLock:
+    """A lock as a dsh run records it: the adapter's hook contributed its pin."""
+    return build_runtime_lock(release_locks={"dsh": build_official_dsh_lock()})
 
 
 def _legacy_payload(lock: RuntimeLock) -> dict:
@@ -35,7 +41,7 @@ def _historical_digest(payload: dict) -> str:
 
 
 def test_a_lock_recorded_before_the_generalisation_recomputes_identically():
-    lock = build_runtime_lock()
+    lock = _dsh_run()
     payload = _legacy_payload(lock)
     recorded = _historical_digest(payload)
 
@@ -56,7 +62,7 @@ def test_agent_releases_participate_in_the_digest():
 
 
 def test_legacy_dsh_release_is_projected_into_the_generic_shape():
-    lock = build_runtime_lock()
+    lock = _dsh_run()
     projected = lock.agent_lock("dsh")
     assert projected is not None
     assert projected.id == "dsh"
@@ -71,22 +77,28 @@ def test_legacy_dsh_release_is_projected_into_the_generic_shape():
     assert lock.agent_lock("dsh").version == "explicit"
 
 
-def test_a_non_node_agent_can_produce_a_runtime_lock():
-    """B2: a lock without a DSH section used to be impossible to build."""
-    other = build_runtime_lock(agent_ids=["otheragent"])
+def test_an_agent_without_a_pinned_release_can_produce_a_runtime_lock():
+    """A lock without a DSH section used to be impossible to build."""
+    other = build_runtime_lock()
     assert other.dsh is None
     assert other.agents == {}
     assert other.agent_locks() == {}
 
-    # a DSH run still pins the official release, identically to before: naming
-    # the agent must not change what a DSH lock records
-    dsh_run = build_runtime_lock(agent_ids=["dsh"])
+    # a generic-shape release lands in the agents section
+    generic = build_runtime_lock(
+        release_locks={"otheragent": AgentReleaseLock(id="otheragent", version="2.0.0")}
+    )
+    assert generic.dsh is None
+    assert set(generic.agent_locks()) == {"otheragent"}
+
+    # a DSH run still pins the official release, identically to before: the
+    # adapter's hook routes the legacy-shape lock into the legacy section —
+    # byte-identically to passing the same lock explicitly
+    dsh_run = _dsh_run()
     assert dsh_run.dsh is not None
     assert dsh_run.agent_locks().keys() == {"dsh"}
-    assert dsh_run.model_dump(exclude={"created_at"}) == build_runtime_lock().model_dump(
-        exclude={"created_at"}
-    )
-
-    # no agent named at all: the historical behaviour is kept
-    assert build_runtime_lock().dsh is not None
-    assert build_runtime_lock(agent_ids=[]).dsh is None
+    assert dsh_run.model_dump(exclude={"created_at"}) == build_runtime_lock(
+        dsh=build_official_dsh_lock()
+    ).model_dump(exclude={"created_at"})
+    # and the generic section stays empty: the dsh digest must not move
+    assert dsh_run.agents == {}

@@ -18,7 +18,8 @@ from aeval.agents.dsh.claims import (
     check_tool_claims,
     summarize_claim_check,
 )
-from aeval.contracts import DSH_EXTRA_KEY, CanonicalTranscript, ClaimFinding
+from aeval.agents.dsh.vocabulary import DSH_EXTRA_KEY
+from aeval.contracts import CanonicalTranscript, ClaimFinding
 from dsh_log import MODEL, SessionLog, happy_log, seeded_log, session_header
 
 LEASE_TOKENS = 282  # happy_log's two settled steps, exactly accounted

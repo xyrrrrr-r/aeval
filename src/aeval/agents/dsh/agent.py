@@ -42,7 +42,7 @@ from aeval.agents.dsh.bridge import (
 )
 from aeval.contracts import CanonicalTranscript
 from aeval.control.artifacts import control_artifact_candidates
-from aeval.provenance import OFFICIAL_DSH_TAG
+from aeval.agents.dsh.release import OFFICIAL_DSH_TAG, build_official_dsh_lock
 
 __all__ = [
     "DshAgent",
@@ -344,6 +344,15 @@ class DshAgent(BaseInstalledAgent):
     # facade is deployed for this agent and no facade env is injected.
     MODEL_ROUTING = {"agent_protocol": "gateway_native"}
 
+    # The pinned official DSH release (agents/dsh/release.py). Declared as a
+    # hook (aeval.agents.contract.official_release_lock_of) so the runtime
+    # lock's agent sections are built from what the run's own agents declare —
+    # the core's lock builder names no agent. The LEGACY lock shape
+    # (DshReleaseLock) is deliberate: dsh runs recorded this section before
+    # the generic agents section existed, and their lock digests must not
+    # move (the runtime lock routes it to the legacy field by TYPE).
+    OFFICIAL_RELEASE_LOCK = build_official_dsh_lock()
+
     # The collect slot this adapter's official session record belongs to
     # (aeval.agents.contract). DSH's record is the zstd session file under
     # the synced session root — the historical slot, byte-identical path.
@@ -498,8 +507,6 @@ class DshAgent(BaseInstalledAgent):
 
     @staticmethod
     def _locked_version() -> str:
-        from aeval.provenance import build_official_dsh_lock
-
         lock = build_official_dsh_lock()
         if lock.official_tag != OFFICIAL_DSH_TAG:
             raise DshRunError(

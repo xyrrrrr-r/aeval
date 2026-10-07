@@ -3,23 +3,27 @@
 The negative tests must assert that no run bookkeeping is created by a
 failing lock (the gate runs before any manifest/trial), and messages
 carry expected/actual.
+
+The DSH slice itself is pinned in the dsh adapter (agents/dsh/release.py)
+and cross-checked in tests/unit/agents/dsh/test_release.py; here a lock
+WITH a dsh section is built through the same hook the CLI uses
+(``release_locks``), because that is the only way the agent-neutral builder
+gets one.
 """
 
 from __future__ import annotations
 
-import re
 import subprocess
 from pathlib import Path
 
 import pytest
 
 from aeval import provenance
+from aeval.agents.dsh.release import build_official_dsh_lock
 from aeval.contracts import ControlDistLock, ImageIdentity, NpmPackageLock
 from aeval.provenance import (
-    DSH_NODE_VERSIONS,
     LockMismatchError,
     assert_clean_harbor_source,
-    build_official_dsh_lock,
     build_runtime_lock,
     verify_runtime_lock,
 )
@@ -33,11 +37,16 @@ def _pinned_image() -> ImageIdentity:
     )
 
 
+def _dsh_lock() -> "RuntimeLock":  # noqa: F821 - annotation under __future__
+    """A lock as a dsh run records it (the adapter hook contributed its pin)."""
+    return build_runtime_lock(release_locks={"dsh": build_official_dsh_lock()})
+
+
 def test_build_and_verify_roundtrip_passes_on_live_env():
-    lock = build_runtime_lock(images={"task": _pinned_image()})
+    lock = _dsh_lock()
     assert lock.harbor.version == provenance.OFFICIAL_HARBOR_VERSION
     assert lock.harbor.commit == provenance.OFFICIAL_HARBOR_COMMIT
-    assert lock.dsh.official_tag == provenance.OFFICIAL_DSH_TAG
+    assert lock.dsh is not None
     verify_runtime_lock(lock)
 
 
@@ -76,7 +85,7 @@ def test_verify_rejects_unpinned_image_even_past_model_layer():
 
 
 def test_verify_rejects_dsh_lock_without_integrity():
-    lock = build_runtime_lock()
+    lock = _dsh_lock()
     lock.dsh.packages = [
         NpmPackageLock(name="@deepseek-ai/dsh", version="0.1.7-alpha.1", integrity=None),
         *[p for p in lock.dsh.packages if p.name != "@deepseek-ai/dsh"],
@@ -86,7 +95,7 @@ def test_verify_rejects_dsh_lock_without_integrity():
 
 
 def test_verify_rejects_empty_dsh_package_set():
-    lock = build_runtime_lock()
+    lock = _dsh_lock()
     lock.dsh.packages = []
     with pytest.raises(LockMismatchError, match="declares no npm packages"):
         verify_runtime_lock(lock)
@@ -97,25 +106,6 @@ def test_verify_rejects_plugin_version_drift():
     lock.plugin.version = "9.9.9"
     with pytest.raises(LockMismatchError, match="aeval plugin version: expected '9.9.9'"):
         verify_runtime_lock(lock)
-
-
-def test_official_dsh_slice_is_fully_pinned():
-    dsh = build_official_dsh_lock()
-    by_name = {p.name: p for p in dsh.packages}
-    assert by_name["@deepseek-ai/dsh"].integrity is not None
-    assert by_name["@deepseek-ai/cordis"].version == "4.0.3"
-    assert by_name["@agentclientprotocol/sdk"].version == "1.4.0"
-    # schemastery is a standalone library (like cordis), not part of the
-    # DSH release train; it carries its own version line.
-    assert by_name["@deepseek-ai/schemastery"].version == "3.18.3"
-    assert all(
-        p.version == "0.1.7-alpha.1"
-        for n, p in by_name.items()
-        if n.startswith("@deepseek-ai/")
-        and n not in ("@deepseek-ai/cordis", "@deepseek-ai/schemastery")
-    )
-    assert dsh.experimental is True
-    assert dsh.node_versions == list(DSH_NODE_VERSIONS)
 
 
 def _make_git_repo(tmp_path: Path, dirty: bool = False) -> Path:
@@ -169,70 +159,10 @@ def test_non_repository_rejected(tmp_path):
         assert_clean_harbor_source(empty, "0" * 40)
 
 
-# --- Control-stack defenses (split plan: lock before move) ------------------
-# Defense 1: the control plugin's direct import surface is pinned first-class
-# in the npm slice, not trusted transitively through the DSH parent package.
-# Defense 2: the control dist an operator supplies is fingerprinted into the
-# lock, binding the control build to the trial.
-
-
-def test_slice_pins_the_control_plugins_direct_imports():
-    slice_names = {name for name, _, _ in provenance.DSH_NPM_SLICE}
-    missing = set(provenance.DSH_CONTROL_DIRECT_IMPORTS) - slice_names
-    assert not missing, (
-        f"control plugin direct imports missing from DSH_NPM_SLICE: {sorted(missing)}"
-    )
-
-
-def test_control_package_pins_match_the_dsh_slice():
-    """Defense 3: aeval/control's build pins and the trial lock live in ONE
-    repo — every @deepseek-ai/* version in the control package's manifest
-    must equal the DSH slice the lock records, or the build drifts from what
-    trials attest."""
-    import json
-
-    manifest_path = Path(__file__).resolve().parents[2] / "control" / "package.json"
-    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-    slice_versions = {name: version for name, version, _ in provenance.DSH_NPM_SLICE}
-    deps = {**manifest.get("dependencies", {}), **manifest.get("devDependencies", {})}
-    deepseek_deps = {n: v for n, v in deps.items() if n.startswith("@deepseek-ai/")}
-    assert deepseek_deps, "aeval/control lost its @deepseek-ai/* pins"
-    for name, pinned in deepseek_deps.items():
-        assert slice_versions.get(name) == pinned, (
-            f"aeval/control pins {name}@{pinned} but DSH_NPM_SLICE records "
-            f"{slice_versions.get(name)!r} — build pin and trial lock drifted"
-        )
-
-
-def test_control_plugin_import_surface_matches_recorded_list():
-    """Re-measure the real sources against the recorded import surface.
-
-    After the slim-down the deployed control stack is a composition: the
-    DSH package's own sources plus the neutral broker cluster in
-    aeval/control (whose dist the DSH package composes into its own). The
-    invariant covers the union; generated .d.ts shims are excluded because
-    they mirror the neutral sources. Skipped (never passed) when the
-    sibling checkout is absent.
-    """
-    dsh_src = Path(__file__).resolve().parents[2].parent / "dsh-eval-control" / "src"
-    neutral_src = Path(__file__).resolve().parents[2] / "control" / "src"
-    if not dsh_src.is_dir():
-        pytest.skip("dsh-eval-control sibling checkout not present (dev layout)")
-    measured: set[str] = set()
-    for source in sorted(dsh_src.glob("*.ts")):
-        if source.name.endswith(".d.ts"):
-            continue  # generated shim pulled from aeval/control/dist
-        measured.update(
-            re.findall(r"from '(@[^']+)'", source.read_text(encoding="utf-8"))
-        )
-    for source in sorted(neutral_src.glob("*.ts")):
-        measured.update(
-            re.findall(r"from '(@[^']+)'", source.read_text(encoding="utf-8"))
-        )
-    assert measured == set(provenance.DSH_CONTROL_DIRECT_IMPORTS), (
-        "control-stack import surface drifted from DSH_CONTROL_DIRECT_IMPORTS "
-        "— update the constant AND the slice"
-    )
+# --- Control-dist fingerprinting (defense 2 of the control-stack split) ------
+# The control dist an operator supplies is fingerprinted into the lock,
+# binding the control build to the trial; defense 1 (the import surface ⊆
+# slice check) moved with the DSH pin to tests/unit/agents/dsh/test_release.py.
 
 
 def test_lock_digest_excludes_control_dist_while_none(tmp_path):

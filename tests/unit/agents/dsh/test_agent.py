@@ -27,7 +27,7 @@ from aeval.agents.dsh.agent import (
 )
 from aeval.agents.dsh.bridge import DshReaderResponse
 from aeval.contracts import CanonicalTranscript
-from aeval.provenance import OFFICIAL_DSH_TAG
+from aeval.agents.dsh.release import OFFICIAL_DSH_TAG
 
 LOCKED_VERSION = OFFICIAL_DSH_TAG.removeprefix("dsh-v")
 SESSION_ID = "0f6f1a2b-3c4d-5e6f-7a8b-9c0d1e2f3a4b"

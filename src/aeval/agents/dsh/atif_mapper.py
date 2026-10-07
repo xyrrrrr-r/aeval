@@ -23,9 +23,8 @@ from harbor.models.trajectories.observation import Observation
 from harbor.utils.trajectory_validator import TrajectoryValidator
 
 from aeval.agents.dsh.bridge import DshReaderResponse
+from aeval.agents.dsh.vocabulary import DSH_EXTRA_KEY, DSH_PRESERVED_EVENT_EXTRA_KEY
 from aeval.contracts import (
-    DSH_EXTRA_KEY,
-    DSH_PRESERVED_EVENT_EXTRA_KEY,
     CanonicalTranscript,
     CompletenessRecord,
     EvidenceBundle,

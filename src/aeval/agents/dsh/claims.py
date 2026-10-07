@@ -10,7 +10,8 @@ from collections import Counter
 from dataclasses import dataclass
 from typing import Any
 
-from aeval.contracts import CanonicalTranscript, ClaimCheck, ClaimFinding, DSH_EXTRA_KEY
+from aeval.agents.dsh.vocabulary import DSH_EXTRA_KEY
+from aeval.contracts import CanonicalTranscript, ClaimCheck, ClaimFinding
 
 __all__ = [
     "CallRecord", "DshClaimChecker", "check_observed_model", "check_reported_usage",

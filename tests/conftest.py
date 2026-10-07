@@ -17,6 +17,7 @@ from aeval.contracts import (
     RuntimeLock,
 )
 from aeval.provenance import build_runtime_lock
+from aeval.agents.dsh.release import build_official_dsh_lock
 from aeval.suite_loader.loader import load_suite
 
 FIXTURES = Path(__file__).parent / "fixtures"
@@ -34,7 +35,9 @@ def demo_suite(demo_suite_dir):
 
 @pytest.fixture()
 def runtime_lock() -> RuntimeLock:
-    return build_runtime_lock()
+    """A lock as a dsh run records it: the adapter's OFFICIAL_RELEASE_LOCK hook
+    contributed its pin (the agent-neutral builder cannot name an agent)."""
+    return build_runtime_lock(release_locks={"dsh": build_official_dsh_lock()})
 
 
 @pytest.fixture()

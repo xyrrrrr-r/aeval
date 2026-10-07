@@ -47,6 +47,10 @@ __all__ = [
     "model_routing_of",
     "adapter_classes_recorded_in",
     "control_stack_of",
+    "stack_serves_protocol",
+    "stack_serves_any_openai",
+    "OFFICIAL_RELEASE_LOCK_ATTR",
+    "official_release_lock_of",
     "capabilities_of",
     "declared_capabilities",
     "session_record_output_of",
@@ -220,6 +224,80 @@ def control_stack_of(adapter: type) -> str | None:
             f"{describe_adapter(adapter)}.CONTROL_STACK must be a non-empty string or absent"
         )
     return declared.strip()
+
+
+def _registered_flavor(stack: str | None):
+    """The flavor registered under ``stack``, ensuring core flavors exist.
+
+    A capability question must never be a name question, so this resolves the
+    registry entry and lets the caller read ``serves_protocols`` — whatever
+    flavor is registered under the declared name answers, and an unregistered
+    name answers nothing. Importing ``aeval.control.bootstrap`` here is what
+    makes the agent-neutral facade flavor resolvable even when this module
+    was imported first (it registers at import); adapter flavors register
+    when their package loads, which by discipline happens before any adapter
+    class is inspected. The import is lazy because bootstrap imports this
+    module — at call time both are fully loaded, so the cycle never closes.
+    """
+    if stack is None:
+        return None
+    from aeval.control.flavors import control_flavor
+
+    try:
+        from aeval.control import bootstrap as _bootstrap  # noqa: F401
+    except ImportError:  # pragma: no cover - bootstrap is always importable
+        pass
+    return control_flavor(stack)
+
+
+def stack_serves_protocol(stack: str | None, protocol: str) -> bool:
+    """Does the declared stack's flavor translate ``protocol`` for the agent?
+
+    The registry answers (a flavor declares ``serves_protocols``): an absent
+    stack, an unregistered name, or a registered flavor that does not carry
+    the protocol all answer False — the caller words the refusal, the
+    registry supplies the fact. No check compares a flavor NAME.
+    """
+    flavor = _registered_flavor(stack)
+    return flavor is not None and protocol in flavor.serves_protocols
+
+
+def stack_serves_any_openai(stack: str | None) -> bool:
+    """Does the declared stack's flavor translate any OpenAI client wire?"""
+    flavor = _registered_flavor(stack)
+    return flavor is not None and bool(flavor.serves_protocols)
+
+
+#: Declaration: the pinned release this adapter ships, when it has one. The
+#: value is a frozen lock model (a class attribute) — either the generic
+#: ``AgentReleaseLock`` or, for an agent whose historical lock section predates
+#: the generic shape, the legacy ``DshReleaseLock``. The runtime lock's agent
+#: sections are built from whatever the SELECTED adapters declare here, so
+#: the core never names an agent when assembling supply-chain identity.
+OFFICIAL_RELEASE_LOCK_ATTR = "official_release_lock"
+
+
+def official_release_lock_of(adapter: type) -> Any:
+    """The release lock this adapter pins, when it declares one.
+
+    Either shape is accepted: a generic ``AgentReleaseLock`` (stored in the
+    lock's ``agents`` section) or a legacy ``DshReleaseLock`` (stored in the
+    legacy ``dsh`` section, byte-identical to what dsh runs recorded before
+    the generic section existed). Anything else is a refusal — a value the
+    runtime lock cannot store would silently drop the agent's supply-chain
+    identity.
+    """
+    value = getattr(adapter, OFFICIAL_RELEASE_LOCK_ATTR, None)
+    if value is None:
+        return None
+    from aeval.contracts import AgentReleaseLock, DshReleaseLock
+
+    if not isinstance(value, (DshReleaseLock, AgentReleaseLock)):
+        raise SuiteError(
+            f"{describe_adapter(adapter)}.{OFFICIAL_RELEASE_LOCK_ATTR} must be "
+            "a DshReleaseLock or AgentReleaseLock instance (or absent)"
+        )
+    return value
 
 
 def adapter_classes_recorded_in(lock: Any) -> tuple[list[type], list[str]]:
@@ -544,8 +622,10 @@ def adapter_declaration_gap(adapter: type) -> list[str]:
     stack, so an adapter that claims ``gateway_lease`` without declaring a stack
     would run unmetered while looking metered. The same holds for the declared
     model routing (AGENT-ABSTRACTION-2 §4.5): an ``openai_*`` protocol needs
-    the facade stack to translate it, and a facade stack with no ``openai_*``
-    protocol would serve an endpoint the agent never calls.
+    a stack whose flavor translates it, and a translating stack with no
+    ``openai_*`` protocol would serve an endpoint the agent never calls. Both
+    rules consult the flavor registry's ``serves_protocols`` capability —
+    never a flavor's name, so a second translating stack needs no edit here.
     """
     missing = [name for name in REQUIRED_DECLARATIONS if getattr(adapter, name, None) is None]
     stack = control_stack_of(adapter)
@@ -556,20 +636,24 @@ def adapter_declaration_gap(adapter: type) -> list[str]:
                 "in-sandbox control stack; without it the spend would never be measured)"
             )
     routing = model_routing_of(adapter)
-    if (
-        routing is not None
-        and routing.agent_protocol != "gateway_native"
-        and stack != "deepagent-facade"
+    if routing is not None and routing.agent_protocol != "gateway_native":
+        if not stack_serves_protocol(stack, routing.agent_protocol):
+            where = (
+                f"the declared control stack {stack!r} does not"
+                if stack is not None
+                else "no CONTROL_STACK is declared to"
+            )
+            missing.append(
+                f"CONTROL_STACK (MODEL_ROUTING.agent_protocol={routing.agent_protocol!r} "
+                f"speaks an OpenAI wire; {where} translate it — the agent "
+                "would run unmetered)"
+            )
+    if stack_serves_any_openai(stack) and (
+        routing is None or routing.agent_protocol == "gateway_native"
     ):
         missing.append(
-            f"CONTROL_STACK (MODEL_ROUTING.agent_protocol={routing.agent_protocol!r} "
-            "speaks an OpenAI wire; only the deepagent-facade stack translates it — "
-            "anything else would run the agent unmetered)"
-        )
-    if stack == "deepagent-facade" and (routing is None or routing.agent_protocol == "gateway_native"):
-        missing.append(
-            "MODEL_ROUTING (the deepagent-facade stack translates an openai_* "
-            "protocol; without that declaration the facade would serve "
+            "MODEL_ROUTING (the declared control stack translates an openai_* "
+            "protocol; without that declaration the stack would serve "
             "nothing the agent speaks)"
         )
     return missing

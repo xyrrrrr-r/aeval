@@ -152,10 +152,18 @@ def test_an_openai_wire_without_the_facade_stack_is_an_unkeepable_promise():
         MODEL_ROUTING={"agent_protocol": "openai_chat", "env": {"base_url": "U", "api_key": "K"}},
     )
     gap = adapter_declaration_gap(adapter)
-    assert any("openai_chat" in item and "deepagent-facade" in item for item in gap)
+    assert any("openai_chat" in item and "CONTROL_STACK" in item for item in gap)
+    # a stack that does not translate the wire is refused the same way
+    gap = adapter_declaration_gap(
+        _complete_adapter(
+            CONTROL_STACK="dsh",
+            MODEL_ROUTING={"agent_protocol": "openai_chat", "env": {"base_url": "U", "api_key": "K"}},
+        )
+    )
+    assert any("openai_chat" in item and "does not translate" in item for item in gap)
 
 
-def test_a_facade_stack_without_an_openai_wire_serves_nothing():
+def test_a_translating_stack_without_an_openai_wire_serves_nothing():
     gap = adapter_declaration_gap(_complete_adapter(CONTROL_STACK="deepagent-facade"))
     assert any("MODEL_ROUTING" in item for item in gap)
     gap = adapter_declaration_gap(

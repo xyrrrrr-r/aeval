@@ -8,9 +8,13 @@ expected, fully pinned lock (plan §0/§0.1):
 - Python/uv/platform/toolchain versions.
 - OCI images pinned by digest — mutable tags are a hard error.
 - The aeval plugin distribution itself (wheel digest, import path).
-- The exact official DSH preview slice (npm packages + integrity, Node
-  versions, Cordis/ACP versions, lockfile digest). DSH is experimental
-  and must never auto-upgrade.
+- Every pinned AGENT release, contributed by the selected adapters'
+  ``OFFICIAL_RELEASE_LOCK`` hooks (agent-abstraction cleanup B4): the
+  core builds locks from what the run's own agents declare and names no
+  agent. The legacy ``dsh`` section of the lock format — and its
+  well-formedness gate below — stays here because it is part of the
+  sealed format old locks must keep satisfying; the pin DATA lives in
+  the dsh adapter (``aeval.agents.dsh.release``).
 """
 
 from __future__ import annotations
@@ -21,7 +25,7 @@ import platform
 import subprocess
 import sys
 from pathlib import Path
-from collections.abc import Iterable
+from collections.abc import Iterable, Mapping
 from typing import Any
 
 import yaml
@@ -32,7 +36,6 @@ from aeval.contracts import (
     DshReleaseLock,
     HarborLock,
     ImageIdentity,
-    NpmPackageLock,
     ObservedIdentity,
     PluginIdentity,
     PythonEnvironmentLock,
@@ -46,9 +49,6 @@ __all__ = [
     "bind_observed_identity",
     "OFFICIAL_HARBOR_VERSION",
     "OFFICIAL_HARBOR_COMMIT",
-    "OFFICIAL_DSH_TAG",
-    "OFFICIAL_DSH_COMMIT",
-    "DSH_NPM_SLICE",
     "build_runtime_lock",
     "verify_runtime_lock",
     "assert_clean_harbor_source",
@@ -70,58 +70,6 @@ class LockMismatchError(RuntimeError):
 
 OFFICIAL_HARBOR_VERSION = "0.23.0"
 OFFICIAL_HARBOR_COMMIT = "7464ab541773ea1d4618336f043970042f33a1b5"
-
-OFFICIAL_DSH_TAG = "dsh-v0.1.7-alpha.1"
-OFFICIAL_DSH_COMMIT = "c36a83ff6bb95e3f82cf79f9be7c724270a8aa61"
-
-# Exact npm compatibility slice for DSH 0.1.7-alpha.1 (plan §0.1). Beyond the
-# packages the CLI itself ships, this pins every package the control plugin
-# imports DIRECTLY inside the DSH process (defense 1 of the control-stack
-# split): the plugin resolves these from DSH's own nested node_modules, so a
-# DSH release that changes any of them silently changes what the plugin runs
-# against — the lock must name them, never trust them transitively.
-DSH_NPM_SLICE: tuple[tuple[str, str, str | None], ...] = (
-    ("@deepseek-ai/dsh", "0.1.7-alpha.1",
-     "sha512-fim76775kLyal0lLNmpktZfOiOwU0P9qdluknL5Sm3F6ax9I5PcLD0W0WzqH9tMOOY8yHya5VShuEzSSh223sw=="),
-    ("@deepseek-ai/dsh-sdk-client", "0.1.7-alpha.1", None),
-    ("@deepseek-ai/dsh-sdk-protocol", "0.1.7-alpha.1", None),
-    ("@deepseek-ai/dsh-acp", "0.1.7-alpha.1", None),
-    ("@agentclientprotocol/sdk", "1.4.0", None),
-    ("@deepseek-ai/cordis", "4.0.3", None),
-    # Direct imports of the control plugin (dsh-eval-control/src), all pinned
-    # to the same release slice the plugin was compiled against:
-    ("@deepseek-ai/dsh-agent", "0.1.7-alpha.1", None),
-    ("@deepseek-ai/dsh-llm", "0.1.7-alpha.1", None),
-    ("@deepseek-ai/dsh-scope", "0.1.7-alpha.1", None),
-    ("@deepseek-ai/dsh-session", "0.1.7-alpha.1", None),
-    ("@deepseek-ai/dsh-session-persistence", "0.1.7-alpha.1", None),
-    ("@deepseek-ai/dsh-session-persistence-jsonl", "0.1.7-alpha.1", None),
-    ("@deepseek-ai/dsh-system-prompt", "0.1.7-alpha.1", None),
-    ("@deepseek-ai/dsh-tools", "0.1.7-alpha.1", None),
-    ("@deepseek-ai/schemastery", "3.18.3", None),
-)
-
-# The control stack's complete direct import surface: the union of the DSH
-# package's own sources (dsh-eval-control/src, non-generated files, after the
-# slim-down at 5d33d43) and the neutral broker cluster (aeval/control/src,
-# whose dist the DSH package composes into its deployment unit). Kept beside
-# the slice so the "import surface ⊆ slice" invariant is checkable without
-# the sibling checkout; the sibling test re-measures reality against this
-# list so a new import cannot appear unrecorded.
-DSH_CONTROL_DIRECT_IMPORTS: tuple[str, ...] = (
-    "@deepseek-ai/cordis",
-    "@deepseek-ai/dsh-agent",
-    "@deepseek-ai/dsh-llm",
-    "@deepseek-ai/dsh-scope",
-    "@deepseek-ai/dsh-session",
-    "@deepseek-ai/dsh-session-persistence",
-    "@deepseek-ai/dsh-session-persistence-jsonl",
-    "@deepseek-ai/dsh-system-prompt",
-    "@deepseek-ai/dsh-tools",
-    "@deepseek-ai/schemastery",
-)
-
-DSH_NODE_VERSIONS = ("22.19.x", "24.20.0")
 
 _HARBOR_INSTALL_HINT = (
     "harbor is not importable — install the locked wheel "
@@ -269,7 +217,7 @@ def build_runtime_lock(
     harbor_source_repo: Path | None = None,
     dsh: DshReleaseLock | None = None,
     agents: dict[str, AgentReleaseLock] | None = None,
-    agent_ids: Iterable[str] | None = None,
+    release_locks: Mapping[str, DshReleaseLock | AgentReleaseLock] | None = None,
     harbor_lock_ref: str | None = None,
     control_dist: Path | None = None,
     facade_dist: Path | None = None,
@@ -281,6 +229,16 @@ def build_runtime_lock(
     it we record the installed distribution version and the locked
     commit as declared (dev path) — the commit stays in the lock either
     way so the run manifest can never silently forget it.
+
+    Agent releases arrive via ``release_locks`` — the ``OFFICIAL_RELEASE_LOCK``
+    hooks of the adapters the run selected (resolved by the caller, which has
+    the adapter classes) — or the explicit ``dsh``/``agents`` parameters. A
+    hook may declare its lock in either shape: a generic ``AgentReleaseLock``
+    lands in the ``agents`` section, while a legacy ``DshReleaseLock`` lands
+    in the legacy ``dsh`` section ONLY (byte-identical to what a dsh run
+    recorded before the generic section existed — the digest of such a lock
+    must not move). The routing is by TYPE, never by agent id: no code here
+    decides which agent a lock belongs to.
     """
     version, commit = _harbor_version_and_commit()
     if version != OFFICIAL_HARBOR_VERSION:
@@ -303,20 +261,24 @@ def build_runtime_lock(
         if uv_lock.exists():
             harbor.uv_lock_sha256 = sha256_file(uv_lock)
         harbor.commit = OFFICIAL_HARBOR_COMMIT
-    # The official DSH release is injected only for runs that actually select it.
-    # ``agent_ids=None`` keeps the historical behaviour (a DSH lock is always
-    # present); naming the selected agents is what lets a non-Node agent produce
-    # a runtime lock at all (it used to be impossible: a lock without a DSH
-    # section was rejected).
-    if dsh is None and (agent_ids is None or "dsh" in set(agent_ids)):
-        dsh = build_official_dsh_lock()
+    merged_agents: dict[str, AgentReleaseLock] = dict(agents or {})
+    for agent_id, lock in (release_locks or {}).items():
+        if isinstance(lock, DshReleaseLock):
+            # The legacy section is this agent's storage shape (sealed-format
+            # compatibility): it populates ``dsh`` and deliberately does not
+            # ALSO appear under ``agents`` — a dsh-only lock keeps the generic
+            # section empty so its digest stays byte-identical.
+            if dsh is None:
+                dsh = lock
+        else:
+            merged_agents[agent_id] = lock
     return RuntimeLock(
         harbor=harbor,
         python_env=fingerprint_python_environment(),
         images=images or {},
         plugin=fingerprint_plugin_distribution(),
         dsh=dsh,
-        agents=agents or {},
+        agents=merged_agents,
         harbor_lock_ref=harbor_lock_ref,
         # The operator-supplied control distribution, fingerprinted when there
         # is one. ``None`` keeps the lock byte-compatible with everything
@@ -337,20 +299,6 @@ def build_runtime_lock(
         ),
     )
 
-
-def build_official_dsh_lock() -> DshReleaseLock:
-    return DshReleaseLock(
-        official_tag=OFFICIAL_DSH_TAG,
-        commit=OFFICIAL_DSH_COMMIT,
-        packages=[
-            NpmPackageLock(name=n, version=v, integrity=i)
-            for n, v, i in DSH_NPM_SLICE
-        ],
-        node_versions=list(DSH_NODE_VERSIONS),
-        cordis_version="4.0.3",
-        acp_sdk_version="1.4.0",
-        experimental=True,
-    )
 
 
 def _cmp(expected: Any, actual: Any, what: str) -> None:
@@ -387,6 +335,12 @@ def verify_runtime_lock(expected: RuntimeLock) -> None:
             )
 
     if expected.dsh is not None:
+        # Legacy-format supply-chain gate: the ``dsh`` section is part of the
+        # sealed lock FORMAT (old locks must keep loading and passing), and
+        # this block checks a section in that shape is well-formed — packages
+        # present, the agent's own package named and integrity-pinned. The
+        # pin DATA lives in the adapter (agents/dsh/release.py); this is
+        # format validation, not agent selection.
         if not expected.dsh.packages:
             raise LockMismatchError("dsh lock declares no npm packages")
         names = [p.name for p in expected.dsh.packages]

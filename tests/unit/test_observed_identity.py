@@ -18,7 +18,7 @@ from aeval.hooks.context import EvaluationContext, LifecycleError, TrialState
 def _paths() -> TrialPaths:
     return TrialPaths(
         sandbox_cwd="/workspace",
-        dsh_home="/root/.deepagents",
+        agent_home="/root/.deepagents",
         bundle_path="/logs/agent/bundle_descriptor.json",
         session_root=".",
         download_root="trials/t/agent",

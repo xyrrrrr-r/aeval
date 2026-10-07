@@ -7,11 +7,16 @@ from aeval.contracts import OverlayIdentity, RunManifest, VersionsBundle
 
 
 def _manifest(run_id="r1", **overrides) -> RunManifest:
+    from aeval.agents.dsh.release import build_official_dsh_lock
     from aeval.provenance import build_runtime_lock
 
     manifest = RunManifest(
         run_id=run_id,
-        runtime_lock=build_runtime_lock(),
+        # a dsh run's lock: the adapter hook contributed its pin (the
+        # agent-neutral builder cannot name an agent)
+        runtime_lock=build_runtime_lock(
+            release_locks={"dsh": build_official_dsh_lock()}
+        ),
         overlay=OverlayIdentity(
             suite_id="s", suite_version="1", overlay_digest="d" * 64,
             source_commit="9" * 40,
@@ -62,7 +67,7 @@ def test_python_version_difference_blocks_comparison():
 
 
 def test_dsh_slice_difference_blocks_comparison():
-    from aeval.provenance import OFFICIAL_DSH_TAG
+    from aeval.agents.dsh.release import OFFICIAL_DSH_TAG
 
     right = _manifest()
     right.runtime_lock.dsh.official_tag = "dsh-v0.2.0"

@@ -136,20 +136,29 @@ def check_model_routing(adapter: type) -> ConformanceCheck:
 
     The silent failure this guards (AGENT-ABSTRACTION-2 §4.5) is the one the
     budget columns would still call metered: an agent that speaks an OpenAI
-    wire with no facade stack talks straight to the vendor — metered in the
-    manifest, unmetered in reality. The mirror case is equally quiet: a facade
-    stack declared with no OpenAI routing would serve an endpoint the agent
-    never calls. Both are refusals here, before a sandbox is built.
+    wire with no translating stack talks straight to the vendor — metered in
+    the manifest, unmetered in reality. The mirror case is equally quiet: a
+    translating stack declared with no OpenAI routing would serve an endpoint
+    the agent never calls. Both are refusals here, before a sandbox is built.
+
+    Which stacks translate which wires is the flavor registry's
+    ``serves_protocols`` capability (``stack_serves_protocol``), never a
+    flavor name — the same rule the declaration gap applies.
     """
+    from aeval.agents.contract import (
+        stack_serves_any_openai,
+        stack_serves_protocol,
+    )
+
     routing = model_routing_of(adapter)
     stack = control_stack_of(adapter)
     if routing is None:
-        if stack == "deepagent-facade":
+        if stack_serves_any_openai(stack):
             return ConformanceCheck(
                 "model_routing",
                 "fail",
-                f"control_stack={stack!r} serves OpenAI endpoints, but the "
-                "adapter declares no MODEL_ROUTING — the facade would serve an "
+                f"control_stack={stack!r} translates OpenAI wires, but the "
+                "adapter declares no MODEL_ROUTING — the stack would serve an "
                 "endpoint the agent never calls",
             )
         return ConformanceCheck(
@@ -158,24 +167,32 @@ def check_model_routing(adapter: type) -> ConformanceCheck:
             f"adapter declares no MODEL_ROUTING; control_stack={stack!r}",
         )
     if routing.agent_protocol == "gateway_native":
+        if stack_serves_any_openai(stack):
+            return ConformanceCheck(
+                "model_routing",
+                "fail",
+                f"MODEL_ROUTING is gateway_native, but control_stack={stack!r} "
+                "translates OpenAI wires — the stack would serve an endpoint "
+                "the agent never calls",
+            )
         return ConformanceCheck(
             "model_routing",
             "pass",
             f"gateway_native — the control stack ({stack!r}) speaks the broker "
             "wire itself, so no facade endpoint is served",
         )
-    if stack != "deepagent-facade":
+    if not stack_serves_protocol(stack, routing.agent_protocol):
         return ConformanceCheck(
             "model_routing",
             "fail",
-            f"{routing.agent_protocol} needs the in-sandbox facade stack to "
-            f"translate it, but control_stack={stack!r} — the agent would talk "
-            "to the vendor unmetered",
+            f"{routing.agent_protocol} needs an in-sandbox stack that "
+            f"translates it, but control_stack={stack!r} does not — the agent "
+            "would talk to the vendor unmetered",
         )
     return ConformanceCheck(
         "model_routing",
         "pass",
-        f"{routing.agent_protocol} via {stack!r}; facade serves "
+        f"{routing.agent_protocol} via {stack!r}; the stack serves "
         f"{facade_protocols_for(routing)}; agent env "
         + ", ".join(f"{slot}={name}" for slot, name in sorted(routing.env.items())),
     )
