@@ -776,6 +776,61 @@ def export_cmd(
     typer.echo(f"Exported native suite and overlay: {result}")
 
 
+def _load_trajectory_stats(store: Path, records):
+    """逐试次采集密封轨迹（best-effort，报告/面板共用一个入口）。
+
+    返回 ``(stats, unavailable)``：stats 是 ``TrajectoryStats`` 列表；
+    unavailable 是 ``(trial_id, 原因)``——读不到的试次如实报原因，
+    不假装完整。trial 目录名无契约保证（驱动自定义），唯一可靠的
+    映射是目录内 collection_manifest.json 记录的 trial_id。
+    """
+    import json as _json
+
+    from aeval.verdict.trajectory.base import (
+        SealedTranscriptError,
+        build_evidence,
+        load_sealed_transcript,
+    )
+    from aeval.verdict.trajectory.stats import collect_stats
+
+    trials_dir = store.parent / "trials"
+    dir_by_trial: dict[str, Path] = {}
+    if trials_dir.is_dir():
+        for entry in sorted(trials_dir.iterdir()):
+            manifest_path = entry / "collection_manifest.json"
+            if not entry.is_dir() or not manifest_path.is_file():
+                continue
+            try:
+                sealed_id = _json.loads(
+                    manifest_path.read_text("utf-8")
+                ).get("trial_id")
+            except (OSError, ValueError):
+                continue
+            if isinstance(sealed_id, str):
+                dir_by_trial[sealed_id] = entry
+
+    stats: list = []
+    unavailable: list[tuple[str, str]] = []
+    for record in records:
+        trial_dir = dir_by_trial.get(record.trial_id)
+        if trial_dir is None:
+            unavailable.append((record.trial_id, "试次目录缺失"))
+            continue
+        try:
+            transcript = load_sealed_transcript(
+                record.model_copy(update={"artifact_base": str(trial_dir)})
+            )
+        except SealedTranscriptError as exc:
+            unavailable.append((record.trial_id, exc.reason))
+            continue
+        stats.append(
+            collect_stats(
+                record, build_evidence(transcript, record.stop_reason)
+            )
+        )
+    return stats, unavailable
+
+
 @app.command("report")
 def report_cmd(
     store: Annotated[Path, typer.Option()],
@@ -800,7 +855,12 @@ def report_cmd(
                      EXIT_VALIDATION_ERROR)
     finally:
         db.close()
-    summary = aggregate_run(run_ids, trials, k=k, manifests=manifests)
+    # 轨迹采集：逐试次读密封证据（sha256 校验），失败的如实记原因。
+    trajectory, unavailable = _load_trajectory_stats(store, trials)
+    summary = aggregate_run(
+        run_ids, trials, k=k, manifests=manifests,
+        trajectory=trajectory, trajectory_unavailable=unavailable,
+    )
     if compare:
         if len(run_ids) < 2:
             _die("--compare needs at least two run ids", EXIT_PARAM_ERROR)
@@ -849,8 +909,99 @@ def dashboard_cmd(
                      EXIT_VALIDATION_ERROR)
     finally:
         db.close()
-    summary = aggregate_run(run_ids, trials, k=k, manifests=manifests)
+    trajectory, unavailable = _load_trajectory_stats(store, trials)
+    summary = aggregate_run(
+        run_ids, trials, k=k, manifests=manifests,
+        trajectory=trajectory, trajectory_unavailable=unavailable,
+    )
     typer.echo(render_dashboard_html(summary))
+
+
+@app.command("trajectory")
+def trajectory_cmd(
+    store: Annotated[Path, typer.Option()],
+    run_id: Annotated[str, typer.Argument()],
+    task_id: Annotated[str, typer.Argument()],
+    context_window: Annotated[
+        Optional[int],
+        typer.Option(help="声明的模型上下文窗口（tokens）——仅用于占用率"
+                          "阈值线；证据本身不携带窗口"),
+    ] = None,
+) -> None:
+    """Render the trajectory analysis panel for one task.
+
+    Loads every sealed trial of ``task_id`` in the run, verifies each
+    canonical transcript against its recorded sha256, and collects the
+    trajectory facts (execution timeline, tool calls/failures/retries,
+    token pulse, context pressure, durations). Output is one
+    self-contained HTML file on stdout — redirect to keep it::
+
+        aeval trajectory --store out/run/store.sqlite3 run-... task > t.html
+    """
+    from aeval.metrics.trajectory_panel import (
+        TrialPanel,
+        render_trajectory_html,
+    )
+    from aeval.store.sqlite import TrialStore
+
+    db = TrialStore(store)
+    try:
+        manifest = db.load_run_manifest(run_id)
+        records = [
+            record for record in db.list_trials([run_id])
+            if record.coordinates.task_id == task_id
+        ]
+    finally:
+        db.close()
+    if not records:
+        _die(f"no trials for task {task_id!r} in {run_id}",
+             EXIT_VALIDATION_ERROR)
+
+    stats, unavailable = _load_trajectory_stats(store, records)
+    for trial_id, reason in unavailable:
+        typer.secho(
+            f"trial {trial_id}: {reason} — skipped",
+            fg=typer.colors.YELLOW, err=True,
+        )
+    if not stats:
+        _die("no trial had a usable sealed transcript", EXIT_VALIDATION_ERROR)
+
+    index_by_trial = {
+        record.trial_id: record.coordinates.trial_index for record in records
+    }
+    title_zh = manifest.task_titles.get(task_id, task_id)
+    panels = [
+        TrialPanel(
+            heading=(
+                f"试次 {index_by_trial.get(s.trial_id, 0) + 1}"
+                f"/{len(records)} · {s.trial_id}"
+            ),
+            meta=(
+                f"{run_id} · {manifest.overlay.suite_id}@"
+                f"{manifest.overlay.suite_version} · {title_zh}({task_id})"
+            ),
+            stats=s,
+        )
+        for s in sorted(
+            stats, key=lambda s: index_by_trial.get(s.trial_id, 0)
+        )
+    ]
+    meta_lines = [
+        f"运行 {run_id} · 套件 {manifest.overlay.suite_id}@"
+        f"{manifest.overlay.suite_version} · "
+        f"{len(panels)}/{len(records)} 个试次有可用密封轨迹",
+        "口径：失败 = 工具调用无观测；重试 = 相邻同名同参调用；"
+        "步骤耗时 = 相邻时间戳差（含模型推理）",
+    ]
+    if context_window is not None:
+        meta_lines.append(
+            f"上下文窗口 {context_window:,}（调用方声明，非密封证据）"
+        )
+    title = f"{title_zh}({task_id}) 轨迹分析"
+    typer.echo(render_trajectory_html(
+        title=title, meta_lines=meta_lines, trials=panels,
+        context_window=context_window,
+    ))
 
 
 @app.command("rejudge")

@@ -558,6 +558,52 @@ def _bottom_html(watermark: Watermark, summary: RunSummary) -> str:
     return f'<div class="bottom">{"".join(items)}</div>'
 
 
+def _trajectory_html(traj) -> str:
+    """轨迹采集带：密封轨迹事实的紧凑汇总（与 markdown 报告同数字）。"""
+    facts = [
+        ("证据覆盖", f"{traj.trials_with_evidence}/{traj.trials_total} 试次"),
+    ]
+    if traj.total_tokens is not None:
+        facts.append(("总 Token", f"{traj.total_tokens:,}"))
+    if traj.mean_wall_seconds is not None:
+        facts.append(("平均时长", f"{traj.mean_wall_seconds:.1f}s"))
+    facts.append(("工具调用", str(traj.tool_calls)))
+    facts.append(
+        (
+            "无观测",
+            f"{traj.tool_missing_obs}"
+            + (
+                f"（{traj.tool_missing_obs / traj.tool_calls:.0%}）"
+                if traj.tool_calls
+                else ""
+            ),
+        )
+    )
+    facts.append(("重试", str(traj.tool_retries)))
+    if traj.peak_input_tokens is not None:
+        facts.append(("峰值上下文", f"{traj.peak_input_tokens:,} tokens"))
+    if traj.longest_call is not None:
+        facts.append(
+            ("最长调用", f"{traj.longest_call[0]} {traj.longest_call[1]:.1f}s")
+        )
+    chips = "".join(
+        f'<div class="card"><div class="l">{_e(label)}</div>'
+        f'<div class="v">{_e(value)}</div></div>'
+        for label, value in facts
+    )
+    note = ""
+    if traj.unavailable:
+        note = (
+            '<p class="meta">不可用：'
+            + _e("、".join(traj.unavailable))
+            + "</p>"
+        )
+    return (
+        '<h2>轨迹采集</h2>\n'
+        f'<div class="cards">{chips}</div>\n{note}'
+    )
+
+
 def render_dashboard_html(
     summary: RunSummary,
     comparison: ComparabilityReport | None = None,
@@ -611,6 +657,14 @@ def render_dashboard_html(
     else:
         watermark_html = ""
 
+    # 轨迹采集带：CLI 采集了密封轨迹数据才渲染（与 markdown 报告的
+    # 「轨迹采集」节同源同数字）。
+    trajectory_html = (
+        _trajectory_html(summary.trajectory)
+        if summary.trajectory is not None
+        else ""
+    )
+
     return (
         "<!doctype html>\n<html lang=\"zh-CN\">\n<head>\n<meta charset="
         '"utf-8">\n<meta name="viewport" content="width=device-width, '
@@ -619,7 +673,8 @@ def render_dashboard_html(
         "</head>\n<body>\n<div class=\"wrap\">\n"
         "<header><h1>aeval 运行面板</h1>"
         f'<div class="meta">{" · ".join(meta_bits)}</div></header>\n'
-        f"{banners}\n{_metric_cards(summary)}\n{watermark_html}"
+        f"{banners}\n{_metric_cards(summary)}\n{trajectory_html}"
+        f"{watermark_html}"
         f'<div class="split">{_verdict_panel(summary)}'
         f"{_exclusion_panel(summary)}</div>\n"
         f"{category_html}\n{_task_section(summary, rollup)}\n"

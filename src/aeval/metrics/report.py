@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass, field
-from typing import Iterable, Iterator, Sequence
+from typing import Any, Iterable, Iterator, Sequence
 
 from aeval.bundle.attestation import ComparabilityReport, compare_manifests
 from aeval.contracts import ExclusionSummary, RunManifest, TrialRecord, Verdict
@@ -25,6 +25,8 @@ __all__ = [
     "RunSummary",
     "TaskGroupSummary",
     "CategoryRollup",
+    "CategoryTrajectory",
+    "TrajectoryAggregate",
     "aggregate_run",
     "rollup_categories",
     "category_pass_pow_k",
@@ -81,6 +83,9 @@ class RunSummary:
     # 维度模型（清单封存的评分参数：阈值/权重/大块/红线任务）。空 =
     # 套件未声明 → 报告/面板不加「维度达标」层（向后兼容）。
     dimension_model: dict[str, object] = field(default_factory=dict)
+    # 轨迹采集聚合（可选输入）：CLI 从密封轨迹逐试次采集后传入。
+    # None = 未采集 → 报告不加「轨迹采集」节（向后兼容）。
+    trajectory: TrajectoryAggregate | None = None
     # per-task roll-up (integration P2): the skill/dimension cut. Only
     # meaningful when a run spans several tasks; empty otherwise.
     task_groups: dict[str, TaskGroupSummary] = field(default_factory=dict)
@@ -92,6 +97,8 @@ def aggregate_run(
     *,
     k: int | None = None,
     manifests: Sequence[RunManifest] | None = None,
+    trajectory: Sequence[Any] = (),
+    trajectory_unavailable: Sequence[tuple[str, str]] = (),
 ) -> RunSummary:
     trials = list(trials)
     valid = valid_trials(trials)
@@ -200,6 +207,17 @@ def aggregate_run(
     summary.suite_labels = suite_labels
     summary.dimension_model = model
 
+    # 轨迹采集聚合：仅当调用方采集了数据（或有不可用原因要如实呈现）
+    # 时才生成该层；类别映射与「按类别结果」同一规则。
+    if trajectory or trajectory_unavailable:
+        summary.trajectory = _aggregate_trajectory(
+            list(trajectory),
+            list(trajectory_unavailable),
+            len(trials),
+            lambda task_id: _category_of(task_id, default),
+            names,
+        )
+
     if k is not None and len(valid) >= k:
         summary.pass_pow_k_value = pass_pow_k(passes, len(valid), k)
         # pass@k (at least one of k passes) = 1 - C(n-p, k)/C(n, k).
@@ -242,6 +260,143 @@ def _zh_counts(counts: dict[str, int], mapping: dict[str, str]) -> str:
     return "、".join(
         f"{mapping.get(key, key)}({key}) {number}"
         for key, number in sorted(counts.items())
+    )
+
+
+@dataclass(frozen=True)
+class CategoryTrajectory:
+    """一个类别的轨迹采集聚合（「轨迹采集」表的行）。"""
+
+    key: str
+    display: str
+    trials: int
+    total_tokens: int | None
+    mean_wall_seconds: float | None
+    tool_calls: int
+    missing_obs: int
+
+
+@dataclass(frozen=True)
+class TrajectoryAggregate:
+    """run 级轨迹采集聚合——只汇总 TrajectoryStats 里的事实。
+
+    ``unavailable`` 是不可用试次的原因（带计数）；覆盖不满时报告如
+    实展示，不假装完整。
+    """
+
+    trials_total: int
+    trials_with_evidence: int
+    unavailable: tuple[str, ...]
+    total_tokens: int | None
+    total_prompt_tokens: int | None
+    total_completion_tokens: int | None
+    total_cached_tokens: int | None
+    mean_wall_seconds: float | None
+    longest_wall: tuple[str, float] | None      # (trial_id, 秒)
+    tool_calls: int
+    tool_missing_obs: int
+    tool_retries: int
+    peak_input_tokens: int | None
+    peak_trial_id: str | None
+    peak_step_id: int | None
+    longest_call: tuple[str, float, str] | None  # (工具, 秒, trial_id)
+    categories: tuple[CategoryTrajectory, ...]
+
+
+def _aggregate_trajectory(
+    stats: Sequence[Any],
+    unavailable: Sequence[tuple[str, str]],
+    trials_total: int,
+    category_of,
+    category_names: dict[str, str],
+) -> TrajectoryAggregate:
+    reasons: dict[str, int] = {}
+    for _trial_id, reason in unavailable:
+        reasons[reason] = reasons.get(reason, 0) + 1
+    unavailable_text = tuple(
+        f"{reason} ×{count}" for reason, count in sorted(reasons.items())
+    )
+
+    def _sum(attr: str) -> int | None:
+        values = [getattr(s, attr) for s in stats]
+        values = [v for v in values if v is not None]
+        return sum(values) if values else None
+
+    walls = [
+        (s.trial_id, s.wall_clock_seconds)
+        for s in stats
+        if s.wall_clock_seconds is not None
+    ]
+    mean_wall = (
+        sum(w for _, w in walls) / len(walls) if walls else None
+    )
+    longest_wall = max(walls, key=lambda t: t[1]) if walls else None
+
+    peaks = [
+        (s.peak_input_tokens, s.trial_id, s.peak_step_id)
+        for s in stats
+        if s.peak_input_tokens is not None
+    ]
+    peak = max(peaks, key=lambda t: t[0]) if peaks else None
+
+    calls = [
+        (tool, seconds, s.trial_id)
+        for s in stats
+        if s.longest_call is not None
+        for tool, seconds in [s.longest_call]
+    ]
+    longest_call = max(calls, key=lambda t: t[1]) if calls else None
+
+    by_cat: dict[str, list[Any]] = {}
+    for s in stats:
+        by_cat.setdefault(category_of(s.task_id), []).append(s)
+    categories = tuple(
+        CategoryTrajectory(
+            key=cat,
+            display=_category_display(cat, category_names),
+            trials=len(items),
+            total_tokens=(
+                sum(t for t in (s.total_tokens for s in items) if t is not None)
+                if any(s.total_tokens is not None for s in items)
+                else None
+            ),
+            mean_wall_seconds=(
+                sum(s.wall_clock_seconds for s in items
+                    if s.wall_clock_seconds is not None)
+                / len([s for s in items if s.wall_clock_seconds is not None])
+                if any(s.wall_clock_seconds is not None for s in items)
+                else None
+            ),
+            tool_calls=sum(s.tool_calls_total for s in items),
+            missing_obs=sum(s.tool_missing_obs_total for s in items),
+        )
+        for cat, items in sorted(by_cat.items())
+    )
+
+    prompt = _sum("total_prompt_tokens")
+    completion = _sum("total_completion_tokens")
+    return TrajectoryAggregate(
+        trials_total=trials_total,
+        trials_with_evidence=len(stats),
+        unavailable=unavailable_text,
+        total_tokens=(
+            prompt + completion
+            if prompt is not None and completion is not None
+            else None
+        ),
+        total_prompt_tokens=prompt,
+        total_completion_tokens=completion,
+        total_cached_tokens=_sum("total_cached_tokens"),
+        mean_wall_seconds=mean_wall,
+        longest_wall=longest_wall,
+        tool_calls=sum(s.tool_calls_total for s in stats),
+        tool_missing_obs=sum(s.tool_missing_obs_total for s in stats),
+        tool_retries=sum(s.tool_retries_total for s in stats),
+        peak_input_tokens=peak[0] if peak else None,
+        peak_trial_id=peak[1] if peak else None,
+        peak_step_id=peak[2] if peak else None,
+        longest_call=longest_call,
+        categories=categories,
     )
 
 
@@ -376,6 +531,82 @@ def render_static_report(
             )
         else:
             lines.append("- 红线状态：全通过")
+    # 轨迹采集（密封轨迹的事实汇总）：只有 CLI 采集了数据才渲染；
+    # 数字全部来自 TrajectoryStats，这里只做格式化，不重新计算。
+    traj = summary.trajectory
+    if traj is not None:
+        lines.append("")
+        lines.append("## 轨迹采集")
+        lines.append("")
+        coverage = (
+            f"- 证据覆盖：{traj.trials_with_evidence}/{traj.trials_total}"
+            " 个试次"
+        )
+        if traj.unavailable:
+            coverage += "（不可用：" + "、".join(traj.unavailable) + "）"
+        lines.append(coverage)
+        if traj.total_tokens is not None:
+            cached = (
+                f" · 缓存 {traj.total_cached_tokens:,}"
+                if traj.total_cached_tokens is not None
+                else ""
+            )
+            lines.append(
+                f"- 总 Token：{traj.total_tokens:,}"
+                f"（输入 {traj.total_prompt_tokens:,}"
+                f" · 输出 {traj.total_completion_tokens:,}{cached}）"
+            )
+        else:
+            lines.append("- 总 Token：不可用（证据无 token 计量）")
+        if traj.mean_wall_seconds is not None:
+            wall_line = f"- 时长：平均 {traj.mean_wall_seconds:.1f}s"
+            if traj.longest_wall is not None:
+                wall_line += (
+                    f" · 最长 {traj.longest_wall[1]:.1f}s"
+                    f"（{traj.longest_wall[0]}）"
+                )
+            lines.append(wall_line)
+        lines.append(
+            f"- 工具调用：{traj.tool_calls} 次"
+            f" · 无观测 {traj.tool_missing_obs}"
+            + (
+                f"（{traj.tool_missing_obs / traj.tool_calls:.1%}）"
+                if traj.tool_calls
+                else ""
+            )
+            + f" · 重试 {traj.tool_retries}"
+        )
+        if traj.peak_input_tokens is not None:
+            lines.append(
+                f"- 上下文峰值：单步最大输入 "
+                f"{traj.peak_input_tokens:,} tokens"
+                f"（{traj.peak_trial_id} · step {traj.peak_step_id}）"
+            )
+        if traj.longest_call is not None:
+            tool, seconds, trial_id = traj.longest_call
+            lines.append(
+                f"- 最长调用：{tool} {seconds:.1f}s（{trial_id}）"
+            )
+        if traj.categories:
+            lines.append("")
+            lines.append("| 类别 | 试次 | Token | 平均时长(s) | 工具调用 | 无观测 |")
+            lines.append("|---|---|---|---|---|---|")
+            for cat in traj.categories:
+                tokens = (
+                    f"{cat.total_tokens:,}"
+                    if cat.total_tokens is not None
+                    else "—"
+                )
+                mean_wall = (
+                    f"{cat.mean_wall_seconds:.1f}"
+                    if cat.mean_wall_seconds is not None
+                    else "—"
+                )
+                lines.append(
+                    f"| {cat.display}({cat.key}) | {cat.trials} "
+                    f"| {tokens} | {mean_wall} | {cat.tool_calls} "
+                    f"| {cat.missing_obs} |"
+                )
     # 按任务表：技能/维度切口（只在有信息量时渲染——单任务 run 直接
     # 读上面的行）。套件声明了类别（清单里有 category_names /
     # default_category）时按类别聚合：先给「按类别结果」的汇总表
