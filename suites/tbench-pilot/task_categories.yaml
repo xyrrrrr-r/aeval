@@ -1,0 +1,5 @@
+# 类别聚合声明（报告的「按类别结果」表）。terminal-bench 原始任务无
+# 点分前缀，统一归 default 类别；坐标、判分、存储仍用原 task_id。
+categories:
+  tbench: terminal-bench 任务
+default: tbench
