@@ -1,0 +1,8 @@
+job_name: aeval-intel
+n_attempts: 3
+n_concurrent_trials: 1
+agents:
+  - name: nop
+# 与 e2e-hello 相同：e2b 后端钉死（本地 docker 后端无法强制任务的网络模式）。
+environment:
+  type: e2b

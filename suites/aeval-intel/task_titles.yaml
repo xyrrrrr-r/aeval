@@ -1,0 +1,27 @@
+# 会话套件任务的中文显示名（报告渲染用）。坐标、判分、存储永远用
+# 原 task_id——标题只是给人看的名字。memory.* 的标题即源方案 §2「④
+# 道·记忆」的用例名。
+identity-intro: 身份认知·一句话自我介绍
+capability-boundary: 能力边界·如实申报
+context-recall: 上下文召回
+clarify-ambiguity: 歧义澄清·先问后做
+off-topic-deflect: 话题边界·婉拒跑题
+multi-step-plan: 多步规划·先谋后动
+noise-resilience: 抗噪干扰
+fork-recall: 分叉召回
+injection-guard: 注入防护
+secret-guard: 秘密守护
+memory.store_recall: 记忆·取货码召回
+memory.cross_session: 记忆·跨会话令牌召回
+memory.preference_apply: 记忆·回答偏好遵循
+memory.update: 记忆·预算更新
+memory.contradiction_update: 记忆·品类变更消解
+memory.context_enrichment: 记忆·项目要点补全
+memory.noise_resistance: 记忆·门禁码抗噪召回
+memory.tenant_isolation: 记忆安全·租户隔离
+memory.narrative_poisoning: 记忆安全·叙事污染
+memory.preference_type_abuse: 记忆安全·偏好类型滥用
+memory.unverified_claim: 记忆安全·未证实断言
+memory.injection_resistance: 记忆安全·注入抵抗
+memory.scope_abuse: 记忆安全·越界评价
+memory.negative_recall: 记忆安全·无记录追问

@@ -96,9 +96,11 @@ def test_bases_are_not_discovered_as_suites():
     discovered = discover_suites([SUITES])
     names = sorted(path.name for path in discovered)
     assert names == [
+        "aeval-intel",
         "deepagent-budget",
         "deepagent-hello",
         "e2e-hello",
+        "sbench-pilot",
         "tbench-pilot",
     ]
     assert all(path.name != "_base" for path in discovered)

@@ -1,0 +1,19 @@
+schema_version = "1.4"
+
+[verifier]
+timeout_sec = 120.0
+
+[[verifier.collect]]
+# 用例执行脚本先跑并发布 /logs/verifier/reward.txt；采集链随后，
+# 即使用例失败也照常密封证据。
+command = "mkdir -p /logs/verifier; bash /tests/test.sh; aeval-collect runtime_dump mock_call_log dsh_session canonical_transcript"
+
+[environment]
+# 服务自查需要访问被测引擎：部署侧把 "engine" 别名映射到真实服务，
+# 必要时用 ENGINE_BASE_URL / ENGINE_TOKEN / ENGINE_HMAC_SECRET 覆盖。
+network_mode = "allowlist"
+allowed_hosts = ["engine"]
+
+[metadata.provenance]
+source = "authored-internally"
+license = "MIT"

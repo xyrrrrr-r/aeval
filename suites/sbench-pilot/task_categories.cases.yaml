@@ -1,0 +1,18 @@
+# 由 aeval/cases/generate.py 生成 —— 库属类别的聚合显示名。
+# 任务归组 = task_id 首个点前的前缀（即类别键）；套件自有类别
+# 的显示名放 task_categories.yaml（加载时合并，套件侧优先）。
+categories:
+  a2a: A2A 协议
+  artifact: 产出物
+  chat: 核心对话
+  ddl: 数据持久化
+  dingtalk: 钉钉集成
+  engine_lifecycle: 引擎生命周期
+  error: 异常处理
+  health: 基础连通
+  plan: Plan 编排
+  report: 报告系统
+  session: 会话管理
+  task_center: 任务中心
+  tool_audit: 工具安全审计
+  tools: 工具系统

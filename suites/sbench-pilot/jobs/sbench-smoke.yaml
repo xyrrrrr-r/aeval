@@ -1,0 +1,12 @@
+# 服务基准冒烟跑法：123 个用例各 1 次尝试（确定性检查，无统计需
+# 求）。agent 用 nop —— 服务自查用例里 agent 保持待命，被测对象是
+# 引擎服务本身。
+job_name: sbench-smoke
+n_attempts: 1
+n_concurrent_trials: 1
+agents:
+  - name: nop
+# 与 aeval-intel 相同：e2b 后端钉死（本地 docker 后端无法强制任务
+# 的网络模式）。
+environment:
+  type: e2b

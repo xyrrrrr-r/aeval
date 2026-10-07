@@ -1,0 +1,11 @@
+schema_version = "1.4"
+
+[environment]
+network_mode = "no-network"
+
+[[verifier.collect]]
+command = "aeval-collect runtime_dump mock_call_log dsh_session canonical_transcript"
+
+[metadata.provenance]
+source = "authored-internally"
+license = "MIT"

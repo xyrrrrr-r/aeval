@@ -1,0 +1,7 @@
+# 类别聚合声明（报告的「按类别结果」表）。任务归组规则：task_id 首
+# 个点前的前缀（memory.* → memory），无点的任务归 default（智能度
+# 10 任务）。坐标、判分、存储仍用原 task_id。
+categories:
+  memory: 跨会话记忆
+  intelligence: 会话智能度
+default: intelligence

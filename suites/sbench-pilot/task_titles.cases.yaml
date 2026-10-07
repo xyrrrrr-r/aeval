@@ -1,0 +1,125 @@
+# 由 aeval/cases/generate.py 生成 —— 库属任务的中文显示名。
+# 套件自有任务的显示名放 task_titles.yaml（加载时合并，套件侧优先）。
+a2a.agent_card: Agent Card
+a2a.cancel_task: 取消任务
+a2a.duplicate_task_id: 重复 task_id
+a2a.error_codes: 错误码
+a2a.get_task: 查询任务
+a2a.no_auth: 鉴权
+a2a.send_task: 发送任务
+a2a.task_status_history: 状态历史
+artifact.api_reachable: API 可达
+artifact.env_correctness: env 正确性
+artifact.field_completeness: 字段完整性
+artifact.listing: 列表
+artifact.persistence: 持久化
+chat.basic: 基础对话
+chat.concurrent_requests: 并发请求
+chat.empty_message: 空消息
+chat.multi_turn_context: 多轮上下文
+chat.non_streaming: 非流式对话
+chat.oversized_input: 超长输入
+chat.special_chars: 特殊字符
+chat.sse_event_format: SSE 事件格式
+chat.streaming: 流式对话
+chat.unicode_content: Unicode 内容
+ddl.artifacts_data: artifacts 表数据
+ddl.double_write: 双写检测
+ddl.field_types: 字段类型
+ddl.id_uniqueness: 主键唯一性
+ddl.memory_records_data: memory_records 表数据
+ddl.message_order: 消息顺序
+ddl.messages_data: messages 表数据
+ddl.plan_steps_data: plan_steps 表数据
+ddl.plans_data: plans 表数据
+ddl.sessions_data: sessions 表数据
+ddl.tasks_data: tasks 表数据
+ddl.time_sanity: 时间合理性
+ddl.tool_calls_data: tool_calls 表数据
+ddl.usage_accumulation: 用量累加一致性
+ddl.usage_stats_data: usage_stats 表数据
+dingtalk.error_handling: 错误处理
+dingtalk.message_send_dryrun: 消息发送干运行
+dingtalk.tool_registry: 工具注册
+dingtalk.worksheet_read: 工作表读取
+dingtalk.worksheet_write: 工作表写入
+engine_lifecycle.dedup_202: 去重(202)
+engine_lifecycle.failure_retry_fields: 失败重试字段
+engine_lifecycle.heartbeat_timeout: 心跳超时
+engine_lifecycle.heartbeat_update: 心跳精确更新
+engine_lifecycle.state_machine: 状态机流转
+engine_lifecycle.status_healthy: 健康状态（重启恢复面）
+engine_lifecycle.task_complete: 任务完成
+engine_lifecycle.task_execute_accept: task_execute 接收
+error.bad_auth: 错误鉴权
+error.hmac_missing: HMAC 缺失
+error.hmac_replay: HMAC 重放
+error.hmac_wrong: HMAC 错误
+error.invalid_json: 畸形 JSON
+error.method_not_allowed: 不允许的方法
+error.no_auth: 无鉴权
+error.oversized_body: 超大 body
+error.unknown_endpoint: 未知端点
+health.engine_ready: 引擎就绪
+health.sam_memory_diagnosis: SAM 记忆诊断
+health.service_alive: 服务存活
+plan.approve: 审批
+plan.cancel: 取消
+plan.concurrent_create: 并发创建
+plan.create: 创建 Plan
+plan.get: 查询 Plan
+plan.invalid_transition: 非法流转
+plan.list: 列表
+plan.reject: 拒绝
+plan.status_flow: 状态流转
+plan.step_approval: APPROVAL 步骤
+plan.step_auto: AUTO 步骤
+plan.step_dependencies: 步骤依赖
+plan.step_manual: MANUAL 步骤
+plan.update: 更新
+plan.zombie_recovery: 僵尸恢复
+report.auto_generate: 自动生成
+report.download: 下载
+report.hmac_auth: HMAC 鉴权
+report.isolation: 租户隔离
+report.listing: 列表
+report.markdown_render: Markdown 渲染
+report.schema: 报告 schema
+report.ssr_endpoint: SSR 端点
+session.auto_create: 自动创建
+session.close: 会话关闭
+session.compaction_integrity: 压缩完整性
+session.concurrent_isolation: 并发隔离
+session.cross_tenant_isolation: 跨租户隔离
+session.multi_turn_reuse: 多轮复用
+session.query: 会话查询
+session.ten_round_context: 10 轮上下文保持
+task_center.cancel: 取消
+task_center.cron_create: 定时任务创建
+task_center.delete: 删除
+task_center.disable: 禁用
+task_center.enable: 启用
+task_center.hmac_execute: HMAC 执行
+task_center.immediate_create: 即时任务创建
+task_center.lifecycle: 全生命周期
+task_center.missed_run: 漏跑恢复
+task_center.next_run: 下次执行排程
+task_center.oneshot_create: 一次性任务创建
+task_center.query: 查询
+tool_audit.audit_query: 审计查询
+tool_audit.param_completeness: 参数完整性
+tool_audit.param_type_validation: 参数类型校验
+tool_audit.path_traversal: 路径穿越拒绝
+tool_audit.schema_format: schema 格式规范
+tool_audit.schema_required_fields: schema 必填字段
+tool_audit.sensitive_path: 敏感路径白名单
+tool_audit.ssrf_internal: SSRF 内网防护
+tool_audit.ssrf_metadata: SSRF 元数据防护
+tool_audit.tool_log_recording: 调用留痕
+tool_audit.unknown_tool: 未知工具拒绝
+tools.concurrent_safety: 并发安全
+tools.get_current_time: get_current_time
+tools.read_skill: read_skill
+tools.registry_list: 工具注册列表
+tools.sub_agent: sub_agent
+tools.web_fetch: web_fetch
