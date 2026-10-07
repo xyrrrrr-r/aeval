@@ -34,7 +34,7 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass, field
-from typing import Any, Iterator
+from typing import Any
 
 from aeval.contracts import CanonicalTranscript, MetricOutcome
 from aeval.verdict.trajectory.base import (
@@ -236,41 +236,6 @@ class QualityAnchors:
 # --- content quality: score-only -------------------------------------------
 
 
-@dataclass(frozen=True)
-class ProbeDetail:
-    """One step-attributable judgement (轨迹分析 §turn 切面).
-
-    轨迹级 ``evaluate`` 把这些判分折叠成维度分；turn 分析用同一批
-    ``ProbeDetail`` 把分数落回具体轮次（``user_step_id`` 起、
-    ``reply_step_id`` 应答）——两条视图之间不存在第二套判分逻辑。
-    ``label`` 是锚点/探针标识（面板显示用）。
-    """
-
-    metric: str
-    label: str
-    user_step_id: int
-    reply_step_id: int | None
-    score: float
-    reason: str
-
-
-def collect_turn_details(
-    metrics: Sequence[Any], evidence: TrajectoryEvidence
-) -> tuple[ProbeDetail, ...]:
-    """所有支持逐条归因的指标的 ProbeDetail（按声明序）。
-
-    不支持 ``details`` 的指标是轨迹级维度（如 fork 记忆跨轮语义），
-    turn 面板把它们单列，不强行归因。
-    """
-    details: list[ProbeDetail] = []
-    for metric in metrics:
-        collector = getattr(metric, "details", None)
-        if collector is None:
-            continue
-        details.extend(collector(evidence))
-    return tuple(details)
-
-
 class ResponseBrevity(TrajectoryMetric):
     """Final reply length — the reply to the user, not the whole dialogue."""
 
@@ -331,45 +296,26 @@ class _ProbeReplyMetric(TrajectoryMetric):
     ) -> tuple[float, str] | None:
         raise NotImplementedError
 
-    def _matched_probes(
-        self, evidence: TrajectoryEvidence
-    ) -> Iterator[tuple[TrajectoryMessage, TrajectoryMessage | None]]:
-        """Trigger-matching user turns with their first following reply."""
-        replies = agent_replies_of(evidence.transcript)
-        for user in user_messages_of(evidence.transcript):
-            if _first_match(self._triggers, user.text) is None:
-                continue
-            yield user, _next_reply_after(replies, user.step_id)
-
-    def details(self, evidence: TrajectoryEvidence) -> tuple[ProbeDetail, ...]:
-        """每个可判探针一条判分，落回它的 turn。"""
-        out: list[ProbeDetail] = []
-        for user, reply in self._matched_probes(evidence):
-            if reply is None:
-                continue
-            verdict = self._judge(user.text, reply, evidence)
-            if verdict is None:
-                continue
-            score, reason = verdict
-            out.append(
-                ProbeDetail(
-                    metric=self.name, label=user.text[:32],
-                    user_step_id=user.step_id, reply_step_id=reply.step_id,
-                    score=score, reason=reason,
-                )
-            )
-        return tuple(out)
-
     def evaluate(self, evidence: TrajectoryEvidence) -> MetricOutcome:
         if not self._triggers:
             return _outcome(
                 self, "skipped", None,
                 [f"no {self._what} triggers declared for this suite"],
             )
-        judged = self.details(evidence)
-        unanswered = sum(
-            1 for _, reply in self._matched_probes(evidence) if reply is None
-        )
+        replies = agent_replies_of(evidence.transcript)
+        users = user_messages_of(evidence.transcript)
+        judged: list[tuple[float, str]] = []
+        unanswered = 0
+        for user in users:
+            if _first_match(self._triggers, user.text) is None:
+                continue
+            reply = _next_reply_after(replies, user.step_id)
+            if reply is None:
+                unanswered += 1
+                continue
+            verdict = self._judge(user.text, reply, evidence)
+            if verdict is not None:
+                judged.append(verdict)
         if not judged:
             if unanswered:
                 return _outcome(
@@ -380,11 +326,11 @@ class _ProbeReplyMetric(TrajectoryMetric):
                 self, "skipped", None,
                 [f"no {self._what} probes in this trajectory"],
             )
-        score = sum(d.score for d in judged) / len(judged)
+        score = sum(s for s, _ in judged) / len(judged)
         reasons = [f"{len(judged)} {self._what} probe(s) judged"]
         if unanswered:
             reasons.append(f"{unanswered} probe(s) unanswered")
-        reasons.extend(d.reason for d in judged)
+        reasons.extend(r for _, r in judged)
         status = "ok" if score >= 1.0 else "degraded"
         return _outcome(self, status, score, reasons)
 
@@ -506,11 +452,14 @@ class ContextRetention(TrajectoryMetric):
     def __init__(self, anchors: tuple[ContextAnchor, ...] = ()) -> None:
         self._anchors = tuple(anchors)
 
-    def details(self, evidence: TrajectoryEvidence) -> tuple[ProbeDetail, ...]:
-        """每个「已引入且被探查」锚点一条判分，落回探查 turn。"""
+    def evaluate(self, evidence: TrajectoryEvidence) -> MetricOutcome:
+        if not self._anchors:
+            return _outcome(self, "skipped", None, ["no context anchors declared"])
         replies = agent_replies_of(evidence.transcript)
         users = user_messages_of(evidence.transcript)
-        out: list[ProbeDetail] = []
+        scores: list[float] = []
+        reasons: list[str] = []
+        skipped: list[str] = []
         for anchor in self._anchors:
             introduce = _compile((anchor.introduce,), what="context introduce")
             probe = _compile((anchor.probe,), what="context probe")
@@ -525,62 +474,50 @@ class ContextRetention(TrajectoryMetric):
                 and any(i < u.step_id for i in intro_steps)
             ]
             if not intro_steps or not probe_steps:
+                skipped.append(anchor.introduce)
                 continue
             user = probe_steps[0]
             reply = _next_reply_after(replies, user.step_id)
             if reply is None:
+                skipped.append(anchor.introduce)
                 continue
             hits = sum(1 for t in terms if t.search(reply.text) is not None)
             ratio = hits / len(terms) if terms else 0.0
             if ratio >= 1.0:
-                score, reason = 1.0, (
+                scores.append(1.0)
+                reasons.append(
                     f"anchor {anchor.introduce!r}: recalled every expected term"
                 )
             elif ratio >= anchor.fuzzy_threshold:
-                score, reason = 0.6, (
+                scores.append(0.6)
+                reasons.append(
                     f"anchor {anchor.introduce!r}: fuzzy recall "
                     f"({hits}/{len(terms)} terms)"
                 )
             else:
-                score, reason = 0.0, (
+                scores.append(0.0)
+                reasons.append(
                     f"anchor {anchor.introduce!r}: recall missed the expected "
                     f"terms ({hits}/{len(terms)})"
                 )
-            out.append(
-                ProbeDetail(
-                    metric=self.name, label=anchor.introduce,
-                    user_step_id=user.step_id, reply_step_id=reply.step_id,
-                    score=score, reason=reason,
-                )
-            )
-        return tuple(out)
-
-    def evaluate(self, evidence: TrajectoryEvidence) -> MetricOutcome:
-        if not self._anchors:
-            return _outcome(self, "skipped", None, ["no context anchors declared"])
-        judged = self.details(evidence)
-        judged_labels = {d.label for d in judged}
-        skipped = [
-            anchor.introduce for anchor in self._anchors
-            if anchor.introduce not in judged_labels
-        ]
-        if skipped and not judged:
+        if skipped and not scores:
             return _outcome(
                 self, "skipped", None,
                 ["no context anchor was both introduced and probed in this "
                  "trajectory"] + [f"unjudgeable: {a!r}" for a in skipped],
             )
-        if not judged:
+        if not scores:
             return _outcome(self, "skipped", None, ["no context anchors judged"])
-        score = sum(d.score for d in judged) / len(judged)
+        score = sum(scores) / len(scores)
         status = "ok" if score >= 1.0 else "degraded"
-        reasons = [f"{len(judged)} context anchor(s) judged"]
-        reasons.extend(d.reason for d in judged)
         if skipped:
             reasons.append(
                 f"{len(skipped)} anchor(s) unjudgeable (not introduced/probed)"
             )
-        return _outcome(self, status, score, reasons)
+        return _outcome(
+            self, status, score,
+            [f"{len(scores)} context anchor(s) judged"] + reasons,
+        )
 
 
 class ClarificationAbility(_ProbeReplyMetric):
@@ -699,8 +636,9 @@ class HallucinationCheck(TrajectoryMetric):
     def __init__(self, anchors: tuple[HallucinationAnchor, ...] = ()) -> None:
         self._anchors = tuple(anchors)
 
-    def details(self, evidence: TrajectoryEvidence) -> tuple[ProbeDetail, ...]:
-        """每个命中锚点一条判分（live 会话面），落回它的 turn。"""
+    def evaluate(self, evidence: TrajectoryEvidence) -> MetricOutcome:
+        if not self._anchors:
+            return _outcome(self, "skipped", None, ["no hallucination anchors declared"])
         replies = agent_replies_of(evidence.transcript)
         steps = list(evidence.transcript.atif.steps or [])
         live_user_ids = {
@@ -713,7 +651,8 @@ class HallucinationCheck(TrajectoryMetric):
             user for user in user_messages_of(evidence.transcript)
             if user.step_id in live_user_ids
         ]
-        out: list[ProbeDetail] = []
+        scores: list[float] = []
+        reasons: list[str] = []
         for anchor in self._anchors:
             topic = _compile((anchor.topic,), what="hallucination topic")
             invented = _compile(anchor.invented_patterns, what="invented patterns")
@@ -725,43 +664,30 @@ class HallucinationCheck(TrajectoryMetric):
                 if reply is None:
                     continue
                 if _first_match(invented, reply.text) is not None:
-                    score, reason = 0.0, (
+                    scores.append(0.0)
+                    reasons.append(
                         f"topic {anchor.topic!r}: reply carries an invented-value "
                         "signature"
                     )
                 elif _first_match(honest, reply.text) is not None:
-                    score, reason = 1.0, (
+                    scores.append(1.0)
+                    reasons.append(
                         f"topic {anchor.topic!r}: reply is an honest refusal"
                     )
                 else:
-                    score, reason = 0.5, (
-                        f"topic {anchor.topic!r}: reply is vague"
-                    )
-                out.append(
-                    ProbeDetail(
-                        metric=self.name, label=anchor.topic,
-                        user_step_id=user.step_id, reply_step_id=reply.step_id,
-                        score=score, reason=reason,
-                    )
-                )
+                    scores.append(0.5)
+                    reasons.append(f"topic {anchor.topic!r}: reply is vague")
                 break
-        return tuple(out)
-
-    def evaluate(self, evidence: TrajectoryEvidence) -> MetricOutcome:
-        if not self._anchors:
-            return _outcome(self, "skipped", None, ["no hallucination anchors declared"])
-        judged = self.details(evidence)
-        if not judged:
+        if not scores:
             return _outcome(
                 self, "skipped", None,
                 ["no hallucination topics in this trajectory"],
             )
-        score = sum(d.score for d in judged) / len(judged)
+        score = sum(scores) / len(scores)
         status = "ok" if score >= 1.0 else "degraded"
         return _outcome(
             self, status, score,
-            [f"{len(judged)} hallucination topic(s) judged"]
-            + [d.reason for d in judged],
+            [f"{len(scores)} hallucination topic(s) judged"] + reasons,
         )
 
 
@@ -822,11 +748,13 @@ class InstructionFollowing(TrajectoryMetric):
     def __init__(self, specs: tuple[FormatSpec, ...] = ()) -> None:
         self._specs = tuple(specs)
 
-    def details(self, evidence: TrajectoryEvidence) -> tuple[ProbeDetail, ...]:
-        """每个命中的格式要求一条判分，落回要求所在的 turn。"""
+    def evaluate(self, evidence: TrajectoryEvidence) -> MetricOutcome:
+        if not self._specs:
+            return _outcome(self, "skipped", None, ["no format specs declared"])
         replies = agent_replies_of(evidence.transcript)
         users = user_messages_of(evidence.transcript)
-        out: list[ProbeDetail] = []
+        scores: list[float] = []
+        reasons: list[str] = []
         for spec in self._specs:
             instruction = _compile((spec.instruction,), what="format instruction")
             validators = _compile(spec.validators, what="format validators")
@@ -835,56 +763,41 @@ class InstructionFollowing(TrajectoryMetric):
                     continue
                 reply = _next_reply_after(replies, user.step_id)
                 if reply is None:
-                    out.append(
-                        ProbeDetail(
-                            metric=self.name, label=spec.instruction,
-                            user_step_id=user.step_id, reply_step_id=None,
-                            score=0.1,
-                            reason=f"spec {spec.instruction!r}: no reply to follow",
-                        )
+                    scores.append(0.1)
+                    reasons.append(
+                        f"spec {spec.instruction!r}: no reply to follow"
                     )
                     break
                 hits = sum(
                     1 for v in validators if v.search(reply.text) is not None
                 )
                 if hits == len(validators):
-                    score, reason = 1.0, (
+                    scores.append(1.0)
+                    reasons.append(
                         f"spec {spec.instruction!r}: reply satisfies every validator"
                     )
                 elif hits:
-                    score, reason = 0.4, (
+                    scores.append(0.4)
+                    reasons.append(
                         f"spec {spec.instruction!r}: reply satisfies {hits}/"
                         f"{len(validators)} validators"
                     )
                 else:
-                    score, reason = 0.1, (
+                    scores.append(0.1)
+                    reasons.append(
                         f"spec {spec.instruction!r}: reply satisfies no validator"
                     )
-                out.append(
-                    ProbeDetail(
-                        metric=self.name, label=spec.instruction,
-                        user_step_id=user.step_id, reply_step_id=reply.step_id,
-                        score=score, reason=reason,
-                    )
-                )
                 break
-        return tuple(out)
-
-    def evaluate(self, evidence: TrajectoryEvidence) -> MetricOutcome:
-        if not self._specs:
-            return _outcome(self, "skipped", None, ["no format specs declared"])
-        judged = self.details(evidence)
-        if not judged:
+        if not scores:
             return _outcome(
                 self, "skipped", None,
                 ["no format instructions in this trajectory"],
             )
-        score = sum(d.score for d in judged) / len(judged)
+        score = sum(scores) / len(scores)
         status = "ok" if score >= 1.0 else "degraded"
         return _outcome(
             self, status, score,
-            [f"{len(judged)} format spec(s) judged"]
-            + [d.reason for d in judged],
+            [f"{len(scores)} format spec(s) judged"] + reasons,
         )
 
 
