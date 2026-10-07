@@ -170,6 +170,6 @@ def test_control_paths_take_the_sandbox_cwd_from_the_driver(tmp_path):
     declared = trial_control_paths(state, run_dir, driver)
     assert declared.sandbox_cwd == "/app"
     # everything else is unchanged by the declaration
-    assert declared.dsh_home == default.dsh_home
+    assert declared.agent_home == default.agent_home
     assert declared.bundle_path == default.bundle_path
     assert declared.download_root == default.download_root

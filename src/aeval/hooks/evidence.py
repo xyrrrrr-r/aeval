@@ -83,7 +83,15 @@ FIXED_OUTPUT_PATHS: dict[str, str] = {
     "dsh_session": "sessions/session.v4.jsonl.zstd",
     "agent_session_record": "agent_session/record",
     "canonical_transcript": "canonical_transcript.json",
+    "task_anchors": "rubric/task_anchors.json",
 }
+
+#: Fixed outputs that join a plan ONLY when the suite opts in
+#: (``verdict.anchors: task_anchors``). Absent from every plan that
+#: does not declare them, so suites sealed before the channel existed
+#: keep a byte-identical collect plan (same opt-in discipline as the
+#: session-record slot vocabulary, I2).
+CONDITIONAL_OUTPUTS: frozenset[str] = frozenset({"task_anchors"})
 
 #: The session-record slot entries of FIXED_OUTPUT_PATHS — the built-in slots
 #: whose paths the framework itself knows. ``dsh_session`` is the DSH record
@@ -96,6 +104,11 @@ FIXED_OUTPUT_PATHS: dict[str, str] = {
 SESSION_RECORD_OUTPUTS = ("dsh_session", "agent_session_record")
 
 SESSION_ROOT = "sessions"
+
+
+def _anchors_declared(suite: ResolvedSuite) -> bool:
+    """Whether the suite opted into the sealed rubric-anchors channel."""
+    return getattr(getattr(suite.overlay, "verdict", None), "anchors", None) is not None
 
 
 def output_path_for(name: str) -> str:
@@ -163,7 +176,8 @@ def build_required_collect_plan(
     plan = [
         name
         for name in FIXED_OUTPUT_PATHS
-        if name not in SESSION_RECORD_OUTPUTS or name == flavor
+        if (name not in SESSION_RECORD_OUTPUTS or name == flavor)
+        and (name not in CONDITIONAL_OUTPUTS or _anchors_declared(suite))
     ]
     # a DECLARED slot is not in the fixed table at all — it still belongs in
     # the plan, at the path its adapter carries

@@ -21,6 +21,7 @@ from aeval.agents.contract import (
     load_adapter_class,
 )
 from aeval.hooks.evidence import (
+    CONDITIONAL_OUTPUTS,
     FIXED_OUTPUT_PATHS,
     SESSION_RECORD_OUTPUTS,
     build_required_collect_plan,
@@ -88,7 +89,12 @@ def test_the_smoke_suite_stays_uncapped_while_the_carrier_is_capped():
 def test_the_budget_suite_keeps_the_generic_session_slot(suite):
     """Same evidence shape as the smoke suite — only the caps differ."""
     plan = build_required_collect_plan(suite)
-    fixed = {n for n in FIXED_OUTPUT_PATHS if n not in SESSION_RECORD_OUTPUTS}
+    # gated outputs (the sealed anchors channel) join a plan only when
+    # the suite declares them — none of the shipped suites does
+    fixed = {
+        n for n in FIXED_OUTPUT_PATHS
+        if n not in SESSION_RECORD_OUTPUTS and n not in CONDITIONAL_OUTPUTS
+    }
     assert set(plan) == fixed | {"agent_session_record"} | {
         f"observable:{o.name}" for o in suite.overlay.observables
     }

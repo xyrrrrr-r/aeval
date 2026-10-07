@@ -19,6 +19,7 @@ import pytest
 from aeval.contracts import ArtifactRef, CollectOutcome, CollectionManifest
 from aeval.hooks.context import EvaluationContext
 from aeval.hooks.evidence import (
+    CONDITIONAL_OUTPUTS,
     FIXED_OUTPUT_PATHS,
     EvidenceIntegrityError,
     build_required_collect_plan,
@@ -390,8 +391,13 @@ def test_collect_plan_lists_atomic_outputs(demo_suite):
     plan = build_required_collect_plan(demo_suite)
     # Every FIXED output except the session-record slot's other flavor; the
     # slot itself takes the suite's declared flavor (demo: dsh_session).
+    # Conditionally-gated outputs (the sealed anchors channel) appear only
+    # when a suite declares them — the demo suite does not.
     for name in FIXED_OUTPUT_PATHS:
         if name in SESSION_RECORD_OUTPUTS and name != "dsh_session":
+            continue
+        if name in CONDITIONAL_OUTPUTS:
+            assert name not in plan
             continue
         assert name in plan
     # the manifest itself is NOT a collect output (P0-6): its identity
@@ -401,9 +407,43 @@ def test_collect_plan_lists_atomic_outputs(demo_suite):
     assert any(p.startswith("observable:") for p in plan)
 
 
+def test_anchors_channel_is_opt_in_and_gates_the_plan(demo_suite):
+    """The sealed rubric-anchors channel (integration P2): a suite that
+    does not declare it keeps a byte-identical plan; a suite that does
+    gets ``task_anchors`` in its plan — and its tasks' collect commands
+    must then name it like any other required output."""
+    class Cmd:
+        def __init__(self, command):
+            self.command = command
+
+    base_plan = build_required_collect_plan(demo_suite)
+    assert "task_anchors" not in base_plan
+
+    declaring = demo_suite.model_copy(deep=True)
+    declaring.overlay.verdict.anchors = "task_anchors"
+    plan = build_required_collect_plan(declaring)
+    assert "task_anchors" in plan
+    assert output_path_for("task_anchors") == "rubric/task_anchors.json"
+
+    # declaration validation now demands the anchors output by name
+    validate_collect_declarations(
+        [Cmd("snapshot runtime_dump mock_call_log dsh_session "
+             "canonical_transcript task_anchors")],
+        ["runtime_dump", "mock_call_log", "dsh_session",
+         "canonical_transcript", "task_anchors"],
+    )
+    with pytest.raises(EvidenceIntegrityError, match="task_anchors"):
+        validate_collect_declarations(
+            [Cmd("snapshot runtime_dump mock_call_log dsh_session "
+                 "canonical_transcript")],
+            plan,
+        )
+
+
 def test_output_path_mapping_is_fixed():
     assert output_path_for("dsh_session") == "sessions/session.v4.jsonl.zstd"
     assert output_path_for("observable:x") == "observables/x.json"
+    assert output_path_for("task_anchors") == "rubric/task_anchors.json"
     with pytest.raises(EvidenceIntegrityError, match="unknown collect output"):
         output_path_for("freeform")
 
@@ -416,6 +456,8 @@ def test_collect_declarations_require_every_output():
     dsh_flavor_plan = [
         n for n in FIXED_OUTPUT_PATHS
         if n not in SESSION_RECORD_OUTPUTS or n == "dsh_session"
+        # the anchors output joins a plan only on declaration
+        if n not in CONDITIONAL_OUTPUTS
     ]
 
     with pytest.raises(EvidenceIntegrityError, match="not produced"):
@@ -492,7 +534,7 @@ async def test_gate_fails_closed_when_no_adapter_is_recorded(tmp_path, demo_suit
     refusal, not a silent default."""
     from aeval.provenance import build_runtime_lock
 
-    lock = build_runtime_lock(agent_ids=[])
+    lock = build_runtime_lock()
     trial_dir = tmp_path / "trial"
     build_complete_trial_dir(
         trial_dir, plan=_full_plan(demo_suite), runtime_lock=lock,
@@ -512,7 +554,6 @@ async def test_gate_fails_closed_on_an_ambiguous_lock(tmp_path, demo_suite):
     from aeval.provenance import build_runtime_lock
 
     lock = build_runtime_lock(
-        agent_ids=[],
         agents={
             "dsh": AgentReleaseLock(id="dsh", version="1"),
             "deepagent": AgentReleaseLock(id="deepagent", version="1"),
@@ -532,17 +573,20 @@ async def test_gate_fails_closed_on_an_ambiguous_lock(tmp_path, demo_suite):
 
 async def test_gate_resolves_the_record_owner_from_the_lock(tmp_path, demo_suite):
     """The offline/replay fallback: a lock recording exactly one agent
-    resolves its declaration to the adapter class — the default lock (which
-    records dsh) finds the DSH-shaped session record with no live handle."""
+    resolves its declaration to the adapter class — a dsh run's lock (the
+    adapter hook contributed its pin) finds the DSH-shaped session record
+    with no live handle."""
     from aeval.agents.dsh.agent import DshAgent
     from aeval.hooks.evidence import _record_owner
 
+    from aeval.agents.dsh.release import build_official_dsh_lock
     from aeval.provenance import build_runtime_lock
 
-    assert _record_owner(None, build_runtime_lock()) is DshAgent
+    dsh_run = build_runtime_lock(release_locks={"dsh": build_official_dsh_lock()})
+    assert _record_owner(None, dsh_run) is DshAgent
     # a live handle always wins over the lock
     sentinel = object()
-    assert _record_owner(sentinel, build_runtime_lock()) is sentinel
+    assert _record_owner(sentinel, dsh_run) is sentinel
 
 
 async def test_a_declared_slot_passes_the_gate_end_to_end(tmp_path):

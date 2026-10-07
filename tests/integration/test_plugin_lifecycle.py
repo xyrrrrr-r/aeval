@@ -109,7 +109,7 @@ def exception(name="RuntimeError"):
 def bind(context, event):
     state = context.trials[str(event.trial_id)]
     paths = TrialPaths(
-        sandbox_cwd="/workspace", dsh_home="/logs/agent/dsh-home",
+        sandbox_cwd="/workspace", agent_home="/logs/agent/dsh-home",
         bundle_path="/logs/agent/bundle_descriptor.json", session_root="dsh-home",
         download_root=(state.trial_dir / "agent").relative_to(context.run_dir).as_posix(),
     )
@@ -616,7 +616,7 @@ async def test_agent_start_derives_control_paths_from_the_adapter(owned_job, mon
     )
 
     assert seen["agent"] is agent_handle
-    assert seen["paths"].dsh_home == "/root/.deepagents"
+    assert seen["paths"].agent_home == "/root/.deepagents"
     assert seen["paths"].session_root == "deepagent-home"
 
 
@@ -695,7 +695,7 @@ def _binding_for(state):
         session_id=state.session_id,
         config_digest="e" * 64,
         paths=TrialPaths(
-            sandbox_cwd="/workspace", dsh_home="/root/.deepagents",
+            sandbox_cwd="/workspace", agent_home="/root/.deepagents",
             bundle_path="/logs/agent/bundle_descriptor.json",
             session_root=".", download_root="trials/t/agent",
         ),

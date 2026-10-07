@@ -43,6 +43,7 @@ from aeval.hooks.collectors import (
     produce_observable,
     produce_runtime_dump,
     produce_session_record,
+    produce_task_anchors,
     write_collection_manifest,
 )
 
@@ -257,6 +258,20 @@ async def collect_trial_evidence(
     outcomes.append(outcome)
     artifacts.append(ref)
 
+    # The sealed rubric-anchors channel (integration P2): a suite that
+    # declares ``verdict.anchors: task_anchors`` has its per-task rubric
+    # sealed into every trial, so a regrade reads the anchors that
+    # judged the trial, not the suite repo's current state. Fail-closed:
+    # a declared channel with a missing/unreadable rubric file blocks
+    # collection (the trial cannot be judged from anchors nobody sealed).
+    from aeval.hooks.evidence import _anchors_declared
+
+    if _anchors_declared(suite):
+        anchors_bytes = _read_suite_anchors(suite)
+        outcome, ref = produce_task_anchors(trial_dir, anchors_bytes)
+        outcomes.append(outcome)
+        artifacts.append(ref)
+
     manifest = CollectionManifest(
         trial_id=trial_id,
         outcomes=outcomes,
@@ -271,6 +286,20 @@ async def collect_trial_evidence(
         runtime_lock=runtime_lock,
     )
     return manifest
+
+
+def _read_suite_anchors(suite: Any) -> bytes:
+    """The suite's ``rubric/task_anchors.json`` bytes, fail-closed."""
+    suite_dir = Path(getattr(suite, "suite_dir", ""))
+    anchors_path = suite_dir / "rubric" / "task_anchors.json"
+    try:
+        return anchors_path.read_bytes()
+    except OSError as exc:
+        raise CollectionError(
+            f"the suite declares the sealed anchors channel but "
+            f"{anchors_path} cannot be read: {exc} — collection refuses "
+            "to continue without the rubric it promised to seal"
+        ) from exc
 
 
 def load_broker_calls(path: Path | None) -> list[dict[str, Any]]:

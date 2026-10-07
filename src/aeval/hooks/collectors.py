@@ -211,6 +211,25 @@ def produce_canonical_transcript(
     )
 
 
+def produce_task_anchors(
+    trial_dir: Path, anchors_bytes: bytes
+) -> tuple[CollectOutcome, ArtifactRef]:
+    """The suite's rubric anchors, sealed into the trial directory.
+
+    The bytes come from the suite's ``rubric/task_anchors.json`` (the
+    collection orchestrator reads and passes them); sealing them per
+    trial is what makes a later regrade depend only on sealed evidence
+    — the suite repo may have moved on, the anchors that judged THIS
+    trial cannot. Caller keeps the bytes verbatim: this producer never
+    re-serializes rubric data (a reformat would change what graders see
+    without changing the source file).
+    """
+    return _produce_bytes(
+        trial_dir, "task_anchors", anchors_bytes, "application/json",
+        command="aeval: task_anchors seal",
+    )
+
+
 def produce_observable(
     trial_dir: Path, name: str, value: Any
 ) -> tuple[CollectOutcome, ArtifactRef]:
