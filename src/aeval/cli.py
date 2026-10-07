@@ -817,6 +817,41 @@ def report_cmd(
     typer.echo(render_static_report(summary))
 
 
+@app.command("dashboard")
+def dashboard_cmd(
+    store: Annotated[Path, typer.Option()],
+    run_ids: Annotated[list[str], typer.Argument()],
+    k: Annotated[Optional[int], typer.Option()] = None,
+) -> None:
+    """Render the run dashboard as one self-contained HTML file.
+
+    Same aggregation pipeline as ``report`` (same store, same manifests,
+    same ``aggregate_run``); the dashboard is a second renderer over the
+    verified numbers, not a second source of truth. Output is printed to
+    stdout — redirect to a file to keep it::
+
+        aeval dashboard --store out/run/store.sqlite3 run-... --k 3 > dash.html
+    """
+    from aeval.metrics.dashboard import render_dashboard_html
+    from aeval.metrics.report import aggregate_run
+    from aeval.store.sqlite import TrialStore
+
+    db = TrialStore(store)
+    try:
+        trials = db.list_trials(run_ids)
+        manifests = []
+        for run_id in run_ids:
+            try:
+                manifests.append(db.load_run_manifest(run_id))
+            except KeyError as exc:
+                _die(f"{exc} — cannot report or compare unrecorded runs",
+                     EXIT_VALIDATION_ERROR)
+    finally:
+        db.close()
+    summary = aggregate_run(run_ids, trials, k=k, manifests=manifests)
+    typer.echo(render_dashboard_html(summary))
+
+
 @app.command("rejudge")
 def rejudge_cmd(
     store: Annotated[Path, typer.Option()],

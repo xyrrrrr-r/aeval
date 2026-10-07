@@ -24,7 +24,10 @@ from aeval.metrics.reliability import (
 __all__ = [
     "RunSummary",
     "TaskGroupSummary",
+    "CategoryRollup",
     "aggregate_run",
+    "rollup_categories",
+    "category_pass_pow_k",
     "render_static_report",
     "export_jsonl",
 ]
@@ -72,6 +75,9 @@ class RunSummary:
     # default。两者皆空 = 套件未声明类别 → 明细表平铺（向后兼容）。
     category_names: dict[str, str] = field(default_factory=dict)
     default_category: str | None = None
+    # 各 run 的套件标识（id@version，来自清单）——报告头/面板头展示
+    # 用。同样只是显示层。
+    suite_labels: list[str] = field(default_factory=list)
     # per-task roll-up (integration P2): the skill/dimension cut. Only
     # meaningful when a run spans several tasks; empty otherwise.
     task_groups: dict[str, TaskGroupSummary] = field(default_factory=dict)
@@ -144,6 +150,7 @@ def aggregate_run(
     titles: dict[str, str] = {}
     names: dict[str, str] = {}
     default: str | None = None
+    suite_labels: list[str] = []
     for manifest in manifests or ():
         for task_id, title in (manifest.task_titles or {}).items():
             titles.setdefault(task_id, title)
@@ -151,9 +158,13 @@ def aggregate_run(
             names.setdefault(key, name)
         if default is None:
             default = manifest.default_category
+        label = f"{manifest.overlay.suite_id}@{manifest.overlay.suite_version}"
+        if label not in suite_labels:
+            suite_labels.append(label)
     summary.task_titles = titles
     summary.category_names = names
     summary.default_category = default
+    summary.suite_labels = suite_labels
 
     if k is not None and len(valid) >= k:
         summary.pass_pow_k_value = pass_pow_k(passes, len(valid), k)
@@ -198,6 +209,60 @@ def _zh_counts(counts: dict[str, int], mapping: dict[str, str]) -> str:
         f"{mapping.get(key, key)}({key}) {number}"
         for key, number in sorted(counts.items())
     )
+
+
+@dataclass(frozen=True)
+class CategoryRollup:
+    """一个类别的合并数字（markdown 报告与可视化面板共用的聚合面）。
+
+    任务归组规则与显示名在这里一次性定死，两个渲染器共用——面板不
+    可能算出与报告不同的类别数字。
+    """
+
+    key: str
+    display: str
+    tasks: int
+    trials: int
+    valid: int
+    passes: int
+    fails: int
+    task_ids: tuple[str, ...]  # 该类别下的 task_id，已排序
+
+
+def rollup_categories(summary: RunSummary) -> list[CategoryRollup] | None:
+    """按类别聚合任务结果；套件未声明类别时返回 None（平铺模式）。"""
+    if not (summary.category_names or summary.default_category):
+        return None
+    buckets: dict[str, dict[str, int]] = {}
+    members: dict[str, list[str]] = {}
+    for task_id, task_group in summary.task_groups.items():
+        cat = _category_of(task_id, summary.default_category)
+        bucket = buckets.setdefault(
+            cat, {"tasks": 0, "trials": 0, "valid": 0, "passes": 0, "fails": 0}
+        )
+        bucket["tasks"] += 1
+        bucket["trials"] += task_group.total_trials
+        bucket["valid"] += task_group.valid_trials
+        bucket["passes"] += task_group.passes
+        bucket["fails"] += task_group.fails
+        members.setdefault(cat, []).append(task_id)
+    return [
+        CategoryRollup(
+            key=cat,
+            display=_category_display(cat, summary.category_names),
+            **buckets[cat],
+            task_ids=tuple(sorted(members[cat])),
+        )
+        for cat in sorted(buckets)
+    ]
+
+
+def category_pass_pow_k(rollup: CategoryRollup, k: int | None) -> float | None:
+    """类别级 pass^k：类别内合并有效试次的同一组合估计；不足 k 个有
+    效试次返回 None（不编造）。"""
+    if k is None or rollup.valid < k:
+        return None
+    return pass_pow_k(rollup.passes, rollup.valid, k)
 
 
 def _category_of(task_id: str, default: str | None) -> str:
@@ -261,21 +326,8 @@ def render_static_report(
     # default_category）时按类别聚合：先给「按类别结果」的汇总表
     # （类别是源方案的天然切口），明细表再按类别分组、不再平铺。
     if summary.task_groups and len(summary.task_groups) > 1:
-        grouped = bool(summary.category_names or summary.default_category)
-        if grouped:
-            rollup: dict[str, dict[str, int]] = {}
-            for task_id, task_group in summary.task_groups.items():
-                cat = _category_of(task_id, summary.default_category)
-                bucket = rollup.setdefault(
-                    cat,
-                    {"tasks": 0, "trials": 0, "valid": 0, "passes": 0,
-                     "fails": 0},
-                )
-                bucket["tasks"] += 1
-                bucket["trials"] += task_group.total_trials
-                bucket["valid"] += task_group.valid_trials
-                bucket["passes"] += task_group.passes
-                bucket["fails"] += task_group.fails
+        rollup = rollup_categories(summary)
+        if rollup is not None:
             lines.append("")
             lines.append("## 按类别结果")
             lines.append("")
@@ -283,18 +335,13 @@ def render_static_report(
                 "| 类别 | 任务数 | 试次 | 有效 | 通过 | 失败 | pass^k |"
             )
             lines.append("|---|---|---|---|---|---|---|")
-            for cat in sorted(rollup):
-                bucket = rollup[cat]
-                # 类别级 pass^k：按类别内合并的有效试次做同一组合估计
-                # （口径与任务级一致，不足 k 个有效试次不编造）。
-                cat_pk = "-"
-                if summary.k is not None and bucket["valid"] >= summary.k:
-                    cat_pk = f"{pass_pow_k(bucket['passes'], bucket['valid'], summary.k):.4f}"
-                display = _category_display(cat, summary.category_names)
+            for cat in rollup:
+                cat_pk = category_pass_pow_k(cat, summary.k)
+                cat_pk_text = f"{cat_pk:.4f}" if cat_pk is not None else "-"
                 lines.append(
-                    f"| {display}({cat}) | {bucket['tasks']} "
-                    f"| {bucket['trials']} | {bucket['valid']} "
-                    f"| {bucket['passes']} | {bucket['fails']} | {cat_pk} |"
+                    f"| {cat.display}({cat.key}) | {cat.tasks} "
+                    f"| {cat.trials} | {cat.valid} "
+                    f"| {cat.passes} | {cat.fails} | {cat_pk_text} |"
                 )
             lines.append("")
             lines.append("## 按任务结果（按类别分组）")
@@ -326,13 +373,11 @@ def render_static_report(
                 f"| {group.passes} | {group.fails} | {pk} |"
             )
 
-        if grouped:
-            for cat in sorted(rollup):
-                display = _category_display(cat, summary.category_names)
-                lines.append(f"| **{display}({cat})** | | | | | |")
-                for task_id in sorted(summary.task_groups):
-                    if _category_of(task_id, summary.default_category) == cat:
-                        lines.append(_task_row(task_id, indent=True))
+        if rollup is not None:
+            for cat in rollup:
+                lines.append(f"| **{cat.display}({cat.key})** | | | | | |")
+                for task_id in cat.task_ids:
+                    lines.append(_task_row(task_id, indent=True))
         else:
             for task_id in sorted(summary.task_groups):
                 lines.append(_task_row(task_id, indent=False))
