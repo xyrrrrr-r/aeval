@@ -6,8 +6,8 @@ Production order for one trial:
 2. ``ModelBrokerProcess`` starts the host-side broker (control/broker.py)
    which writes a job token file on the HOST;
 3. THIS module uploads the token into the sandbox and composes the
-   control config: gateway URL, token path, pinned identity,
-   ``refuseAuxiliaryCalls`` so no default route can bypass the broker;
+   control config: gateway URL, token path, pinned identity, plus whatever
+   fields the trial's control flavor declared its stack consumes;
 4. the config digest is computed and the owner binding is created via
    ``EvaluationContext.bind_control`` — the one place that compares the
    control claim against the trusted run identity.
@@ -15,22 +15,20 @@ Production order for one trial:
 The upstream API key never enters the sandbox: the broker reads it on
 the host. The sandbox receives only the broker URL and the job token.
 
-What still needs the real environment (documented boundary): deploying
-the official session-persistence plugin/overlay into ``DSH_HOME`` and
-verifying the sandbox actually adopted them (upload ownership/mode are
-unmeasured on e2b), plus one real tool action through the stub. Those
-are environment-verification phase, not offline code.
+This module is the agent-neutral half only: composing configs, deploying
+the generic facade tree, and dispatching to whatever flavor the selected
+adapter declared. A deployment mechanism that belongs to one agent
+family — the DSH CLI-tree graft with its Cordis patch — lives in that
+family's flavor (``aeval.agents.dsh.control_flavor``), never here, so a
+third graft-shaped flavor registers itself without editing this module.
 """
 
 from __future__ import annotations
 
 import asyncio
-import json
 import shlex
 import shutil
-import tempfile
 import time
-from collections.abc import Awaitable, Callable
 from pathlib import Path, PurePosixPath
 from collections.abc import Mapping
 from typing import TYPE_CHECKING, Any, Sequence
@@ -60,23 +58,16 @@ if TYPE_CHECKING:  # pragma: no cover - typing only
 __all__ = [
     "BootstrapError",
     "SANDBOX_TOKEN_PATH",
-    "CONTROL_DIR_NAME",
     "FACADE_SANDBOX_ROOT",
     "DEFAULT_FACADE_PORT",
     "facade_dist_candidates",
     "resolve_facade_dist",
     "compose_control_config",
-    "deploy_control_stack",
     "deploy_generic_facade",
     "bootstrap_trial_control",
     "teardown_trial_control",
 ]
 
-
-# Where the control stack is deployed inside the sandbox: a SIBLING of the
-# nested ``@deepseek-ai`` package directory, so node's ESM resolver finds
-# the harness packages by walking up from the plugin files.
-CONTROL_DIR_NAME = "aeval-control"
 
 # Where the GENERIC facade flavor is deployed: a self-contained tree the
 # agent-neutral deployment owns end to end (upload → start → health). The
@@ -151,136 +142,6 @@ def compose_control_config(
             config[key] = value
     config["configDigest"] = control_config_digest(config)
     return config
-
-
-async def deploy_control_stack(
-    *,
-    environment: Any,
-    agent: Any,
-    paths: TrialPaths,
-    config: dict[str, Any],
-    control_dist: Path,
-    control_ca: Path | None,
-    trial_id: str,
-    run_env: Mapping[str, str] | None = None,
-    mint_session: Callable[..., Awaitable[None]] | None = None,
-) -> str:
-    """Deploy the in-sandbox control stack; return the patch file path.
-
-    The shape is fixed by environment verification (example-lab full-chain
-    report §7.5–7.6):
-
-    - plugin files live inside the DSH install tree, because the CLI
-      installs its dependencies NESTED (``@deepseek-ai/dsh/node_modules``)
-      and node's ESM resolver only finds them for a sibling package;
-    - the Cordis patch lists the transport entry first, then the control
-      plugin (which injects ``evalBroker``);
-    - a privately signed broker needs ``NODE_EXTRA_CA_CERTS`` in the run;
-    - environment the deploying flavor's stack needs in the agent's run is
-      passed as ``run_env`` — agent-neutral here: the framework sets the
-      variables, the flavor decides which (e.g. DSH's ``DSH_PERMISSION_MODE``
-      from its own ``control_options`` namespace).
-
-    ``mint_session`` creates the owner-assigned session the run must resume
-    (``dsh --session-id`` only adopts an existing one, D15). The session
-    store's layout is agent knowledge, not framework knowledge, so the minter
-    is injected by the flavor that owns it
-    (``aeval.agents.dsh.control_flavor``) instead of imported here — this
-    module deploys the tree; it does not know where the agent keeps sessions.
-    """
-    bin_dir = agent.cli_bin_dir() if hasattr(agent, "cli_bin_dir") else None
-    if not bin_dir:
-        raise BootstrapError(
-            "the agent reports no CLI install prefix — the control stack "
-            "cannot be placed inside the sandbox's DSH tree"
-        )
-    prefix = PurePosixPath(bin_dir).parent          # <prefix>/bin -> <prefix>
-    target = (prefix / "lib" / "node_modules" / "@deepseek-ai" / "dsh"
-              / "node_modules" / CONTROL_DIR_NAME)
-
-    upload = getattr(environment, "upload_file", None)
-    if not callable(upload):
-        raise BootstrapError("environment exposes no upload_file for the control stack")
-    dist_files = sorted(Path(control_dist).glob("*.js"))
-    if not dist_files:
-        raise BootstrapError(f"control dist has no built .js files: {control_dist}")
-
-    staging = Path(tempfile.mkdtemp(prefix="aeval-control-"))
-    try:
-        await environment.exec(f"mkdir -p {shlex.quote((target / 'dist').as_posix())}")
-        payload = {"package.json": json.dumps({
-            "name": CONTROL_DIR_NAME, "version": "0.1.0", "type": "module",
-            "main": "dist/index.js",
-        })}
-        for source in dist_files:
-            payload[f"dist/{source.name}"] = source.read_text(encoding="utf-8")
-        payload["config.json"] = json.dumps(config, indent=2)
-        if control_ca is not None:
-            payload["ca.crt"] = Path(control_ca).read_text(encoding="utf-8")
-        payload["cordis.patch.yml"] = _control_patch_yaml(target, config, control_ca)
-        for relative, text in payload.items():
-            local = staging / relative.replace("/", "__")
-            local.write_text(text, encoding="utf-8")
-            await upload(str(local), (target / relative).as_posix())
-
-        if mint_session is not None:
-            # The flavor that owns the session-store layout mints the
-            # owner-assigned session the run will resume (D15).
-            await mint_session(
-                environment=environment, paths=paths, target=target,
-                trial_id=trial_id, config=config,
-            )
-
-        patch_path = (target / "cordis.patch.yml").as_posix()
-        # add_patch_file is DSH's own method (Harbor's BaseInstalledAgent has no
-        # such API), so a non-DSH adapter used to die here with a bare
-        # AttributeError. Silently skipping is not an option either: that would
-        # drop the control stack without saying so. Declarative injection
-        # arrives with the adapter contract (P2-4).
-        if not hasattr(agent, "add_patch_file"):
-            raise BootstrapError(
-                f"agent adapter {type(agent).__name__} cannot accept patch injection "
-                f"({patch_path}); the control stack cannot be applied to it"
-            )
-        agent.add_patch_file(patch_path)
-        if hasattr(agent, "pin_session"):
-            # the run must adopt the trial's own session, not mint one
-            agent.pin_session(str(config["sessionId"]))
-        if hasattr(agent, "set_workspace_dir"):
-            # the session was minted in this cwd; DSH refuses to resume a
-            # session recorded elsewhere, and the task workspace is where
-            # the run belongs
-            agent.set_workspace_dir(str(paths.sandbox_cwd))
-        if control_ca is not None:
-            agent.set_run_env("NODE_EXTRA_CA_CERTS", (target / "ca.crt").as_posix())
-        for name, value in (run_env or {}).items():
-            # The deploying flavor names these: the DSH CLI reads
-            # DSH_PERMISSION_MODE in its composed profile (dsh-base's
-            # cordis.patch.yml) and skips confinement for danger-full-access
-            # instead of probing for a runner the image does not ship.
-            agent.set_run_env(str(name), str(value))
-        return patch_path
-    finally:
-        shutil.rmtree(staging, ignore_errors=True)
-
-
-def _control_patch_yaml(
-    target: PurePosixPath, config: dict[str, Any], control_ca: Path | None
-) -> str:
-    """The two-row Cordis patch that mounts the control stack."""
-    rows = [
-        "- insert:",
-        "    - id: aeval-broker-transport",
-        "      name: './dist/sandbox_entry.js'",
-        "      config:",
-        f"        controlConfigPath: '{(target / 'config.json').as_posix()}'",
-        f"        jobTokenPath: '{config['jobTokenFile']}'",
-        "    - id: aeval-eval-control",
-        "      name: './dist/index.js'",
-        "      config:",
-    ]
-    rows.extend(f"        {key}: {json.dumps(value)}" for key, value in config.items())
-    return "\n".join(rows) + "\n"
 
 
 def facade_dist_candidates(start: Path | None = None) -> list[Path]:
@@ -509,15 +370,21 @@ async def _deploy_facade_flavor(
     from aeval.agents.contract import facade_protocols_for, model_routing_of
 
     if control_options:
+        stack_name = control_stack_of(type(agent))
         raise BootstrapError(
-            "the deepagent-facade stack consumes no control options, but the "
-            f"suite declares {sorted(control_options)} — remove them or move "
-            "them to the flavor that owns them"
+            f"the {stack_name!r} control stack consumes no control options, "
+            f"but the suite declares {sorted(control_options)} — remove them "
+            "or move them to the flavor that owns them"
         )
     routing = model_routing_of(type(agent))
-    if routing is None or routing.agent_protocol == "gateway_native":
+    # Which endpoints the facade serves is derived from the agent's declared
+    # model routing: no openai_* routing (or a gateway-native one) means the
+    # facade would serve nothing the agent speaks — refused here exactly as
+    # the declaration gap check refuses it at run start.
+    protocols = facade_protocols_for(routing) if routing is not None else []
+    if not protocols:
         raise BootstrapError(
-            "the agent declares the deepagent-facade control stack but no "
+            "the agent declares a facade-translating control stack but no "
             "openai_* model routing — the facade would serve nothing the "
             "agent speaks"
         )
@@ -550,9 +417,13 @@ async def _deploy_facade_flavor(
 # The agent-neutral flavor registers where its mechanism lives; an
 # adapter-specific flavor registers from its own package
 # (aeval.agents.dsh.control_flavor) so this module never imports an adapter.
+# The registry NAME is a legacy-flavored opaque id carried over from the
+# first agent family that needed it; capability questions (which wires the
+# stack translates) go through serves_protocols, never the name.
 register_control_flavor(ControlFlavor(
     name="deepagent-facade",
     deploy=_deploy_facade_flavor,
+    serves_protocols=frozenset({"openai_chat", "openai_responses"}),
 ))
 
 

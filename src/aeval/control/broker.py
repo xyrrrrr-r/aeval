@@ -6,7 +6,10 @@ token file, and stops the broker with token cleanup when the trial
 ends. The upstream API key NEVER enters the sandbox: it is read by the
 broker process on the host from the configured environment variable.
 
-Protocol (docs: dsh-eval-control docs/TESTS/P0-3-host-broker.md):
+Protocol (docs: the control package's docs/TESTS/P0-3-host-broker.md,
+mirrored in both packaging repos — aeval/control is the neutral broker
+cluster, which the agent-specific control packages compose into their
+deployment units):
 
 - spawn ``node <broker_main.js> <config.json>``;
 - exactly one stdout line, JSON:
@@ -89,8 +92,9 @@ def write_broker_config(
 ) -> Path:
     """Write the strict broker config JSON (exact key set, no extras).
 
-    Mirrors ``parseBrokerMainConfig`` in dsh-eval-control: unknown keys
-    are a config error there, so the writer refuses to produce them.
+    Mirrors ``parseBrokerMainConfig`` in the neutral control package
+    (aeval/control/src/broker_main.ts): unknown keys are a config error
+    there, so the writer refuses to produce them.
     """
     for key in ("run_id", "job_config_hash", "config_file_sha256", "runtime_lock_digest"):
         if not isinstance(run.get(key), str) or not run[key]:
@@ -212,7 +216,8 @@ class ModelBrokerProcess:
             raise BrokerStartupError("broker process already started")
         if not Path(self.broker_js).is_file():
             raise BrokerStartupError(
-                f"broker bin not found: {self.broker_js} — build dsh-eval-control first"
+                f"broker bin not found: {self.broker_js} — build the control "
+                "package that supplies it first"
             )
         try:
             self.process = subprocess.Popen(

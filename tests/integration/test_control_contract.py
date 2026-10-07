@@ -1,8 +1,9 @@
 """Offline Python/TypeScript wire tests against an already-built control checkout.
 
-Use AEVAL_DSH_CONTROL_REPO or a sibling dsh-eval-control. Missing Node/dist
-explicitly skips; an obsolete or broken build fails rather than hiding drift.
-No package installation, gateway, model, Docker, or DSH session is needed.
+Use AEVAL_CONTROL_REPO (or the older AEVAL_DSH_CONTROL_REPO) or a sibling
+dsh-eval-control. Missing Node/dist explicitly skips; an obsolete or broken
+build fails rather than hiding drift. No package installation, gateway,
+model, Docker, or DSH session is needed.
 """
 
 from __future__ import annotations
@@ -91,7 +92,9 @@ def control_node():
     node = shutil.which("node")
     if node is None:
         pytest.skip("offline control contract: node is unavailable")
-    override = os.environ.get("AEVAL_DSH_CONTROL_REPO")
+    # AEVAL_CONTROL_REPO is the neutral spelling; the DSH-flavored one is
+    # kept as a fallback so existing operator environments keep working.
+    override = os.environ.get("AEVAL_CONTROL_REPO") or os.environ.get("AEVAL_DSH_CONTROL_REPO")
     repo = (
         Path(override).expanduser().resolve()
         if override else Path(__file__).resolve().parents[3] / "dsh-eval-control"
@@ -101,7 +104,7 @@ def control_node():
     if not config_module.is_file() or not writer_module.is_file():
         pytest.skip(
             f"offline control contract: built dist/config.js and dist/bundle_writer.js "
-            f"unavailable in {repo}; set AEVAL_DSH_CONTROL_REPO to a built checkout"
+            f"unavailable in {repo}; set AEVAL_CONTROL_REPO to a built checkout"
         )
 
     def invoke(op, **payload):
@@ -167,7 +170,7 @@ def _binding(config):
         trial_id=config["trialId"], session_id=config["sessionId"],
         config_digest=control_config_digest(config),
         paths=TrialPaths(
-            sandbox_cwd="/workspace/任务", dsh_home="/tmp/dsh-home",
+            sandbox_cwd="/workspace/任务", agent_home="/tmp/dsh-home",
             bundle_path=config["bundlePath"], session_root=config["sessionRoot"],
             download_root="downloads/评估",
         ),

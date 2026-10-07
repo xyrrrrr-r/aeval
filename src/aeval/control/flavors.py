@@ -9,8 +9,10 @@ Who registers what is the dependency rule:
 
 - core (this module) only owns the registry — it imports no adapter package;
 - an agent-neutral deployment registers itself where its mechanism lives
-  (``deepagent-facade`` in ``aeval.control.bootstrap``: the generic facade any
-  ``openai_*`` agent can be pointed at);
+  (the generic OpenAI-wire facade in ``aeval.control.bootstrap`` — its
+  registry name is a legacy-flavored opaque id carried over from the first
+  agent family that needed it; capability questions go through
+  ``serves_protocols``, never the name);
 - an adapter-specific deployment registers itself from the adapter's own
   package (``aeval.agents.dsh.control_flavor``), so the core never imports a
   concrete adapter — importing the adapter package IS the registration.
@@ -66,12 +68,21 @@ class ControlFlavor:
     broker lease, and whatever a flavor's plugin additionally consumes — the
     DSH plugin's session/bundle paths and routing policy — is declared here
     by the flavor, never hardcoded in the composer.
+
+    ``serves_protocols`` is the flavor's CAPABILITY, and the only thing the
+    declaration-gap and conformance checks may consult: the client wires
+    (``openai_chat`` / ``openai_responses``) this flavor's in-sandbox stack
+    translates for the agent. Empty means the stack expects the agent to
+    speak the broker wire natively (no translation). Validation logic asks
+    the registry for this — never a flavor's NAME — so a second translating
+    stack registers itself and every check keeps working.
     """
 
     name: str
     deploy: ControlFlavorDeploy
     requires: tuple[str, ...] = ()
     config_fields: ControlFlavorConfigFields | None = None
+    serves_protocols: frozenset[str] = frozenset()
 
 
 _REGISTRY: dict[str, ControlFlavor] = {}

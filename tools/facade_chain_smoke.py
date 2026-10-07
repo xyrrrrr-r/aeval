@@ -304,7 +304,7 @@ async def _run(args) -> dict:
     limits = {"maxSteps": args.max_steps, "maxTokens": args.max_tokens}
     paths = TrialPaths(
         sandbox_cwd=str(work_dir / "workspace"),
-        dsh_home=str(work_dir / "dsh-home"),
+        agent_home=str(work_dir / "dsh-home"),
         bundle_path=str(work_dir / "bundle.json"),
         session_root="dsh-home",
         download_root=f"trials/{trial_id}/agent",
@@ -347,8 +347,7 @@ async def _run(args) -> dict:
         # ── the lock covers what gets deployed, and its bytes are re-checked ──
         from aeval.provenance import build_runtime_lock, fingerprint_control_dist
 
-        lock = build_runtime_lock(images={}, agent_ids=["deepagent-facade-smoke"],
-                                  facade_dist=facade_dist)
+        lock = build_runtime_lock(images={}, facade_dist=facade_dist)
         assert lock.facade_dist is not None
         # a deliberately stale lock must be REFUSED before any upload
         stale_context = _context(work_dir, lock.model_copy(
@@ -524,7 +523,7 @@ async def _responses_chain(
         config_file_sha256="b" * 64, runtime_lock_digest="c" * 64,
     )
     paths = TrialPaths(
-        sandbox_cwd=str(work_dir / "workspace-r"), dsh_home=str(work_dir / "dsh-home-r"),
+        sandbox_cwd=str(work_dir / "workspace-r"), agent_home=str(work_dir / "dsh-home-r"),
         bundle_path=str(work_dir / "bundle-r.json"), session_root="dsh-home-r",
         download_root=f"trials/{trial_id}/agent",
     )
@@ -559,8 +558,7 @@ async def _responses_chain(
     try:
         from aeval.provenance import build_runtime_lock
 
-        lock = build_runtime_lock(images={}, agent_ids=["deepagent-facade-smoke"],
-                                  facade_dist=facade_dist)
+        lock = build_runtime_lock(images={}, facade_dist=facade_dist)
         context = _context(work_dir, lock, trial_id=trial_id)
         await bootstrap_trial_control(
             environment=LocalSandbox(work_dir), context=context, trial_id=trial_id,

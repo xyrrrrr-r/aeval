@@ -91,7 +91,7 @@ export class EvalControlConfigError extends Error {
 }
 
 function fail(field: string, problem: string): never {
-  throw new EvalControlConfigError(`dsh-eval-control: config ${field} ${problem}`);
+  throw new EvalControlConfigError(`aeval-control: config ${field} ${problem}`);
 }
 
 function record(value: unknown, field: string, keys: readonly string[]): Record<string, unknown> {
@@ -325,13 +325,13 @@ export interface ConfigStandardSchema {
 export const EvalControlConfigSchema: ConfigStandardSchema = Object.freeze({
   '~standard': Object.freeze({
     version: 1 as const,
-    vendor: 'dsh-eval-control',
+    vendor: 'aeval-control',
     validate(value: unknown) {
       try {
         return { value: resolveEvalControlConfig(value) };
       } catch (error) {
         return { issues: [{ message: error instanceof EvalControlConfigError
-          ? error.message : 'dsh-eval-control: invalid config' }] };
+          ? error.message : 'aeval-control: invalid config' }] };
       }
     },
   }),

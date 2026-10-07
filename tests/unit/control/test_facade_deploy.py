@@ -327,7 +327,7 @@ class _BrokerStub:
 
 def _paths() -> TrialPaths:
     return TrialPaths(
-        sandbox_cwd="/workspace", dsh_home="/logs/agent/dsh-home",
+        sandbox_cwd="/workspace", agent_home="/logs/agent/dsh-home",
         bundle_path="/logs/agent/bundle_descriptor.json",
         session_root="dsh-home", download_root="trials/t/agent",
     )
@@ -374,7 +374,6 @@ async def test_the_facade_flavor_deploys_the_generic_tree(
         return "http://127.0.0.1:8787"
 
     monkeypatch.setattr(module, "deploy_generic_facade", _record)
-    monkeypatch.setattr(module, "deploy_control_stack", lambda **k: pytest.fail("wrong flavor"))
 
     env = _FakeExecEnvironment()
     await bootstrap_trial_control(
@@ -471,7 +470,6 @@ async def test_an_undeclared_stack_deploys_nothing(
     import aeval.control.bootstrap as module
 
     monkeypatch.setattr(module, "deploy_generic_facade", lambda **k: pytest.fail("deployed anyway"))
-    monkeypatch.setattr(module, "deploy_control_stack", lambda **k: pytest.fail("deployed anyway"))
     await _deploy_declared_stack(
         environment=_FakeExecEnvironment(),
         context=_context(demo_suite, runtime_lock, tmp_path),

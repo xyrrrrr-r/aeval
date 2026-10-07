@@ -17,7 +17,7 @@ from types import SimpleNamespace
 import pytest
 
 from aeval.contracts import TrialPaths
-from aeval.control.bootstrap import deploy_control_stack
+from aeval.agents.dsh.control_flavor import deploy_control_stack
 
 
 class _Agent:
@@ -59,7 +59,7 @@ class _Environment:
 def _paths() -> TrialPaths:
     return TrialPaths(
         sandbox_cwd="/app",
-        dsh_home="/logs/agent/dsh-home",
+        agent_home="/logs/agent/dsh-home",
         bundle_path="/tmp/bundle.tar",
         session_root="dsh-home",
         download_root="agent",

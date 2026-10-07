@@ -9,11 +9,16 @@ import pytest
 
 from aeval.contracts import RunBinding, TrialPaths, control_config_digest
 # importing the dsh flavor registers it (the adapter package IS the
-# registration) and gives the minting/config tests the flavor's own hooks
-from aeval.agents.dsh.control_flavor import dsh_config_fields, mint_owner_session
+# registration) and gives the minting/config tests the flavor's own hooks;
+# the graft mechanism itself lives in the flavor (moved out of the core
+# bootstrap) — these tests exercise it through the flavor module
+from aeval.agents.dsh.control_flavor import (
+    deploy_control_stack,
+    dsh_config_fields,
+    mint_owner_session,
+)
 from aeval.control.bootstrap import (
     BootstrapError,
-    deploy_control_stack,
     SANDBOX_TOKEN_PATH,
     bootstrap_trial_control,
     compose_control_config,
@@ -58,7 +63,7 @@ class _FakeBroker:
 def _paths(trial_dir: Path) -> TrialPaths:
     return TrialPaths(
         sandbox_cwd="/workspace",
-        dsh_home="/logs/agent/dsh-home",
+        agent_home="/logs/agent/dsh-home",
         bundle_path="/logs/agent/bundle_descriptor.json",
         session_root="dsh-home",
         download_root="trials/t/agent",
@@ -297,7 +302,7 @@ def test_the_dsh_flavor_shapes_its_half_of_the_config():
     composed dsh config digests exactly as it did before the split (the
     canonical digest is key-sorted, so merging order cannot drift it)."""
     paths = TrialPaths(
-        sandbox_cwd="/w", dsh_home="/h", bundle_path="/b.json",
+        sandbox_cwd="/w", agent_home="/h", bundle_path="/b.json",
         session_root="h", download_root="d",
     )
     fields = dsh_config_fields(paths=paths)
@@ -333,7 +338,7 @@ def test_the_dsh_flavors_fields_digest_as_the_composition_always_did():
     composition must produce the SAME configDigest the monolithic composer
     produced for the same inputs."""
     paths = TrialPaths(
-        sandbox_cwd="/w", dsh_home="/h", bundle_path="/b.json",
+        sandbox_cwd="/w", agent_home="/h", bundle_path="/b.json",
         session_root="h", download_root="d",
     )
     split = compose_control_config(
@@ -400,7 +405,7 @@ class _Agent:
 
 def _paths_for_stack():
     return TrialPaths(
-        sandbox_cwd="/workspace", dsh_home="/logs/agent/dsh-home",
+        sandbox_cwd="/workspace", agent_home="/logs/agent/dsh-home",
         bundle_path="/logs/agent/bundle_descriptor.json",
         session_root="dsh-home", download_root="d/t/agent",
     )
@@ -493,7 +498,7 @@ def test_control_config_mirrors_the_auxiliary_policy(runtime_lock):
     config must mirror the broker's served policy or the sandbox adapter
     fails the lease identity check at /info."""
     paths = TrialPaths(
-        sandbox_cwd="/w", dsh_home="/h", bundle_path="/b.json",
+        sandbox_cwd="/w", agent_home="/h", bundle_path="/b.json",
         session_root="h", download_root="d",
     )
     base = dict(
@@ -538,7 +543,7 @@ async def test_an_agent_without_a_declared_stack_gets_none_deployed(
     demo_suite, runtime_lock, tmp_path, monkeypatch
 ):
     """The framework must not push DSH's control stack into another agent."""
-    import aeval.control.bootstrap as module
+    import aeval.agents.dsh.control_flavor as module
 
     async def _must_not_run(**kwargs):  # noqa: ANN003
         raise AssertionError("the control stack was deployed into an undeclared adapter")
@@ -563,7 +568,7 @@ async def test_an_agent_without_a_declared_stack_gets_none_deployed(
 async def test_an_agent_with_a_declared_stack_gets_it_deployed(
     demo_suite, runtime_lock, tmp_path, monkeypatch
 ):
-    import aeval.control.bootstrap as module
+    import aeval.agents.dsh.control_flavor as module
 
     calls = []
 

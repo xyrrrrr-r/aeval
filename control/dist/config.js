@@ -40,7 +40,7 @@ export class EvalControlConfigError extends Error {
     name = 'EvalControlConfigError';
 }
 function fail(field, problem) {
-    throw new EvalControlConfigError(`dsh-eval-control: config ${field} ${problem}`);
+    throw new EvalControlConfigError(`aeval-control: config ${field} ${problem}`);
 }
 function record(value, field, keys) {
     if (typeof value !== 'object' || value === null || Array.isArray(value)
@@ -262,14 +262,14 @@ export function digestEvalControlConfig(config) {
 export const EvalControlConfigSchema = Object.freeze({
     '~standard': Object.freeze({
         version: 1,
-        vendor: 'dsh-eval-control',
+        vendor: 'aeval-control',
         validate(value) {
             try {
                 return { value: resolveEvalControlConfig(value) };
             }
             catch (error) {
                 return { issues: [{ message: error instanceof EvalControlConfigError
-                                ? error.message : 'dsh-eval-control: invalid config' }] };
+                                ? error.message : 'aeval-control: invalid config' }] };
             }
         },
     }),

@@ -287,7 +287,7 @@ def test_trial_control_paths_are_conventions(tmp_path):
     state = _state(tmp_path)
     paths = trial_control_paths(state, tmp_path)
     assert paths.sandbox_cwd == "/workspace"
-    assert paths.dsh_home == "/logs/agent/dsh-home"
+    assert paths.agent_home == "/logs/agent/dsh-home"
     assert paths.bundle_path == "/logs/agent/bundle_descriptor.json"
     assert paths.session_root == "dsh-home"
     assert paths.download_root == f"trials/{state.trial_id}/agent"
@@ -521,7 +521,7 @@ def test_agent_declared_paths_replace_the_dsh_convention(tmp_path):
 
     # no live agent: the historical DSH convention is kept verbatim
     legacy = trial_control_paths(state, run_dir)
-    assert legacy.dsh_home == SANDBOX_DSH_HOME
+    assert legacy.agent_home == SANDBOX_DSH_HOME
     assert legacy.session_root == SANDBOX_SESSION_DIR
 
     # an adapter that declares its own home and session directory gets them
@@ -532,13 +532,13 @@ def test_agent_declared_paths_replace_the_dsh_convention(tmp_path):
             SANDBOX_HOME="/logs/agent/other-home", SESSION_ARTIFACT_DIR="other-home"
         ),
     )
-    assert declared.dsh_home == "/logs/agent/other-home"
+    assert declared.agent_home == "/logs/agent/other-home"
     assert declared.session_root == "other-home"
     # the shipped adapter declares exactly the old constants, so DSH is unchanged
     from aeval.agents.dsh.agent import DshAgent
 
     dsh = trial_control_paths(state, run_dir, agent=DshAgent)
-    assert (dsh.dsh_home, dsh.session_root) == (SANDBOX_DSH_HOME, SANDBOX_SESSION_DIR)
+    assert (dsh.agent_home, dsh.session_root) == (SANDBOX_DSH_HOME, SANDBOX_SESSION_DIR)
 
 
 async def test_a_facade_flavor_agent_gets_the_neutral_config(

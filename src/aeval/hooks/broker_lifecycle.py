@@ -238,7 +238,7 @@ def trial_control_paths(
     download_root = (state.trial_dir / "agent").relative_to(run_dir).as_posix()
     return TrialPaths(
         sandbox_cwd=str(getattr(driver, "workspace_dir", None) or "/workspace"),
-        dsh_home=str(getattr(agent, "SANDBOX_HOME", None) or SANDBOX_DSH_HOME),
+        agent_home=str(getattr(agent, "SANDBOX_HOME", None) or SANDBOX_DSH_HOME),
         bundle_path=SANDBOX_BUNDLE_PATH,
         session_root=str(
             getattr(agent, "SESSION_ARTIFACT_DIR", None) or SANDBOX_SESSION_DIR
