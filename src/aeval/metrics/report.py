@@ -78,6 +78,9 @@ class RunSummary:
     # 各 run 的套件标识（id@version，来自清单）——报告头/面板头展示
     # 用。同样只是显示层。
     suite_labels: list[str] = field(default_factory=list)
+    # 维度模型（清单封存的评分参数：阈值/权重/大块/红线任务）。空 =
+    # 套件未声明 → 报告/面板不加「维度达标」层（向后兼容）。
+    dimension_model: dict[str, object] = field(default_factory=dict)
     # per-task roll-up (integration P2): the skill/dimension cut. Only
     # meaningful when a run spans several tasks; empty otherwise.
     task_groups: dict[str, TaskGroupSummary] = field(default_factory=dict)
@@ -151,6 +154,7 @@ def aggregate_run(
     names: dict[str, str] = {}
     default: str | None = None
     suite_labels: list[str] = []
+    model: dict[str, object] = {}
     for manifest in manifests or ():
         for task_id, title in (manifest.task_titles or {}).items():
             titles.setdefault(task_id, title)
@@ -161,10 +165,40 @@ def aggregate_run(
         label = f"{manifest.overlay.suite_id}@{manifest.overlay.suite_version}"
         if label not in suite_labels:
             suite_labels.append(label)
+        # 维度模型：多 run 聚合按类别键 setdefault 合并（先到的 run 为
+        # 准）——与显示名同纪律，评分参数不因聚合口径漂移。
+        for key, spec in (manifest.dimension_model or {}).get(
+            "categories", {}
+        ).items():
+            model.setdefault("categories", {}).setdefault(key, spec)
+        for key, name in (manifest.dimension_model or {}).get("blocks", {}).items():
+            model.setdefault("blocks", {}).setdefault(key, name)
+        for task in (manifest.dimension_model or {}).get("redline_tasks", []):
+            redline = model.setdefault("redline_tasks", [])
+            if task not in redline:
+                redline.append(task)
+        if model.get("default") is None and (
+            manifest.dimension_model or {}
+        ).get("default") is not None:
+            model["default"] = manifest.dimension_model["default"]
+    # 模型自足推导：只封了 dimension_model 的清单（显示名投影是其
+    # 子集）也能聚合出类别层——两个投影字段不该比模型本身更必需。
+    if model.get("categories") and not names:
+        names = {
+            key: (
+                spec.get("name", key)
+                if isinstance(spec, dict)
+                else (spec if isinstance(spec, str) else key)
+            )
+            for key, spec in model["categories"].items()
+        }
+    if model.get("default") is not None and default is None:
+        default = model["default"]
     summary.task_titles = titles
     summary.category_names = names
     summary.default_category = default
     summary.suite_labels = suite_labels
+    summary.dimension_model = model
 
     if k is not None and len(valid) >= k:
         summary.pass_pow_k_value = pass_pow_k(passes, len(valid), k)
@@ -279,10 +313,18 @@ def _category_display(key: str, names: dict[str, str]) -> str:
     return "未分类" if key == "uncategorized" else key
 
 
+def _num(value: float | None) -> str:
+    """报告数字：None → —（无数据不编造），否则四位小数。"""
+    return "—" if value is None else f"{value:.4f}"
+
+
 def render_static_report(
     summary: RunSummary,
     comparison: ComparabilityReport | None = None,
 ) -> str:
+    # watermark 反向依赖本模块（rollup/RunSummary），函数内导入避免环。
+    from aeval.metrics.watermark import score_watermark
+
     comparison = comparison or summary.comparability
     lines = [
         "# aeval 运行报告",
@@ -321,6 +363,19 @@ def render_static_report(
             lines.append(
                 f"- 可比性：不可比——{comparison.first_difference()}"
             )
+    # 维度达标（评测平台设计 §4.2 的评分机制）：阈值/权重/大块/红线
+    # 来自清单封存的维度模型；值为类别聚合的通过率，这里不重新数任何
+    # 试次。未声明维度模型的套件不渲染本层（向后兼容）。
+    watermark = score_watermark(summary)
+    if watermark is not None:
+        lines.append(f"- 综合评分：{_num(watermark.composite)}")
+        if watermark.redline_tripped:
+            lines.append(
+                "- 红线状态：告警（"
+                + "、".join(watermark.redline_offenders) + "）"
+            )
+        else:
+            lines.append("- 红线状态：全通过")
     # 按任务表：技能/维度切口（只在有信息量时渲染——单任务 run 直接
     # 读上面的行）。套件声明了类别（清单里有 category_names /
     # default_category）时按类别聚合：先给「按类别结果」的汇总表
@@ -328,6 +383,24 @@ def render_static_report(
     if summary.task_groups and len(summary.task_groups) > 1:
         rollup = rollup_categories(summary)
         if rollup is not None:
+            if watermark is not None:
+                band_zh = {"green": "绿", "yellow": "黄", "red": "红",
+                           "gray": "灰"}
+                lines.append("")
+                lines.append("## 维度达标")
+                lines.append("")
+                lines.append(
+                    "| 维度 | 大块 | 权重 | 通过率 | 阈值 | 达标度 | 状态 |"
+                )
+                lines.append("|---|---|---|---|---|---|---|")
+                for dim in watermark.dimensions:
+                    mark = "（红线）" if dim.redline else ""
+                    lines.append(
+                        f"| {dim.display}({dim.key}){mark} "
+                        f"| {dim.block_display} | {dim.weight:g} "
+                        f"| {_num(dim.value)} | {dim.threshold:g} "
+                        f"| {_num(dim.achievement)} | {band_zh[dim.band]} |"
+                    )
             lines.append("")
             lines.append("## 按类别结果")
             lines.append("")

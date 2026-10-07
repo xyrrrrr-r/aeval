@@ -102,15 +102,64 @@ def _load_task_titles(suite_dir: Path) -> dict[str, str]:
     return titles
 
 
-def _load_task_categories(suite_dir: Path) -> tuple[dict[str, str], str | None]:
-    """类别聚合声明：task_categories.yaml（套件自写）与注入器生成的
-    task_categories.cases.yaml 合并，套件侧优先。
+_DEFAULT_THRESHOLD = 0.9
+_DEFAULT_WEIGHT = 1.0
 
-    结构：``categories:``（类别键 → 中文显示名）+ 可选 ``default:``
-    （无点分前缀任务归到的类别键）。报告按 task_id 首个点前的前缀
-    归组，无点的归 default——确定性规则，无需逐任务映射。
+
+def _parse_dimension_spec(raw: object) -> dict:
+    """一个类别声明的规范形：str（只有显示名）或映射（name/block/
+    weight/threshold/redline），未声明的字段取默认。坏类型报错。"""
+    if isinstance(raw, str):
+        return {
+            "name": raw, "block": "other", "weight": _DEFAULT_WEIGHT,
+            "threshold": _DEFAULT_THRESHOLD, "redline": False,
+        }
+    if not isinstance(raw, dict):
+        raise SuiteError("category value must be a display name or a mapping")
+    spec = {
+        "name": raw.get("name"),
+        "block": raw.get("block", "other"),
+        "weight": raw.get("weight", _DEFAULT_WEIGHT),
+        "threshold": raw.get("threshold", _DEFAULT_THRESHOLD),
+        "redline": bool(raw.get("redline", False)),
+    }
+    if not isinstance(spec["name"], str) or not spec["name"]:
+        raise SuiteError("category.name must be a non-empty string")
+    if not isinstance(spec["block"], str):
+        raise SuiteError("category.block must be a block key string")
+    if not isinstance(spec["weight"], (int, float)) or spec["weight"] <= 0:
+        raise SuiteError("category.weight must be a positive number")
+    if not isinstance(spec["threshold"], (int, float)) or not (
+        0 < spec["threshold"] <= 1
+    ):
+        raise SuiteError("category.threshold must be in (0, 1]")
+    return spec
+
+
+def _load_task_categories(suite_dir: Path) -> dict[str, object]:
+    """维度模型声明：task_categories.yaml（套件自写）与注入器生成的
+    task_categories.cases.yaml 合并（套件侧优先）。
+
+    结构（评测平台设计 §4.2 的维度模型——阈值/权重/大块/红线）::
+
+        categories:
+          a2a: A2A 协议            # 简式：只有显示名
+          error:                    # 详式：
+            name: 异常处理
+            block: redline          # 所属大块键
+            weight: 2.0             # 权重（四象限纵轴）
+            threshold: 1.0          # 阈值（达标度 = 通过率 / 阈值）
+            redline: true           # 红线维度：低于阈值即告警
+        blocks: {basic: 基础连通, ...}
+        redline_tasks: [secret-guard, ...]   # 任务级红线（跨类别）
+        default: intelligence       # 无点分前缀任务归到的类别
+
+    报告/面板按 task_id 首个点前的前缀归组；维度模型只是评分参数，
+    不改变任何判定/分母语义。
     """
-    merged: dict[str, str] = {}
+    merged: dict[str, dict] = {}
+    blocks: dict[str, str] = {}
+    redline_tasks: list[str] = []
     default: str | None = None
     for name in ("task_categories.cases.yaml", "task_categories.yaml"):
         path = suite_dir / name
@@ -123,20 +172,39 @@ def _load_task_categories(suite_dir: Path) -> tuple[dict[str, str], str | None]:
         if not isinstance(data, dict):
             raise SuiteError(f"{path}: expected a mapping with 'categories'")
         categories = data.get("categories")
-        if not isinstance(categories, dict) or not all(
-            isinstance(key, str) and isinstance(value, str)
-            for key, value in categories.items()
-        ):
+        if not isinstance(categories, dict) or not categories:
             raise SuiteError(
-                f"{path}: categories must be a flat key -> name string mapping"
+                f"{path}: categories must be a non-empty key -> spec mapping"
             )
-        merged.update(categories)
+        # 合并顺序（cases 先、套件后）已保证套件侧覆盖同名类别。
+        for key, raw in categories.items():
+            merged[key] = _parse_dimension_spec(raw)
+        raw_blocks = data.get("blocks") or {}
+        if not isinstance(raw_blocks, dict) or not all(
+            isinstance(k, str) and isinstance(v, str)
+            for k, v in raw_blocks.items()
+        ):
+            raise SuiteError(f"{path}: blocks must be a key -> name mapping")
+        blocks.update(raw_blocks)
+        raw_redline = data.get("redline_tasks") or []
+        if not isinstance(raw_redline, list) or not all(
+            isinstance(t, str) for t in raw_redline
+        ):
+            raise SuiteError(f"{path}: redline_tasks must be a list of task ids")
+        for task in raw_redline:
+            if task not in redline_tasks:
+                redline_tasks.append(task)
         raw_default = data.get("default")
         if raw_default is not None:
             if not isinstance(raw_default, str):
                 raise SuiteError(f"{path}: default must be a category key")
             default = raw_default
-    return merged, default
+    return {
+        "categories": merged,
+        "blocks": blocks,
+        "redline_tasks": redline_tasks,
+        "default": default,
+    }
 
 
 def load_suite(path: Path, suites_root: Path | None = None) -> ResolvedSuite:
@@ -158,7 +226,11 @@ def load_suite(path: Path, suites_root: Path | None = None) -> ResolvedSuite:
         raise
     except Exception as exc:
         raise SuiteError(f"{suite_yaml}: invalid suite overlay: {exc}") from exc
-    category_names, default_category = _load_task_categories(path)
+    dimension_model = _load_task_categories(path)
+    category_names = {
+        key: spec["name"]
+        for key, spec in dimension_model["categories"].items()
+    }
     return ResolvedSuite(
         overlay=overlay,
         suite_dir=path,
@@ -169,7 +241,8 @@ def load_suite(path: Path, suites_root: Path | None = None) -> ResolvedSuite:
         sources=list(resolution.sources),
         task_titles=_load_task_titles(path),
         category_names=category_names,
-        default_category=default_category,
+        default_category=dimension_model["default"],
+        dimension_model=dimension_model,
     )
 
 

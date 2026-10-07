@@ -21,6 +21,7 @@ from aeval.metrics.report import (
     category_pass_pow_k,
     rollup_categories,
 )
+from aeval.metrics.watermark import Watermark, score_watermark
 
 __all__ = ["render_dashboard_html"]
 
@@ -107,6 +108,40 @@ td { border-bottom: 1px solid var(--line); }
 td.tbar { min-width: 120px; }
 .mbar { height: 8px; border-radius: 4px; background: var(--chipbg);
         overflow: hidden; display: flex; }
+/* —— 能力水位（评测平台设计 §4.2）—— */
+.health { display: flex; flex-wrap: wrap; gap: 28px; align-items: center;
+          background: var(--panel); border: 1px solid var(--line);
+          border-radius: 10px; padding: 18px 22px; margin-top: 16px; }
+.health .big { font-size: 44px; font-weight: 800; line-height: 1; }
+.health .sub { font-size: 12px; color: var(--muted); margin-top: 4px; }
+.health .stat { font-size: 22px; font-weight: 700; }
+.badge { display: inline-block; border-radius: 20px; padding: 3px 12px;
+         font-size: 13px; font-weight: 600; color: #fff; }
+.badge.ok { background: var(--pass); }
+.badge.alarm { background: var(--fail); }
+.wm2 { display: grid; grid-template-columns: 300px 1fr; gap: 12px;
+       margin-top: 12px; }
+@media (max-width: 720px) { .wm2 { grid-template-columns: 1fr; } }
+.heat { display: grid; gap: 8px; margin-top: 4px; }
+.heat .row { display: flex; align-items: stretch; gap: 8px; }
+.heat .blk { min-width: 110px; font-size: 13px; color: var(--muted);
+             display: flex; align-items: center; }
+.heat .cell { flex: 1; min-width: 118px; border-radius: 8px; padding: 8px 10px;
+              color: #fff; }
+.heat .cell .n { font-size: 13px; font-weight: 600; }
+.heat .cell .s { font-size: 11.5px; opacity: .92; }
+.heat .cell.green { background: #2f9e6e; }
+.heat .cell.yellow { background: #c08a2d; }
+.heat .cell.red { background: #d05252; }
+.heat .cell.gray { background: #7d8792; }
+.bottom { display: grid; gap: 8px; margin-top: 4px; }
+.bottom .item { display: grid; grid-template-columns: 26px 1fr auto;
+                gap: 10px; align-items: center; background: var(--panel);
+                border: 1px solid var(--line); border-radius: 8px;
+                padding: 8px 12px; }
+.bottom .rank { font-size: 15px; font-weight: 700; color: var(--muted); }
+.bottom .gap { font-size: 12.5px; color: var(--muted); }
+.svgtxt { font-size: 11px; fill: var(--muted); }
 footer { margin-top: 40px; color: var(--muted); font-size: 12.5px;
          border-top: 1px solid var(--line); padding-top: 12px; }
 """
@@ -308,6 +343,221 @@ def _task_section(summary: RunSummary, rollup: list[CategoryRollup] | None) -> s
     return f"<h2>按任务结果</h2>{''.join(blocks)}"
 
 
+def _health_html(watermark: Watermark) -> str:
+    """层 1 整体健康度：综合评分 | 整体通过率 | 红线状态。"""
+    if watermark.redline_tripped:
+        shown = "、".join(watermark.redline_offenders[:3])
+        extra = (
+            f" 等 {len(watermark.redline_offenders)} 项"
+            if len(watermark.redline_offenders) > 3
+            else ""
+        )
+        redline = (
+            f'<span class="badge alarm">红线告警：{shown}{extra}</span>'
+        )
+    else:
+        redline = '<span class="badge ok">红线全通过</span>'
+    return (
+        '<section class="health">'
+        f'<div><div class="big">{_fmt(watermark.composite, 2)}</div>'
+        '<div class="sub">综合评分（维度加权均分）</div></div>'
+        f'<div><div class="stat">{_fmt(watermark.overall_pass_rate, 4)}</div>'
+        '<div class="sub">整体通过率</div></div>'
+        f'<div>{redline}<div class="sub">红线状态</div></div>'
+        "</section>"
+    )
+
+
+def _radar_svg(watermark: Watermark) -> str:
+    """层 2 能力雷达：轴 = 大块，值 = 大块加权均分（0-1）。"""
+    blocks = [b for b in watermark.blocks if b.score is not None]
+    n = len(blocks)
+    cx = cy = 110.0
+    r = 78.0
+    if n < 3:
+        # 轴数不足 3 画不了雷达：退化为大块得分条形列表。
+        rows = "".join(
+            f'<div class="catrow"><div class="name">{_e(b.display)}'
+            f"<small>({_e(b.key)})</small></div>"
+            f"{_bar(int(round((b.score or 0) * 100)), int(round((1 - (b.score or 0)) * 100)), 100)}"
+            f'<div class="pk">{_fmt(b.score, 2)}</div></div>'
+            for b in watermark.blocks
+        )
+        return f'<div class="catrows">{rows}</div>'
+    import math
+
+    def point(fraction: float, i: int) -> tuple[float, float]:
+        angle = -math.pi / 2 + i * 2 * math.pi / n
+        return cx + r * fraction * math.cos(angle), cy + r * fraction * math.sin(angle)
+
+    def polygon(fraction: float) -> str:
+        pts = [point(fraction, i) for i in range(n)]
+        return " ".join(f"{x:.1f},{y:.1f}" for x, y in pts)
+
+    grid = "".join(
+        f'<polygon points="{polygon(f)}" fill="none" '
+        f'stroke="var(--line)" stroke-width="1"/>'
+        for f in (0.25, 0.5, 0.75, 1.0)
+    )
+    axes = "".join(
+        f'<line x1="{cx}" y1="{cy}" x2="{point(1.0, i)[0]:.1f}" '
+        f'y2="{point(1.0, i)[1]:.1f}" stroke="var(--line)"/>'
+        for i in range(n)
+    )
+    data = " ".join(
+        f"{point(min(b.score or 0.0, 1.0), i)[0]:.1f},"
+        f"{point(min(b.score or 0.0, 1.0), i)[1]:.1f}"
+        for i, b in enumerate(blocks)
+    )
+    labels = []
+    for i, b in enumerate(blocks):
+        lx, ly = point(1.18, i)
+        cos, sin = lx - cx, ly - cy
+        anchor = "middle"
+        if cos > 18:
+            anchor = "start"
+        elif cos < -18:
+            anchor = "end"
+        dy = 4 if abs(sin) < 18 else (10 if sin > 0 else -2)
+        labels.append(
+            f'<text x="{lx:.1f}" y="{ly + dy:.1f}" text-anchor="{anchor}" '
+            f'class="svgtxt">{_e(b.display)} {_fmt(b.score, 2)}</text>'
+        )
+    return (
+        '<svg viewBox="0 0 220 220" width="260" height="260" role="img" '
+        'aria-label="能力雷达（按大块加权均分）">'
+        f"{grid}{axes}"
+        f'<polygon points="{data}" fill="rgba(47,158,110,.25)" '
+        f'stroke="var(--pass)" stroke-width="2"/>'
+        f'<circle cx="{cx}" cy="{cy}" r="2.5" fill="var(--pass)"/>'
+        f"{''.join(labels)}</svg>"
+    )
+
+
+def _quadrant_svg(watermark: Watermark) -> str:
+    """层 2 四象限矩阵：横轴达标度（>1 达标），纵轴权重。"""
+    dims = [d for d in watermark.dimensions if d.achievement is not None]
+    if not dims:
+        return '<div class="meta">无有效维度数据</div>'
+    x0, x1, y0, y1 = 54.0, 462.0, 18.0, 252.0
+    max_w = max(d.weight for d in dims)
+    ach_span = 1.5
+    w_span = max_w * 1.2
+
+    def px(ach: float) -> float:
+        return x0 + min(ach, ach_span) / ach_span * (x1 - x0)
+
+    def py(w: float) -> float:
+        return y1 - w / w_span * (y1 - y0)
+
+    div_x = px(1.0)
+    div_y = py(max_w / 2.0)
+    quadrant_colors = {
+        (True, True): "#2f9e6e",    # 达标 + 高权重：核心优势
+        (False, True): "#e05252",   # 未达标 + 高权重：急需关注
+        (False, False): "#d9a441",  # 未达标 + 低权重：待改进
+        (True, False): "#9aa0a6",   # 达标 + 低权重：健康
+    }
+    points = []
+    for d in dims:
+        high = d.weight >= max_w / 2.0
+        color = quadrant_colors[(d.achievement >= 1.0, high)]
+        failing = (
+            f" · 失败任务 {len(d.failing_tasks)} 个"
+            if d.failing_tasks
+            else ""
+        )
+        points.append(
+            f'<circle cx="{px(d.achievement):.1f}" cy="{py(d.weight):.1f}" '
+            f'r="6" fill="{color}" opacity=".85">'
+            f"<title>{_e(d.display)}({_e(d.key)}) · 大块 "
+            f"{_e(d.block_display)} · 达标度 {d.achievement:.2f} · 权重 "
+            f"{d.weight:g} · 通过率 {d.value:.1%}{failing}</title></circle>"
+        )
+    return (
+        '<svg viewBox="0 0 480 280" width="100%" role="img" '
+        'aria-label="四象限矩阵（达标度 × 权重）">'
+        f'<rect x="{x0}" y="{y0}" width="{x1 - x0}" height="{y1 - y0}" '
+        f'fill="none" stroke="var(--line)"/>'
+        f'<line x1="{div_x}" y1="{y0}" x2="{div_x}" y2="{y1}" '
+        f'stroke="var(--muted)" stroke-dasharray="5 4"/>'
+        f'<line x1="{x0}" y1="{div_y}" x2="{x1}" y2="{div_y}" '
+        f'stroke="var(--line)" stroke-dasharray="3 4"/>'
+        f'<text x="{div_x + 4}" y="{y0 + 12}" class="svgtxt">达标线 1.0</text>'
+        f'<text x="{x0}" y="{y1 + 16}" class="svgtxt">达标度 0</text>'
+        f'<text x="{x1}" y="{y1 + 16}" text-anchor="end" class="svgtxt">'
+        f"达标度 ≥ 1</text>"
+        f'<text x="{x0 - 6}" y="{y0 + 8}" text-anchor="end" class="svgtxt">'
+        f"权重 {max_w:g}</text>"
+        f'<text x="{x1}" y="{y0 + 12}" text-anchor="end" class="svgtxt" '
+        f'fill="#2f9e6e">核心优势</text>'
+        f'<text x="{x0}" y="{y0 + 12}" class="svgtxt" fill="#e05252">'
+        f"急需关注</text>"
+        f'<text x="{x0}" y="{y1 - 8}" class="svgtxt" fill="#d9a441">待改进</text>'
+        f'<text x="{x1}" y="{y1 - 8}" text-anchor="end" class="svgtxt">'
+        f"健康</text>"
+        f"{''.join(points)}</svg>"
+    )
+
+
+def _heatmap_html(watermark: Watermark) -> str:
+    """层 3 维度热力图：绿 ≥ 阈值、黄 ≥ 阈值×90%、红 <、灰 = 未评测。"""
+    rows = []
+    for block in watermark.blocks:
+        cells = []
+        for dim in watermark.dimensions:
+            if dim.block != block.key:
+                continue
+            mark = " · 红线" if dim.redline else ""
+            cells.append(
+                f'<div class="cell {dim.band}" title="{_e(dim.display)}'
+                f"({_e(dim.key)}) · 达标度 "
+                f'{_fmt(dim.achievement, 2)}{mark}">'
+                f'<div class="n">{_e(dim.display)}{mark}</div>'
+                f'<div class="s">通过率 {_fmt(dim.value)} · 阈值 '
+                f"{dim.threshold:.0%} · 达标度 {_fmt(dim.achievement, 2)}"
+                "</div></div>"
+            )
+        rows.append(
+            f'<div class="row"><div class="blk">{_e(block.display)}'
+            f"<small><br>{len(cells)} 维度</small></div>"
+            f"{''.join(cells)}</div>"
+        )
+    return f'<div class="heat">{"".join(rows)}</div>'
+
+
+def _bottom_html(watermark: Watermark, summary: RunSummary) -> str:
+    """层 4 短板摘要：达标度最低的前 K 个维度（无数据不计）。"""
+
+    def task_label(task_id: str) -> str:
+        title = summary.task_titles.get(task_id)
+        return _e(f"{title}({task_id})") if title else _e(task_id)
+
+    items = []
+    for rank, dim in enumerate(watermark.bottom, start=1):
+        failing = ""
+        if dim.failing_tasks:
+            shown = "、".join(task_label(t) for t in dim.failing_tasks[:3])
+            extra = (
+                f" 等 {len(dim.failing_tasks)} 个"
+                if len(dim.failing_tasks) > 3
+                else ""
+            )
+            failing = f"<br>失败任务：{shown}{extra}"
+        mark = " · 红线" if dim.redline else ""
+        items.append(
+            f'<div class="item"><div class="rank">{rank}</div><div>'
+            f'<div>{_e(dim.display)}({_e(dim.key)}) · '
+            f"{_e(dim.block_display)}{mark}{failing}</div>"
+            f'<div class="gap">通过率 {_fmt(dim.value)} / 阈值 '
+            f"{dim.threshold:.0%} · 差距 "
+            f"{(dim.threshold - (dim.value or 0.0)):.1%}"
+            f"</div></div>"
+            f'<div class="stat">{_fmt(dim.achievement, 2)}</div></div>'
+        )
+    return f'<div class="bottom">{"".join(items)}</div>'
+
+
 def render_dashboard_html(
     summary: RunSummary,
     comparison: ComparabilityReport | None = None,
@@ -340,6 +590,27 @@ def render_dashboard_html(
         _category_section(summary, rollup) if rollup is not None else ""
     )
 
+    # 能力水位（评测平台设计 §4.2 首屏核心视图）：未声明维度模型的
+    # 套件不加这四层（向后兼容）。
+    watermark = score_watermark(summary)
+    if watermark is not None:
+        watermark_html = (
+            f"{_health_html(watermark)}\n"
+            '<div class="wm2"><div class="panel">'
+            '<h2 style="margin-top:0">能力雷达</h2>'
+            f"{_radar_svg(watermark)}</div>"
+            '<div class="panel">'
+            '<h2 style="margin-top:0">四象限矩阵（达标度 × 权重）</h2>'
+            '<p class="meta">横轴达标度（&gt;1 达标），纵轴权重；'
+            f"悬停查看维度明细。</p>{_quadrant_svg(watermark)}</div></div>\n"
+            "<h2>维度热力图</h2>\n"
+            f"{_heatmap_html(watermark)}\n"
+            f"<h2>短板摘要（达标度最低 {len(watermark.bottom)} 项）</h2>\n"
+            f"{_bottom_html(watermark, summary)}\n"
+        )
+    else:
+        watermark_html = ""
+
     return (
         "<!doctype html>\n<html lang=\"zh-CN\">\n<head>\n<meta charset="
         '"utf-8">\n<meta name="viewport" content="width=device-width, '
@@ -348,7 +619,7 @@ def render_dashboard_html(
         "</head>\n<body>\n<div class=\"wrap\">\n"
         "<header><h1>aeval 运行面板</h1>"
         f'<div class="meta">{" · ".join(meta_bits)}</div></header>\n'
-        f"{banners}\n{_metric_cards(summary)}\n"
+        f"{banners}\n{_metric_cards(summary)}\n{watermark_html}"
         f'<div class="split">{_verdict_panel(summary)}'
         f"{_exclusion_panel(summary)}</div>\n"
         f"{category_html}\n{_task_section(summary, rollup)}\n"

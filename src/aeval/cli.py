@@ -471,6 +471,7 @@ def run_cmd(
             task_titles=resolved.task_titles,
             category_names=resolved.category_names,
             default_category=resolved.default_category,
+            dimension_model=resolved.dimension_model,
             versions=VersionsBundle(
                 aeval_version=version("aeval"),
                 converter_version=resolved.overlay.provenance.converter_version,

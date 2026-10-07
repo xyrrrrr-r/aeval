@@ -688,5 +688,69 @@ def test_task_categories_merge_and_default(tmp_path):
     (suite_dir / "task_categories.yaml").write_text(
         "categories:\n  a2a:\n    - 不是映射\n", encoding="utf-8"
     )
-    with pytest.raises(SuiteError, match="flat key -> name"):
+    with pytest.raises(SuiteError, match="display name or a mapping"):
+        load_suite(suite_dir)
+
+
+def test_dimension_model_extended_schema(tmp_path):
+    """维度模型详式（评测平台设计 §4.2）：name/block/weight/threshold/
+    redline + blocks + redline_tasks；简式只有显示名，其余取默认；坏
+    参数报错。"""
+    suite_dir = _copy_demo(tmp_path)
+    (suite_dir / "task_categories.yaml").write_text(
+        "categories:\n"
+        "  a2a:\n"
+        "    name: A2A 协议\n"
+        "    block: orch\n"
+        "    weight: 1.5\n"
+        "    threshold: 0.85\n"
+        "  error:\n"
+        "    name: 异常处理\n"
+        "    block: redline\n"
+        "    redline: true\n"
+        "blocks:\n"
+        "  orch: 编排与协作\n"
+        "  redline: 红线\n"
+        "redline_tasks:\n"
+        "  - a2a.duplicate_task_id\n"
+        "default: a2a\n",
+        encoding="utf-8",
+    )
+    suite = load_suite(suite_dir)
+    model = suite.dimension_model
+    assert model["categories"]["a2a"] == {
+        "name": "A2A 协议", "block": "orch", "weight": 1.5,
+        "threshold": 0.85, "redline": False,
+    }
+    # 未声明字段取默认（weight 1.0 / threshold 0.9 / 非红线）。
+    assert model["categories"]["error"] == {
+        "name": "异常处理", "block": "redline", "weight": 1.0,
+        "threshold": 0.9, "redline": True,
+    }
+    assert model["blocks"] == {"orch": "编排与协作", "redline": "红线"}
+    assert model["redline_tasks"] == ["a2a.duplicate_task_id"]
+    assert model["default"] == "a2a"
+    # 显示名投影（报告的「按类别结果」）来自同一份模型。
+    assert suite.category_names == {"a2a": "A2A 协议", "error": "异常处理"}
+    assert suite.default_category == "a2a"
+    # 阈值必须在 (0, 1]——达标度是值/阈值，>1 的阈值没有意义。
+    (suite_dir / "task_categories.yaml").write_text(
+        "categories:\n  a2a:\n    name: X\n    threshold: 1.5\n",
+        encoding="utf-8",
+    )
+    with pytest.raises(SuiteError, match="threshold must be in"):
+        load_suite(suite_dir)
+    # 权重必须为正。
+    (suite_dir / "task_categories.yaml").write_text(
+        "categories:\n  a2a:\n    name: X\n    weight: 0\n",
+        encoding="utf-8",
+    )
+    with pytest.raises(SuiteError, match="weight must be"):
+        load_suite(suite_dir)
+    # redline_tasks 必须是任务 id 列表。
+    (suite_dir / "task_categories.yaml").write_text(
+        "categories:\n  a2a: 名\nredline_tasks: not-a-list\n",
+        encoding="utf-8",
+    )
+    with pytest.raises(SuiteError, match="redline_tasks"):
         load_suite(suite_dir)

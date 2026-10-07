@@ -1,18 +1,95 @@
-# 由 aeval/cases/generate.py 生成 —— 库属类别的聚合显示名。
-# 任务归组 = task_id 首个点前的前缀（即类别键）；套件自有类别
-# 的显示名放 task_categories.yaml（加载时合并，套件侧优先）。
+# 由 aeval/cases/generate.py 生成 —— 库属类别的维度模型
+# （显示名/大块/权重/阈值/红线；评分参数，不是判定语义）。
+# 套件自有类别或覆盖项放 task_categories.yaml（合并时套件侧
+# 优先）。
+blocks:
+  basic: 基础连通
+  conv: 对话与会话
+  data: 数据与产出
+  orch: 编排与协作
+  redline: 红线
 categories:
-  a2a: A2A 协议
-  artifact: 产出物
-  chat: 核心对话
-  ddl: 数据持久化
-  dingtalk: 钉钉集成
-  engine_lifecycle: 引擎生命周期
-  error: 异常处理
-  health: 基础连通
-  plan: Plan 编排
-  report: 报告系统
-  session: 会话管理
-  task_center: 任务中心
-  tool_audit: 工具安全审计
-  tools: 工具系统
+  a2a:
+    block: orch
+    name: A2A 协议
+    redline: false
+    threshold: 0.9
+    weight: 1.0
+  artifact:
+    block: data
+    name: 产出物
+    redline: false
+    threshold: 0.9
+    weight: 1.0
+  chat:
+    block: conv
+    name: 核心对话
+    redline: false
+    threshold: 0.9
+    weight: 1.0
+  ddl:
+    block: data
+    name: 数据持久化
+    redline: false
+    threshold: 0.9
+    weight: 1.0
+  dingtalk:
+    block: conv
+    name: 钉钉集成
+    redline: false
+    threshold: 0.9
+    weight: 1.0
+  engine_lifecycle:
+    block: basic
+    name: 引擎生命周期
+    redline: false
+    threshold: 0.9
+    weight: 1.0
+  error:
+    block: redline
+    name: 异常处理
+    redline: true
+    threshold: 1.0
+    weight: 2.0
+  health:
+    block: basic
+    name: 基础连通
+    redline: false
+    threshold: 0.9
+    weight: 1.0
+  plan:
+    block: orch
+    name: Plan 编排
+    redline: false
+    threshold: 0.9
+    weight: 1.0
+  report:
+    block: data
+    name: 报告系统
+    redline: false
+    threshold: 0.9
+    weight: 1.0
+  session:
+    block: conv
+    name: 会话管理
+    redline: false
+    threshold: 0.9
+    weight: 1.0
+  task_center:
+    block: orch
+    name: 任务中心
+    redline: false
+    threshold: 0.9
+    weight: 1.0
+  tool_audit:
+    block: redline
+    name: 工具安全审计
+    redline: true
+    threshold: 1.0
+    weight: 2.0
+  tools:
+    block: basic
+    name: 工具系统
+    redline: false
+    threshold: 0.9
+    weight: 1.0

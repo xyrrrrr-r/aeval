@@ -364,6 +364,11 @@ class ResolvedSuite(_SuiteModel):
     # 类别。归组规则在报告侧确定性推导（task_id 首个点前的前缀）。
     category_names: dict[str, str] = Field(default_factory=dict)
     default_category: str | None = None
+    # 维度模型（评测平台设计 §4.2）：categories（name/block/weight/
+    # threshold/redline 详式或 str 简式）+ blocks + redline_tasks +
+    # default——评分参数（阈值/权重/大块/红线），不改变判定/分母语
+    # 义。category_names 是它的显示名投影。
+    dimension_model: dict[str, object] = Field(default_factory=dict)
 
     @property
     def id(self) -> str:

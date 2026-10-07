@@ -234,6 +234,23 @@ _CATEGORY_LINES = {
     "report": "报告系统：SSR 端点、Markdown 渲染、HMAC 鉴权、任务完成后自动生成报告",
 }
 
+# 库类别的默认大块（雷达轴）与红线类别。键 = 大块键，值 = 显示名。
+_CATEGORY_BLOCKS = {
+    "basic": "基础连通",
+    "conv": "对话与会话",
+    "orch": "编排与协作",
+    "data": "数据与产出",
+    "redline": "红线",
+}
+_CATEGORY_BLOCK_OF = {
+    "health": "basic", "tools": "basic", "engine_lifecycle": "basic",
+    "chat": "conv", "session": "conv", "dingtalk": "conv",
+    "plan": "orch", "a2a": "orch", "task_center": "orch",
+    "ddl": "data", "artifact": "data", "report": "data",
+    "error": "redline", "tool_audit": "redline",
+}
+_REDLINE_CATEGORIES = {"error", "tool_audit"}
+
 
 def _load_bodies(categories):
     """读取选中类别主体，exec 拼好的完整脚本以拿到 CASES 表。"""
@@ -364,19 +381,36 @@ def _materialize(suite_dir: Path, categories, overrides) -> int:
         + yaml.safe_dump(titles, allow_unicode=True, sort_keys=True),
         encoding="utf-8",
     )
-    # 类别聚合声明（报告的「按类别结果」）：选中类别的中文显示名，取
-    # _CATEGORY_LINES 的名段（单一事实源）。任务归组由报告侧按
-    # task_id 首个点前的前缀确定性推导，这里只封存名字。
-    category_names = {
-        category: _CATEGORY_LINES[category].split("：", 1)[0]
-        for category in categories
+    # 维度模型（评测平台设计 §4.2 的评分参数）：选中类别的显示名 +
+    # 大块 + 权重 + 阈值 + 红线标记。任务归组由报告侧按 task_id 首
+    # 个点前的前缀确定性推导；这里封存的是评分参数，消费套件可在
+    # task_categories.yaml 覆盖任何字段（套件侧优先）。
+    # 红线 = 安全语义探测（异常处理的鉴权/重放/OOM、工具安全审计的
+    # SSRF/敏感路径）：阈值 1.0、权重翻倍——红线没有「部分达标」。
+    used_blocks = {_CATEGORY_BLOCK_OF[category] for category in categories}
+    model = {
+        "blocks": {
+            key: _CATEGORY_BLOCKS[key]
+            for key in _CATEGORY_BLOCKS
+            if key in used_blocks
+        },
+        "categories": {
+            category: {
+                "name": _CATEGORY_LINES[category].split("：", 1)[0],
+                "block": _CATEGORY_BLOCK_OF[category],
+                "weight": 2.0 if category in _REDLINE_CATEGORIES else 1.0,
+                "threshold": 1.0 if category in _REDLINE_CATEGORIES else 0.9,
+                "redline": category in _REDLINE_CATEGORIES,
+            }
+            for category in categories
+        },
     }
     (suite_dir / "task_categories.cases.yaml").write_text(
-        "# 由 aeval/cases/generate.py 生成 —— 库属类别的聚合显示名。\n"
-        "# 任务归组 = task_id 首个点前的前缀（即类别键）；套件自有类别\n"
-        "# 的显示名放 task_categories.yaml（加载时合并，套件侧优先）。\n"
-        + yaml.safe_dump({"categories": category_names},
-                         allow_unicode=True, sort_keys=True),
+        "# 由 aeval/cases/generate.py 生成 —— 库属类别的维度模型\n"
+        "# （显示名/大块/权重/阈值/红线；评分参数，不是判定语义）。\n"
+        "# 套件自有类别或覆盖项放 task_categories.yaml（合并时套件侧\n"
+        "# 优先）。\n"
+        + yaml.safe_dump(model, allow_unicode=True, sort_keys=True),
         encoding="utf-8",
     )
     return total

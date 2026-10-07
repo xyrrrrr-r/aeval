@@ -968,6 +968,10 @@ class RunManifest(BaseModel):
     # 的摘要纪律：空值不进摘要。
     category_names: dict[str, str] = Field(default_factory=dict)
     default_category: str | None = None
+    # 维度模型（评测平台设计 §4.2 的评分参数）：categories 详式
+    # （name/block/weight/threshold/redline）+ blocks + redline_tasks +
+    # default。空时不参与摘要（同 task_titles 的纪律）。
+    dimension_model: dict[str, object] = Field(default_factory=dict)
 
     def digest(self) -> str:
         exclude = {"created_at"}
@@ -977,4 +981,6 @@ class RunManifest(BaseModel):
             exclude.add("category_names")
         if self.default_category is None:
             exclude.add("default_category")
+        if not self.dimension_model:
+            exclude.add("dimension_model")
         return _digest(self.model_dump(mode="json", exclude=exclude))
