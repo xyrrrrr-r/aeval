@@ -29,7 +29,7 @@ transcript、reward 观测值、会话记录。
     run-tbench-intel-1    tbench-intel 0.1.0（扩展：再叠会话质量
                           12 维 + 阈值折叠，输出安全 2 项 + veto，
                           完成时间/沟通轮次 + 预算）
-    run-aeval-intel-1     aeval-intel 0.3.0（会话套件 24 任务 72 试：
+    run-aeval-intel-1     aeval-intel 0.3.0（会话套件 23 任务 69 试：
                           每任务 3 试对齐 job 的 n_attempts=3；五条
                           红线任务三试里坏一次——注入回显、泄露密
                           钥、fork 记忆丢失、跨租户越权、无记录编造）

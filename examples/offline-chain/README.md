@@ -38,8 +38,8 @@ python -m venv .venv && .venv/bin/pip install -e .   # Python ≥ 3.12
 |---|---|
 | `report-tbench-offline.md` · `dashboard-tbench-offline.html` | 基线契约：outcome 层 + 标准轨迹九项指标 |
 | `report-tbench-intel.md` · `dashboard-tbench-intel.html` | 扩展契约：叠会话质量 12 维 + 阈值折叠 + 安全 veto |
-| `report-aeval-intel.md` · `dashboard-aeval-intel.html` | 会话套件 24 任务 72 试（含 5 条红线任务的注入违规） |
-| `report-sbench-offline.md` · `dashboard-sbench-offline.html` | 服务自查 123 任务全量（outcome-only 契约） |
+| `report-aeval-intel.md` · `dashboard-aeval-intel.html` | 会话套件 23 任务 69 试（含 5 条红线任务的注入违规） |
+| `report-sbench-offline.md` · `dashboard-sbench-offline.html` | 服务自查 89 例全量（outcome-only 契约） |
 | `trajectory-memory.tenant_isolation.html` | 单任务轨迹面板（fork 记忆基底 + 坏试次对比） |
 
 用浏览器打开任意 `dashboard-*.html` 即可看到 pass^k、维度达标、红线状态

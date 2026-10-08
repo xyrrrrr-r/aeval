@@ -5,7 +5,7 @@
 Deterministic, evidence-sealed agent trajectory evaluation built on Harbor.
 （experimental · v0.1.1 · Apache-2.0）
 
-[![判分链路](https://gitcode.com/open_kunpeng_agentic_infra/aeval/blob/main/docs/images/architecture.png)](https://gitcode.com/open_kunpeng_agentic_infra/aeval/blob/main/docs/diagrams/eval-chain.html)
+[![判分链路](docs/images/architecture.png)](https://gitcode.com/open_kunpeng_agentic_infra/aeval/blob/main/docs/diagrams/eval-chain.html)
 
 > 交互版架构图（含引导视图 / 明暗主题 / 导出）：[在 GitCode 打开架构图](https://gitcode.com/open_kunpeng_agentic_infra/aeval/blob/main/docs/diagrams/eval-chain.html)
 
@@ -85,11 +85,11 @@ demo 对四个 run 各产出一份（`out/dashboard-*.html`）：
 再叠会话质量 12 维、阈值折叠与安全 veto。同一批 tbench 任务的两个 run（表内后两行）
 就是一组天然对照。
 
-![intel 运行面板](https://gitcode.com/open_kunpeng_agentic_infra/aeval/blob/main/docs/images/dashboard-aeval-intel.png)
+[![intel 运行面板](docs/images/dashboard-aeval-intel.png)](https://gitcode.com/open_kunpeng_agentic_infra/aeval/blob/main/docs/images/dashboard-aeval-intel.png)
 
 *intel 运行面板（旗舰；demo 自动打开）*
 
-![offline 运行面板](https://gitcode.com/open_kunpeng_agentic_infra/aeval/blob/main/docs/images/dashboard-sbench-offline.png)
+[![offline 运行面板](docs/images/dashboard-sbench-offline.png)](https://gitcode.com/open_kunpeng_agentic_infra/aeval/blob/main/docs/images/dashboard-sbench-offline.png)
 
 *offline 运行面板（sbench 服务自查 89 例，outcome-only）*
 
@@ -113,14 +113,15 @@ aeval trajectory --store examples/offline-chain/out/aeval-intel-1/store.sqlite3 
     run-aeval-intel-1 --out /tmp/aeval-trajectory/
 ```
 
-可选：`--context-window N` 声明模型上下文窗口（只用于画占用率阈值线，证据本身不
-携带窗口）；`--suites-dir` 指向套件根以装载 turn 指标（缺省时逐轮打分退化为结构
-切面）。
+可选：`--context-window N` 调用方声明上下文窗口（tokens）——**优先于证据自携带
+窗口**（provider 声明经 request/context 事件密封进会话，面板自动换算占用率）；两者
+不一致或缺失时如实标注、不臆造。`--suites-dir` 指向套件根以装载 turn 指标（缺省时
+逐轮打分退化为结构切面）。
 
 demo 用一个代表性任务（fork 记忆基底 + 一个坏试次 + 工具调用）走真实 CLI 产出
 `out/trajectory-memory.tenant_isolation.html`。
 
-![轨迹面板](https://gitcode.com/open_kunpeng_agentic_infra/aeval/blob/main/docs/images/trajectory-panel.png)
+[![轨迹面板](docs/images/trajectory-panel.png)](https://gitcode.com/open_kunpeng_agentic_infra/aeval/blob/main/docs/images/trajectory-panel.png)
 
 *任务轨迹面板（五轨联动执行视图 + 详情检查器）*
 

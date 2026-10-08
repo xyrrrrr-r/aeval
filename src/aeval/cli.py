@@ -1099,8 +1099,9 @@ def trajectory_cmd(
     ] = None,
     context_window: Annotated[
         Optional[int],
-        typer.Option(help="声明的模型上下文窗口（tokens）——仅用于占用率"
-                          "阈值线；证据本身不携带窗口"),
+        typer.Option(help="调用方声明的模型上下文窗口（tokens）——优先于"
+                          "证据自携带窗口（provider 声明经 request/context 事件"
+                          "密封进会话）；仅用于占用率阈值线"),
     ] = None,
     suites_dir: Annotated[
         Path,
