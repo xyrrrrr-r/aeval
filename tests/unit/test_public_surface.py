@@ -104,19 +104,25 @@ def _git(*args: str) -> list[str] | None:
     return [p for p in done.stdout.decode("utf-8").split("\0") if p]
 
 
-def _tracked_files() -> list[str] | None:
-    """Repo-relative tracked paths that git does not ignore.
+def _project_files() -> list[str] | None:
+    """Repo-relative paths git considers part of the project.
 
-    ``git ls-files`` on its own also returns files that are tracked *and*
-    matched by ``.gitignore`` — force-added junk such as a stray browser
-    profile. Hatchling leaves those out of the sdist, so the guard must too;
-    otherwise it reports on third-party files that never ship.
+    That is every file git does not ignore — tracked *or* merely present on
+    disk. Untracked files matter here: hatchling ships them too (an untracked
+    image really does end up in the sdist), so a guard that only looked at
+    ``git ls-files`` would wave through jargon in a file that is about to be
+    published.
+
+    ``git ls-files`` on its own is also too broad in the other direction: it
+    returns files that are tracked *and* matched by ``.gitignore`` — force-added
+    junk such as a stray browser profile. Hatchling leaves those out of the
+    sdist, so the guard must too.
     """
-    tracked = _git("ls-files", "-z")
-    if tracked is None:
+    present = _git("ls-files", "-z", "-c", "-o", "--exclude-standard")
+    if present is None:
         return None
     ignored = _git("ls-files", "-z", "-c", "-i", "--exclude-standard")
-    keep = set(tracked)
+    keep = set(present)
     if ignored is not None:
         keep -= set(ignored)
     return sorted(keep)
@@ -145,7 +151,7 @@ def _walked_files() -> list[str]:
 def surface_files() -> list[Path]:
     """Files on the published surface: shipped, and readable text."""
     excludes = _sdist_excludes()
-    rels = _tracked_files()
+    rels = _project_files()
     if rels is None:
         rels = _walked_files()
     return [
