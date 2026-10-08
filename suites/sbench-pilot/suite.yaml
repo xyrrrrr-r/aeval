@@ -1,5 +1,8 @@
 schema_version: 2
 id: sbench-pilot
+# 0.4.1（2026-10-08）：显示名修正——health.sam_memory_diagnosis 的
+# 标题「SAM 记忆诊断」改为「记忆系统连通性诊断」（任务 id 不变，
+# 任务集仍为 12 类 93 例）。
 # 0.4.0（2026-10-08）：移出 error 类 HMAC 三用例（hmac_missing/
 # hmac_wrong/hmac_replay——HMAC 缺失/错误/重放），保留 401 鉴权、
 # 超大 body 防 OOM、畸形 JSON、未知端点、不允许的方法；任务集
@@ -25,7 +28,7 @@ id: sbench-pilot
 # id 即源方案的 <category>.<case> 点分命名）。引擎 API 形态是按源
 # 方案描述约定的合理形态（见库 README），对齐真实引擎时改 checker
 # 重新注入即可。
-version: 0.4.0
+version: 0.4.1
 extends: _base/harbor.base.yaml
 harbor:
   job: jobs/sbench-smoke.yaml

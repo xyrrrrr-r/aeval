@@ -219,7 +219,7 @@ tests/check_{category}.py 直接探测引擎端点并发布 reward——
 
 # 源方案 §2 类别表里每类的「测什么」行（供 instruction 引用）。
 _CATEGORY_LINES = {
-    "health": "基础连通：服务存活、引擎就绪、SAM 记忆诊断",
+    "health": "基础连通：服务存活、引擎就绪、记忆系统连通性诊断",
     "chat": "核心对话：流式/非流式、空消息、超长输入、特殊字符、SSE 事件格式",
     "session": "会话管理：自动创建、多轮复用、并发隔离、跨租户隔离、10 轮上下文保持",
     "tools": "工具系统：工具注册列表、get_current_time、web_fetch、read_skill、sub_agent、并发安全",

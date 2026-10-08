@@ -46,7 +46,7 @@ error.no_auth: 无鉴权
 error.oversized_body: 超大 body
 error.unknown_endpoint: 未知端点
 health.engine_ready: 引擎就绪
-health.sam_memory_diagnosis: SAM 记忆诊断
+health.sam_memory_diagnosis: 记忆系统连通性诊断
 health.service_alive: 服务存活
 report.auto_generate: 自动生成
 report.download: 下载

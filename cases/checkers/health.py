@@ -1,4 +1,6 @@
-# health 类 3 用例：服务存活、引擎就绪、SAM 记忆诊断。
+# health 类 3 用例：服务存活、引擎就绪、记忆系统连通性诊断。
+# （health.sam_memory_diagnosis 的任务 id 保持不变——id 是稳定锚点，
+# 0.4.1 只改显示名：SAM 记忆诊断 → 记忆系统连通性诊断。）
 
 
 def _service_alive():
@@ -41,6 +43,6 @@ CASES = {
     "health.engine_ready": (
         "引擎就绪", "GET /health/ready 返回 200 且 ready 为真", _engine_ready),
     "health.sam_memory_diagnosis": (
-        "SAM 记忆诊断", "GET /health/memory 返回 200 且携带诊断状态",
+        "记忆系统连通性诊断", "GET /health/memory 返回 200 且携带诊断状态",
         _sam_memory_diagnosis),
 }
