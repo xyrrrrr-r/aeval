@@ -1,4 +1,4 @@
-"""Plugin broker lifecycle tests (P0-4/5): opt-in controlled routing.
+"""Plugin broker lifecycle tests: opt-in controlled routing.
 
 Positive paths run the REAL compiled TS broker bin. The pinned-port
 requirement, the config-first digest chain, and teardown on every
@@ -117,6 +117,25 @@ def test_parse_spec_carries_the_upstream_protocol(tmp_path, monkeypatch):
     assert spec.upstream["protocol"] == "responses"
 
 
+def test_parse_spec_carries_the_context_window(tmp_path, monkeypatch):
+    """A declared window reaches BrokerSpec verbatim; absent stays absent.
+
+    A spec written before the key existed must not grow a default the operator
+    never wrote — the window is descriptive metadata, not a request bound.
+    """
+    spec_path = _spec_json(tmp_path, port=4719)
+    data = json.loads(spec_path.read_text(encoding="utf-8"))
+    assert "contextWindow" not in data["upstream"]
+    monkeypatch.setenv(BROKER_SPEC_ENV, str(spec_path))
+    monkeypatch.setenv(KEY_ENV, KEY)
+    assert "contextWindow" not in parse_broker_spec().upstream
+
+    data["upstream"]["contextWindow"] = 65536
+    spec_path.write_text(json.dumps(data), encoding="utf-8")
+    monkeypatch.setenv(BROKER_SPEC_ENV, str(spec_path))
+    assert parse_broker_spec().upstream["contextWindow"] == 65536
+
+
 @pytest.mark.parametrize(
     "mutate",
     [
@@ -128,6 +147,9 @@ def test_parse_spec_carries_the_upstream_protocol(tmp_path, monkeypatch):
         lambda d: d.update(maxOutputTokens=0),               # bad budget
         lambda d: d["upstream"].pop("apiKeyEnv"),            # no credential name
         lambda d: d["upstream"].update(protocol="gopher"),   # unknown protocol
+        lambda d: d["upstream"].update(contextWindow=0),     # non-positive window
+        lambda d: d["upstream"].update(contextWindow="65536"),  # window not an int
+        lambda d: d["upstream"].update(contextWindow=True),  # bool is not a window
         lambda d: d.update(upstream=[]),                     # not an object
         lambda d: d.update(unknownKey=1),                    # unknown key
         lambda d: d.update(identity="x"),                    # identity not object
@@ -192,7 +214,7 @@ async def test_start_composes_config_first_and_pins_digest(
         assert state.broker is broker
         assert state.control_config is config
         assert config["gatewayUrl"] == broker.url
-        # D47: the served auxiliary policy reaches BOTH configs the sandbox
+        # The served auxiliary policy reaches BOTH configs the sandbox
         # compares — the control config and the broker lease config.
         assert config["auxiliaryPolicy"] == {"compaction": "allow"}
         # broker config carries the control config digest, verbatim
@@ -412,7 +434,7 @@ async def test_plugin_stops_broker_on_cancellation(broker_owned_job):
 def test_broker_that_died_is_reported_with_its_stderr(tmp_path):
     """A broker that exits on its own closes the lease, and every later
     model call fails with AEVAL_LEASE_CLOSED — the trial log must carry
-    the reason rather than leaving it unexplained (real-chain finding)."""
+    the reason rather than leaving it unexplained (a live end-to-end finding)."""
     from aeval.hooks.broker_lifecycle import note_broker_unexpected_exit
 
     class _Process:
@@ -447,7 +469,7 @@ def test_stop_trial_broker_keeps_the_brokers_own_stop_attribution():
     """A lease that closes for an unexplained reason must be attributable.
 
     The broker writes its lease-stop lines to stderr; the trial record is
-    the only place they survive (real-chain finding: without them a closed
+    the only place they survive (found in a live end-to-end run: without them a closed
     lease could not be blamed on any path)."""
     from aeval.hooks.broker_lifecycle import stop_trial_broker
     from aeval.hooks.context import TrialState
@@ -503,7 +525,7 @@ def test_audit_records_broker_diagnostics(tmp_path):
     assert summary["trial_id"] == "t1"
 
 
-# --- P1-4: the agent declares where its state and session live -----------------
+# --- the agent declares where its state and session live -----------------
 
 def test_agent_declared_paths_replace_the_dsh_convention(tmp_path):
     """Every agent used to get a DSH home it knows nothing about."""
@@ -544,7 +566,7 @@ def test_agent_declared_paths_replace_the_dsh_convention(tmp_path):
 async def test_a_facade_flavor_agent_gets_the_neutral_config(
     demo_suite, runtime_lock, tmp_path, monkeypatch
 ):
-    """G7: the deepagent arm's control config carries none of the DSH plugin's
+    """The deepagent arm's control config carries none of the DSH plugin's
     fields — the flavor's config half is declared by the flavor, and the
     generic facade declares nothing beyond the neutral identity."""
     from types import SimpleNamespace

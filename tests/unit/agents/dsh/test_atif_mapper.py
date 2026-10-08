@@ -1,4 +1,4 @@
-"""ATIF mapper unit tests (plan §7 row 7): map the official log, invent nothing.
+"""ATIF mapper unit tests: map the official log, invent nothing.
 
 The mapper speaks the pinned DSH 0.1.7-alpha.1 Session V4 vocabulary, so every
 fixture here is built by ``dsh_log`` (the same envelope the real
@@ -451,6 +451,50 @@ def test_all_request_headers_are_observed_in_order():
     assert trajectory.agent.model_name == "some-other-model"
 
 
+def test_advertised_context_window_is_lifted_into_the_agent_block():
+    log = happy_log()
+    log.request_context(context_window=65536)
+    trajectory = convert_dsh_read_to_atif(_response(log))
+    # The sealed transcript self-carries the window in the agent block, so the
+    # panel can compute occupancy without a caller-declared flag.
+    assert trajectory.agent.extra == {"contextWindow": 65536}
+    assert _dsh(trajectory)["contextWindow"] == 65536
+    assert [c["contextWindow"] for c in _dsh(trajectory)["observedContexts"]] == [65536]
+
+
+def test_absent_context_window_leaves_the_agent_block_unstated():
+    trajectory = convert_dsh_read_to_atif(_response(happy_log()))
+    # No request/context advertising a window: never guess one.
+    assert trajectory.agent.extra is None
+    assert _dsh(trajectory)["contextWindow"] is None
+
+
+def test_last_advertised_context_window_wins():
+    log = happy_log()
+    log.request_context(context_window=32768)
+    log.request_context(context_window=131072)
+    trajectory = convert_dsh_read_to_atif(_response(log))
+    assert trajectory.agent.extra == {"contextWindow": 131072}
+
+
+def test_request_context_without_a_window_is_observed_but_unstated():
+    log = happy_log()
+    log.request_context()  # provider/model only, capacity not advertised
+    trajectory = convert_dsh_read_to_atif(_response(log))
+    assert trajectory.agent.extra is None
+    assert _dsh(trajectory)["contextWindow"] is None
+    assert len(_dsh(trajectory)["observedContexts"]) == 1
+
+
+@pytest.mark.parametrize("bad", [0, -1, 2.0, "65536", True])
+def test_invalid_context_window_fails_closed(bad):
+    log = happy_log()
+    log.request_context()
+    log.events[-1]["data"]["contextWindow"] = bad
+    with pytest.raises(DshAtifConversionError, match="contextWindow must be a positive"):
+        convert_dsh_read_to_atif(_response(log))
+
+
 def test_empty_session_yields_one_synthetic_step():
     log = SessionLog()
     log.request_header()
@@ -585,7 +629,7 @@ def test_issues_dataclass_reports_any_and_dict_forms():
     assert not issues.to_dict()["orphanToolResults"]
 
 
-# --- D44: narrowed usage exactness + authoritative pre-dispatch rejections ---
+# --- narrowed usage exactness + authoritative pre-dispatch rejections ---
 
 import json as _json  # noqa: E402
 
@@ -679,7 +723,7 @@ def test_count_pre_dispatch_auxiliary_rejections_reads_transport_log(tmp_path):
 
 
 # ---------------------------------------------------------------------------
-# D47: allowed auxiliary calls are dispatched, ledgered, and accounted
+# Allowed auxiliary calls are dispatched, ledgered, and accounted
 # ---------------------------------------------------------------------------
 
 def _compaction_cycle(seq):

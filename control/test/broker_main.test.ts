@@ -14,7 +14,7 @@ import { createUpstreamAdapter } from '../src/upstream.js';
 import { parseBrokerMainConfig } from '../src/broker_main.js';
 
 /**
- * P0-3 offline acceptance: the broker host entry (dist/broker_main.js), the
+ * Offline acceptance: the broker host entry (dist/broker_main.js), the
  * production chat-completions upstream adapter, and the provider token-count
  * bound, all exercised against real loopback HTTP only. No external provider
  * is ever contacted: the fake upstream is the loopback server the production
@@ -232,6 +232,20 @@ test('the upstream protocol is optional, closed-vocabulary, and round-trips the 
   assert.equal(responses.upstream.protocol, 'responses');
   assert.throws(() => parseBrokerMainConfig({ ...base, upstream: { ...upstream, protocol: 'gopher' } }),
     /upstream\.protocol/);
+});
+
+test('the context window is optional, positive, and round-trips the config', () => {
+  const base = binConfig('http://127.0.0.1:9', '/unused');
+  const upstream = base.upstream as Record<string, unknown>;
+  // A pre-window spec (no contextWindow key) parses unchanged: no default the
+  // operator never wrote, so sealed evidence keeps recomputing byte-identically.
+  assert.equal(parseBrokerMainConfig(base).upstream.contextWindow, undefined);
+  const declared = parseBrokerMainConfig({ ...base, upstream: { ...upstream, contextWindow: 65536 } });
+  assert.equal(declared.upstream.contextWindow, 65536);
+  for (const bad of [0, -1, 2.5, 'x', true]) {
+    assert.throws(() => parseBrokerMainConfig({ ...base, upstream: { ...upstream, contextWindow: bad } }),
+      /upstream\.contextWindow/);
+  }
 });
 
 test('the bin serves its lease, reports readiness once, and cleans the token on SIGTERM', { timeout: 15000 }, async (t) => {
@@ -531,6 +545,32 @@ test('resolveModel is an offline identity echo and providerInfo matches it', asy
   assert.deepEqual(adapter.providerInfo(PROVIDER), { id: PROVIDER, name: PROVIDER });
   const reasoning = createUpstreamAdapter({ provider: PROVIDER, baseUrl: 'http://127.0.0.1:9', apiKeyEnv: KEY_ENV, model: MODEL, reasoningEfforts: ['high'] });
   assert.deepEqual((await reasoning.resolveModel(PROVIDER, MODEL)).reasoning, { efforts: [{ id: 'high', name: 'high' }] });
+});
+
+test('resolveModel echoes a declared contextWindow as context, both protocols', async (t) => {
+  process.env[KEY_ENV] = KEY;
+  t.after(() => { delete process.env[KEY_ENV]; });
+  // chat_completions default carries the window in the resolveModel echo...
+  const chat = createUpstreamAdapter({ provider: PROVIDER, baseUrl: 'http://127.0.0.1:9', apiKeyEnv: KEY_ENV, model: MODEL, contextWindow: 65536 });
+  assert.deepEqual(await chat.resolveModel(PROVIDER, MODEL), { provider: PROVIDER, id: MODEL, name: MODEL, context: { contextWindow: 65536 } });
+  // ...and so does the responses arm, with reasoning and the window side by side.
+  const responses = createUpstreamAdapter({ provider: PROVIDER, baseUrl: 'http://127.0.0.1:9', apiKeyEnv: KEY_ENV, model: MODEL, protocol: 'responses', reasoningEfforts: ['high'], contextWindow: 131072 });
+  assert.deepEqual(await responses.resolveModel(PROVIDER, MODEL), {
+    provider: PROVIDER, id: MODEL, name: MODEL,
+    reasoning: { efforts: [{ id: 'high', name: 'high' }] },
+    context: { contextWindow: 131072 },
+  });
+  // An undeclared route stays byte-identical: no context key is invented.
+  const plain = createUpstreamAdapter({ provider: PROVIDER, baseUrl: 'http://127.0.0.1:9', apiKeyEnv: KEY_ENV, model: MODEL });
+  assert.equal('context' in await plain.resolveModel(PROVIDER, MODEL), false);
+});
+
+test('createUpstreamAdapter refuses a non-positive contextWindow', () => {
+  process.env[KEY_ENV] = KEY;
+  for (const bad of [0, -1, 2.5, 'x']) {
+    assert.throws(() => createUpstreamAdapter({ provider: PROVIDER, baseUrl: 'http://127.0.0.1:9', apiKeyEnv: KEY_ENV, model: MODEL, contextWindow: bad as never }),
+      /contextWindow must be a positive safe integer/);
+  }
 });
 
 test('unrepresentable content blocks fail before any upstream dispatch', async (t) => {

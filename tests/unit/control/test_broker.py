@@ -1,4 +1,4 @@
-"""Broker lifecycle tests (P0-4/P0-5 Python owner side).
+"""Broker lifecycle tests (Python owner side).
 
 The positive path runs the REAL compiled TS broker bin
 (``dsh-eval-control/dist/broker_main.js``) against a dead loopback
@@ -134,6 +134,74 @@ def test_write_broker_config_carries_the_upstream_protocol(tmp_path):
             token_out=tmp_path / "token",
             upstream={"provider": "p", "baseUrl": "https://x", "apiKeyEnv": "K", "model": "m", "protocol": "gopher"},
         )
+
+
+def test_write_broker_config_carries_the_context_window(tmp_path):
+    """The declared context capacity reaches the bin's config verbatim.
+
+    Absent window stays absent — a spec written before the key existed must
+    produce byte-identical config (sealed evidence keeps recomputing). A
+    non-positive/non-integer value is refused here, not at broker startup
+    inside a running trial.
+    """
+    path = write_broker_config(
+        tmp_path / "broker-window.json",
+        run=RUN,
+        trial_id="trial-1",
+        session_id="session-1",
+        config_digest="a" * 64,
+        identity={"provider": "p", "model": "m"},
+        limits={"maxSteps": 5},
+        max_output_tokens=64,
+        listen_host="127.0.0.1",
+        token_out=tmp_path / "token",
+        upstream={
+            "provider": "p",
+            "baseUrl": "https://api.deepseek.com",
+            "apiKeyEnv": "K",
+            "model": "m",
+            "contextWindow": 65536,
+        },
+    )
+    data = json.loads(path.read_text(encoding="utf-8"))
+    assert data["upstream"]["contextWindow"] == 65536
+
+    plain = write_broker_config(
+        tmp_path / "broker-nowindow.json",
+        run=RUN,
+        trial_id="trial-1",
+        session_id="session-1",
+        config_digest="a" * 64,
+        identity={"provider": "p", "model": "m"},
+        limits={"maxSteps": 5},
+        max_output_tokens=64,
+        listen_host="127.0.0.1",
+        token_out=tmp_path / "token",
+        upstream={"provider": "p", "baseUrl": "https://x", "apiKeyEnv": "K", "model": "m"},
+    )
+    assert "contextWindow" not in json.loads(plain.read_text(encoding="utf-8"))["upstream"]
+
+    for bad in (0, -1, 2.5, "65536", True):
+        with pytest.raises(BrokerConfigError):
+            write_broker_config(
+                tmp_path / "broker-badwindow.json",
+                run=RUN,
+                trial_id="trial-1",
+                session_id="session-1",
+                config_digest="a" * 64,
+                identity={"provider": "p", "model": "m"},
+                limits={"maxSteps": 5},
+                max_output_tokens=64,
+                listen_host="127.0.0.1",
+                token_out=tmp_path / "token",
+                upstream={
+                    "provider": "p",
+                    "baseUrl": "https://x",
+                    "apiKeyEnv": "K",
+                    "model": "m",
+                    "contextWindow": bad,
+                },
+            )
 
 
 @pytest.mark.parametrize(
@@ -334,7 +402,7 @@ def test_find_node_rejects_missing_runtime(monkeypatch):
 
 
 def test_broker_config_auxiliary_policy_round_trip(tmp_path):
-    """D47: the strict broker config carries the per-purpose policy exactly
+    """The strict broker config carries the per-purpose policy exactly
     as parseBrokerMainConfig accepts it, and refuses anything else."""
     base = dict(
         run={"run_id": "r", "job_config_hash": "b", "config_file_sha256": "c",

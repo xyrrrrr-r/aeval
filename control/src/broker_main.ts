@@ -49,6 +49,12 @@ export interface BrokerMainConfig {
     readonly protocol?: UpstreamProtocol;
     readonly timeoutMs?: number;
     readonly reasoningEfforts?: readonly string[];
+    /**
+     * Provider-owned context capacity (combined request + response tokens) the
+     * owner declares for the pinned route; echoed by ``resolveModel`` so the
+     * harness seals it into the request/context event. Absent = unadvertised.
+     */
+    readonly contextWindow?: number;
   };
   readonly tokenCount?: { readonly endpoint?: string; readonly margin?: number; readonly timeoutMs?: number };
 }
@@ -153,7 +159,7 @@ export function parseBrokerMainConfig(raw: unknown): BrokerMainConfig {
     ...(limitsRaw['maxSteps'] !== undefined ? { maxSteps: positiveInt(limitsRaw['maxSteps'], 'limits.maxSteps') } : {}),
     ...(limitsRaw['maxTokens'] !== undefined ? { maxTokens: positiveInt(limitsRaw['maxTokens'], 'limits.maxTokens') } : {}),
   });
-  const upstreamRaw = record(input['upstream'], 'upstream', ['provider', 'baseUrl', 'apiKeyEnv', 'model', 'protocol', 'timeoutMs', 'reasoningEfforts']);
+  const upstreamRaw = record(input['upstream'], 'upstream', ['provider', 'baseUrl', 'apiKeyEnv', 'model', 'protocol', 'timeoutMs', 'reasoningEfforts', 'contextWindow']);
   // Optional and closed-vocabulary: absent = chat_completions, anything else
   // is a config error, never a guess.
   const protocol: UpstreamProtocol | undefined = upstreamRaw['protocol'] === undefined
@@ -170,6 +176,7 @@ export function parseBrokerMainConfig(raw: unknown): BrokerMainConfig {
     ...(protocol !== undefined ? { protocol } : {}),
     ...(upstreamRaw['timeoutMs'] !== undefined ? { timeoutMs: positiveInt(upstreamRaw['timeoutMs'], 'upstream.timeoutMs') } : {}),
     ...(reasoningEfforts !== undefined ? { reasoningEfforts } : {}),
+    ...(upstreamRaw['contextWindow'] !== undefined ? { contextWindow: positiveInt(upstreamRaw['contextWindow'], 'upstream.contextWindow') } : {}),
   });
   // The lease pins identity.model on every dispatch and the meter counts that
   // same wire model, so the upstream route must be the pinned identity itself.
@@ -188,7 +195,7 @@ export function parseBrokerMainConfig(raw: unknown): BrokerMainConfig {
       ...(raw['timeoutMs'] !== undefined ? { timeoutMs: positiveInt(raw['timeoutMs'], 'tokenCount.timeoutMs') } : {}),
     });
   }
-  // D47: per-purpose decisions for advisory model calls. Only the two known
+  // Per-purpose decisions for advisory model calls. Only the two known
   // purposes may be configured, and only with an explicit decision; the
   // resolved policy (against refuseAuxiliaryCalls, default refuse) is what
   // the lease serves and /info reports.

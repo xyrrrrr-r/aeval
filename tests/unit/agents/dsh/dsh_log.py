@@ -105,6 +105,23 @@ class SessionLog:
             data["startsSeries"] = True
         return self.raw("request/header", data)
 
+    def request_context(
+        self, *, provider: str = PROVIDER, model: str = MODEL,
+        context_window: int | None = None, system_prompt_update: str | None = None,
+    ) -> dict[str, Any]:
+        """Registration-bound metadata for one resolved model route.
+
+        Mirrors the official ``RequestContext``: ``contextWindow`` is the
+        provider-owned capacity the owner advertised, sealed here so the mapper
+        can lift it into the ATIF agent block.
+        """
+        data: dict[str, Any] = {"provider": provider, "model": model}
+        if context_window is not None:
+            data["contextWindow"] = context_window
+        if system_prompt_update is not None:
+            data["systemPromptUpdate"] = system_prompt_update
+        return self.raw("request/context", data)
+
     def turn_start(self, turn: int) -> dict[str, Any]:
         return self.raw("turn/start", {"turn": turn})
 

@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
+
 from aeval.contracts import TrialRecord
 from aeval.metrics.dashboard import render_dashboard_html
 from aeval.metrics.report import aggregate_run, render_static_report
@@ -122,55 +124,144 @@ def _panel(window: int | None = None, heading: str = "试次 1/1 · t1"):
     )
 
 
-def test_panel_sections_and_facts():
+def test_panel_renders_five_tracks_insights_and_inspector():
     html = _panel()
-    for section in (
-        "执行图谱", "工具调用", "Token 脉冲", "上下文压力",
-        "工具失败与重试 · 时间消耗", "工具结果矩阵", "耗时分布（按工具）",
-    ):
-        assert f"<h3>{section}</h3>" in html
-    # 会话信息栏事实。
+    assert "五轨联动执行视图" in html
+    for track in ("执行图谱", "工具调用", "Token 脉冲", "输入 Token", "上下文压力"):
+        assert track in html
+    assert 'class="trajectory-timeline"' in html
+    assert 'id="trajectory-inspector"' in html
+    assert 'id="trajectory-data"' in html
+    # step 4 同时有工具、Token 与输入上下文，多条轨道共用同一交互事件 ID。
+    assert html.count('data-event="trial-0-step-4"') >= 4
+    assert "工具无观测信号" in html
+    assert "最长含工具步骤" in html
+    assert "峰值上下文" in html
     assert "失败(fail)" in html
-    assert "总时长 <b>40.0s</b>" in html
-    assert "总 Token <b>3,730</b>" in html
-    assert "峰值上下文 <b>1,400</b>" in html
-    assert "<b>1</b> live + <b>1</b> 记忆基底" in html
-    # 执行图谱：记忆基底带 + 失败红点（step5 无观测）。
     assert "记忆基底" in html
-    assert 'class="node failed"' in html
-    assert 'class="node copied"' in html
-    # Token 脉冲三段图例 + 缓存段。
-    assert "缓存输入" in html and "#93c5fd" in html
-    # 工具矩阵行：bash 2 次调用、1 无观测、成功率 50%。
-    assert "<td>bash</td><td>2</td>" in html
-    assert "<td>50%</td>" in html
-    # 摘要行。
-    assert "1 次无观测（50%）" in html
-    assert "最长调用 bash 10.0s" in html
-    assert "工具步骤耗时占比 40%" in html
+    assert '<section class="trial"' not in html
 
 
-def test_panel_context_window_honesty():
-    """窗口只能来自调用方声明；未声明时如实说明纵轴口径。"""
+def test_panel_uses_global_step_axis_for_invalid_time_data():
+    stats = sample_stats("t1", "alpha.one", verdict="fail")
+    broken = replace(stats.steps[0], seconds_from_start=None)
+    html = render_trajectory_html(
+        title="t", meta_lines=[],
+        trials=[TrialPanel("试次 1/1 · t1", "m", replace(stats, steps=(broken, *stats.steps[1:])))],
+    )
+    assert '"mode":"step"' in html
+    assert "已统一按步骤序对齐" in html
+
+
+def test_panel_context_pressure_declares_window_boundary():
     declared = _panel(window=2000)
-    assert "70% 阈值" in declared and "90% 阈值" in declared
-    assert "声明窗口 2,000（占用率 70%）" in declared
+    assert "相对上下文窗口" in declared
+    assert "70%" in declared and "90%" in declared
     plain = _panel()
-    assert "70% 阈值" not in plain
-    assert "证据未声明窗口——纵轴为绝对输入 Token" in plain
+    # No window: the pressure track states the gap honestly and draws no
+    # threshold lines; the input-token track still labels its absolute values.
+    assert "无窗口声明" in plain
+    assert "相对上下文窗口" not in plain
+    assert "绝对值" in plain
 
 
-def test_panel_selfcontained_deterministic_escaped():
+def test_panel_falls_back_to_the_evidence_carried_window():
+    # No caller-declared flag, but the sealed transcript carries a window: the
+    # panel uses it and labels the source as evidence-carried, not declared.
+    html = render_trajectory_html(
+        title="t", meta_lines=[],
+        trials=[
+            TrialPanel(
+                heading="试次 1/1 · t1", meta="m",
+                stats=sample_stats("t1", "alpha.one", verdict="fail"),
+                context_window=2000,
+            )
+        ],
+    )
+    assert '"context_window":2000' in html
+    assert '"context_window_source":"evidence"' in html
+    assert "相对上下文窗口（证据携带）" in html
+    assert "证据携带窗口" in html
+
+
+def test_caller_declared_window_wins_over_evidence():
+    html = render_trajectory_html(
+        title="t", meta_lines=[],
+        trials=[
+            TrialPanel(
+                heading="试次 1/1 · t1", meta="m",
+                stats=sample_stats("t1", "alpha.one", verdict="fail"),
+                context_window=2000,
+            )
+        ],
+        context_window=4096,
+    )
+    assert '"context_window":4096' in html
+    assert '"context_window_source":"caller"' in html
+    assert "相对上下文窗口（调用方声明）" in html
+
+
+def test_disagreeing_evidence_windows_are_not_collapsed():
+    # Two trials carrying different windows: no honest shared axis exists, so
+    # the panel states no window rather than picking one.
+    stats = sample_stats("t1", "alpha.one", verdict="fail")
+    html = render_trajectory_html(
+        title="t", meta_lines=[],
+        trials=[
+            TrialPanel("试次 1/2 · t1", "m", stats, context_window=2000),
+            TrialPanel("试次 2/2 · t2", "m", stats, context_window=4096),
+        ],
+    )
+    assert '"context_window":null' in html
+    assert '"context_window_source":"none"' in html
+    assert "无窗口声明" in html
+
+
+def test_panel_selfcontained_deterministic_and_escaped():
     html = _panel()
-    assert "<script" not in html and "http://" not in html
+    assert '<script src=' not in html and "http://" not in html
+    assert "fetch(" not in html
     assert html == _panel()
     escaped = _panel(heading="<img src=x onerror=alert(1)>")
     assert "<img src=x" not in escaped
     assert "&lt;img src=x onerror=alert(1)&gt;" in escaped
+    assert "\\u003cimg" in escaped
 
 
-def test_panel_toolless_trial_notes_unavailable():
-    """无工具调用的试次：相关版块如实标注不可用，不编造。"""
+def test_panel_fits_width_without_horizontal_panning():
+    """面板按容器宽度铺满，不靠固定 min-width 逼出横向滚动。"""
+    html = _panel()
+    # The old 900px floor is what forced the timeline to pan; it must stay gone.
+    assert "min-width:900px" not in html
+    # The SVG fills its column and the scroll pane suppresses the x axis.
+    assert ".trajectory-timeline{width:100%" in html
+    assert "overflow-x:hidden" in html
+    # A responsive viewport + a wide centered page container, not a narrow column.
+    assert 'name="viewport"' in html and "width=device-width" in html
+    assert 'class="panel-page"' in html
+
+
+def test_panel_buckets_large_trajectories_without_losing_events():
+    stats = sample_stats("t1", "alpha.one", verdict="fail")
+    template = stats.steps[0]
+    steps = tuple(
+        replace(template, step_id=index + 1, seconds_from_start=float(index))
+        for index in range(2001)
+    )
+    html = render_trajectory_html(
+        title="t", meta_lines=[],
+        trials=[TrialPanel("试次 1/1 · t1", "m", replace(stats, steps=steps, total_steps=len(steps)))],
+    )
+    assert '"dense":true' in html
+    assert "data-bucket=" in html
+    assert '"context_peak":' in html
+    assert '"tool_calls":' in html
+    assert '"event_ids":[' in html
+    assert '"step_id":2001' in html
+
+
+def test_panel_toolless_trial_keeps_honest_summary_data():
+    """无工具调用的试次保留在时间轴与详情数据中，不伪造工具统计。"""
     from harbor.models.trajectories import Agent, FinalMetrics, Trajectory
 
     from aeval.contracts import CanonicalTranscript
@@ -180,22 +271,17 @@ def test_panel_toolless_trial_notes_unavailable():
 
     transcript = Trajectory(
         agent=Agent(name="dsh", version="test"),
-        # 仅一条 live 用户消息、无工具；step_id 须从 1 连续。
         steps=[sample_steps()[2].model_copy(update={"step_id": 1})],
         final_metrics=FinalMetrics(
             total_prompt_tokens=10, total_completion_tokens=2,
             total_cached_tokens=0,
         ),
     )
-    ct = CanonicalTranscript(
-        atif=transcript, stop_reason="agent_claimed_done"
-    )
-    stats = collect_stats(
-        sample_record(), build_evidence(ct, "agent_claimed_done")
-    )
+    ct = CanonicalTranscript(atif=transcript, stop_reason="agent_claimed_done")
+    stats = collect_stats(sample_record(), build_evidence(ct, "agent_claimed_done"))
     html = render_trajectory_html(
-        title="t", meta_lines=[],
-        trials=[TrialPanel("试次 1/1 · t1", "m", stats)],
+        title="t", meta_lines=[], trials=[TrialPanel("试次 1/1 · t1", "m", stats)],
     )
-    assert "不可用：该试次无工具调用" in html
-    assert "工具结果矩阵" in html
+    assert '"tools":[]' in html
+    assert '"tool_calls_total":0' in html
+    assert "该试次无工具调用" in html

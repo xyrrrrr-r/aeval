@@ -1,4 +1,4 @@
-"""Per-trial model broker lifecycle inside the Harbor plugin (P0-4/5).
+"""Per-trial model broker lifecycle inside the Harbor plugin.
 
 The operator prepares ONE broker spec (path in ``AEVAL_BROKER_JSON``)
 describing the pinned upstream identity, limits, and a PINNED loopback
@@ -13,8 +13,8 @@ listen port. The plugin then, per trial:
 
 Fail-closed: a broker that cannot start marks the trial infra_invalid
 BEFORE the model phase — the trial must not run with uncontrolled model
-routing (P0-4: 插件激活失败必须阻止未受控运行). A broker that shuts
-down uncleanly is recorded as an infra issue on the trial.
+routing (a failure to activate the plugin must prevent an uncontrolled run).
+A broker that shuts down uncleanly is recorded as an infra issue on the trial.
 
 The pinned port is what makes the identity chain non-circular: an
 ephemeral port would only be known after listening, but the control
@@ -95,7 +95,7 @@ class BrokerSpec:
     token_count: Mapping[str, Any] | None = None
     timeout_ms: int | None = None
     token_ttl_ms: int | None = None
-    # D47: per-purpose decisions for advisory model calls ('compaction',
+    # Per-purpose decisions for advisory model calls ('compaction',
     # 'session-title') -> 'refuse' | 'allow'. Missing purposes keep the
     # broker's blanket default (refuse everything before dispatch).
     auxiliary_policy: Mapping[str, str] | None = None
@@ -171,6 +171,17 @@ def parse_broker_spec(path_env: str | None = None) -> BrokerSpec | None:
         raise BrokerSpecError(
             "broker spec upstream.protocol must be 'chat_completions' or 'responses'"
         )
+    # Optional provider-owned context capacity for the pinned route. The broker
+    # echoes it from resolveModel so the harness seals it into the request/context
+    # event and the ATIF agent block self-carries the window (the trajectory panel
+    # then computes occupancy without a caller-declared flag). Validate here so a
+    # broken spec fails at parse time, not at broker startup inside a trial.
+    if "contextWindow" in upstream:
+        window = upstream["contextWindow"]
+        if not isinstance(window, int) or isinstance(window, bool) or window < 1:
+            raise BrokerSpecError(
+                "broker spec upstream.contextWindow must be a positive integer"
+            )
     max_output = data.get("maxOutputTokens")
     if not isinstance(max_output, int) or isinstance(max_output, bool) or max_output < 1:
         raise BrokerSpecError("broker spec maxOutputTokens must be a positive integer")
@@ -248,7 +259,7 @@ def trial_control_paths(
 
 
 def _config_flavor_for(agent: Any, lock: Any) -> ControlFlavor | None:
-    """The control flavor that shapes this trial's config (G7).
+    """The control flavor that shapes this trial's config.
 
     The live agent's declared stack when there is one; otherwise the adapter
     the runtime lock recorded, resolved through its declaration (the same
@@ -319,7 +330,7 @@ def start_trial_broker(
         flavor.config_fields(
             paths=paths,
             # the served auxiliary policy must equal what /info reports, or
-            # the sandbox adapter fails the lease identity check (D47)
+            # the sandbox adapter fails the lease identity check
             auxiliary_policy=dict(spec.auxiliary_policy) if spec.auxiliary_policy else None,
         )
         if flavor is not None and flavor.config_fields is not None else None
@@ -383,7 +394,7 @@ def note_broker_unexpected_exit(state: TrialState) -> str | None:
     A broker that exits without the owner stopping it closes its lease,
     and every later model call in the sandbox fails with
     ``AEVAL_LEASE_CLOSED`` for a reason the trial log does not explain
-    (observed on the real chain). Only its stderr tail explains it.
+    (seen on a real run). Only its stderr tail explains it.
     """
     broker = getattr(state, "broker", None)
     process = getattr(broker, "process", None)

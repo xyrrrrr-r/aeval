@@ -276,6 +276,13 @@ def _validate_data(event: dict[str, Any]) -> None:
     if kind == "request/context":
         _require(_string(data.get("provider")) and _string(data.get("model")),
                  "request/context requires provider/model")
+        # The provider-owned context capacity is optional (advertised only when
+        # the owner declares it); when present it must be a positive token count,
+        # never zero or negative — a nonsense window must not reach the agent block.
+        if "contextWindow" in data:
+            _require(type(data["contextWindow"]) is int and data["contextWindow"] >= 1
+                     and data["contextWindow"] <= MAX_SAFE_INTEGER,
+                     "request/context.contextWindow must be a positive safe integer")
     if kind == "session/end-seed" and "inherited" in data:
         _require(data["inherited"] is True, "session/end-seed.inherited must be true or absent")
 
@@ -553,7 +560,7 @@ PRE_DISPATCH_REJECTION_CODES = frozenset({
 # Written by the sandbox transport next to the bundle descriptor.
 GATEWAY_REJECTION_LOG = "gateway_refusals.jsonl"
 
-# The mirror ledger (D47): one record per auxiliary call the policy ALLOWED
+# The mirror ledger: one record per auxiliary call the policy ALLOWED
 # and the broker dispatched, carrying the usage metered on the wire.
 GATEWAY_AUX_DISPATCH_LOG = "gateway_aux_dispatches.jsonl"
 AUXILIARY_DISPATCH_CODE = "AEVAL_AUXILIARY_DISPATCHED"
@@ -612,7 +619,7 @@ def read_dispatched_auxiliary_calls(logs_dir: Path) -> list[dict[str, Any]]:
 
     The in-sandbox transport appends one JSON object per completed
     purpose-tagged call to ``gateway_aux_dispatches.jsonl`` beside the bundle
-    descriptor, carrying the usage the broker metered on the wire (D47). A
+    descriptor, carrying the usage the broker metered on the wire. A
     record counts only with a known purpose and a valid, total-carrying
     usage object; anything else is absent evidence, so an allowed auxiliary
     call without accounting stays unaccounted and the verdict stays
@@ -666,7 +673,7 @@ def _usage_summary(
     auxiliary = [e for e in blocking if e["type"] in AUXILIARY_REQUEST_EVENT_TYPES]
     # An auxiliary request is accounted when the broker either rejected it
     # before dispatch (provably zero tokens, recorded with the purpose) or
-    # dispatched it and the transport ledgered its usage (D47). Each record
+    # dispatched it and the transport ledgered its usage. Each record
     # can cover at most one request. The same normalized set drives coverage
     # AND the merged totals, so a record can never cover work it did not
     # account.
@@ -696,7 +703,7 @@ def _usage_summary(
     exact = exact and derive_stop_reason(events, inherited) in {"agent_claimed_done", "budget_exhausted"}
     valid = [v for v in values if v is not None]
     reported = sum(v["total"] for v in valid if v["total"] is not None)
-    # D47 accounting: the merged totals add the ledgered usage of dispatched
+    # The merged totals add the ledgered usage of dispatched
     # auxiliary calls to what the session itself settled. A dispatch without
     # ledger evidence is not in this list and keeps the verdict partial.
     dispatch_values = [d["usage"] for d in dispatches]
@@ -754,6 +761,20 @@ def convert_dsh_read_to_atif(
     observed = [{"seq": e["seq"], "reason": e["data"]["reason"],
                  "config": e["data"]["header"]["config"], "inherited": e["seq"] < inherited}
                 for e in events if e["type"] == "request/header"]
+    # The provider-owned context capacity, when the owner advertised it: DSH
+    # seals it into request/context events (RequestContext.contextWindow). Take
+    # the last advertised window — the route in force at the end of the run.
+    # Absent stays absent, so occupancy is never computed against a guessed
+    # scale; the panel reports "no window" exactly as it does today.
+    observed_contexts = [{"seq": e["seq"], "provider": e["data"]["provider"],
+                          "model": e["data"]["model"],
+                          **({"contextWindow": e["data"]["contextWindow"]}
+                             if type(e["data"].get("contextWindow")) is int else {})}
+                         for e in events if e["type"] == "request/context"]
+    advertised = [c["contextWindow"] for c in observed_contexts if "contextWindow" in c]
+    context_window = advertised[-1] if advertised else None
+    agent_model = (observed[-1]["config"]["model"] if observed
+                   else observed_contexts[-1]["model"] if observed_contexts else None)
     usage = _usage_summary(
         events, inherited, zero_token_auxiliary_rejections,
         dispatched_auxiliary=dispatched_auxiliary_calls,
@@ -762,13 +783,22 @@ def convert_dsh_read_to_atif(
         "mapperVersion": MAPPER_VERSION, "header": deepcopy(response.header),
         "events": events, "eventState": response.event_state, "inheritedEventCount": inherited,
         "trajectoryView": "append-origin events grouped by turn/step; replacements only in surface",
-        "surface": surface, "observedModels": observed, "usage": usage,
+        "surface": surface, "observedModels": observed, "observedContexts": observed_contexts,
+        "contextWindow": context_window, "usage": usage,
         "conversionIssues": issues.to_dict(),
     }}
     if preserved:
         extra[DSH_PRESERVED_EVENT_EXTRA_KEY] = preserved
     trajectory = Trajectory(
-        agent=Agent(name="dsh", version=DSH_VERSION, model_name=observed[-1]["config"]["model"] if observed else None),
+        agent=Agent(name="dsh", version=DSH_VERSION, model_name=agent_model,
+                    # The window rides on the agent block's extra under a
+                    # driver-neutral key, not a "dsh" namespace: the sealed
+                    # transcript self-carries the provider-declared capacity so
+                    # the trajectory panel reads it back without naming the agent
+                    # (and without a caller-declared --context-window). The
+                    # agents layer may name the agent; the core reader may not.
+                    extra=({"contextWindow": context_window}
+                           if context_window is not None else None)),
         session_id=response.header["id"], steps=steps, extra=extra,
         notes="Metrics summarize live reported usage plus ledgered auxiliary dispatches; "
               "copied context is excluded. See extra.dsh.usage for completeness.",

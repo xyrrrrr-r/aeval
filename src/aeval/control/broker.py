@@ -1,13 +1,12 @@
-"""Trusted-host owner side of the model broker lifecycle (P0-4/P0-5).
+"""Trusted-host owner side of the model broker lifecycle.
 
-The Python plugin (the P0-1 owner) starts the compiled TS broker bin
+The Python plugin (the owner side) starts the compiled TS broker bin
 per trial, hands the sandbox nothing but the broker URL and a job
 token file, and stops the broker with token cleanup when the trial
 ends. The upstream API key NEVER enters the sandbox: it is read by the
 broker process on the host from the configured environment variable.
 
-Protocol (docs: the control package's docs/TESTS/P0-3-host-broker.md,
-mirrored in both packaging repos — aeval/control is the neutral broker
+Protocol (mirrored in both packaging repos — aeval/control is the neutral broker
 cluster, which the agent-specific control packages compose into their
 deployment units):
 
@@ -18,8 +17,8 @@ deployment units):
   2 config/credential error, 3 hard budget without trusted metering.
 
 The owner treats anything else as a startup failure: the trial must
-not start with an unverified broker (fail-closed, P0-4: 插件激活失败
-必须阻止未受控运行).
+not start with an unverified broker (fail-closed: a failure to activate the
+plugin must prevent an uncontrolled run).
 """
 
 from __future__ import annotations
@@ -130,6 +129,14 @@ def write_broker_config(
     if "protocol" in upstream and upstream["protocol"] not in ("chat_completions", "responses"):
         raise BrokerConfigError(
             "broker config upstream.protocol: must be 'chat_completions' or 'responses'")
+    # Optional provider-owned context capacity the owner declares for the pinned
+    # route. Descriptive metadata (not a request bound), echoed by the broker's
+    # resolveModel so the harness seals it into the request/context event and the
+    # ATIF agent block self-carries the window. Refuse a non-positive/non-integer
+    # value here rather than at broker startup inside a running trial, mirroring
+    # parseBrokerMainConfig.
+    if "contextWindow" in upstream:
+        _positive_int(upstream["contextWindow"], "upstream.contextWindow")
 
     config: dict[str, Any] = {
         "run": dict(run),
@@ -143,7 +150,7 @@ def write_broker_config(
             "host": listen_host,
             **({"port": listen_port} if listen_port is not None else {}),
             # non-loopback listeners require TLS; the broker reads the PEM
-            # files these paths point at (D20)
+            # files these paths point at
             **({"tls": dict(listen_tls)} if listen_tls else {}),
         },
         "tokenOut": str(token_out),
@@ -156,7 +163,7 @@ def write_broker_config(
     if token_count is not None:
         config["tokenCount"] = dict(token_count)
     if auxiliary_policy is not None:
-        # D47: per-purpose decisions for advisory model calls. Only the two
+        # Per-purpose decisions for advisory model calls. Only the two
         # known purposes with an explicit decision; missing purposes take the
         # broker's default (refuse), mirroring parseBrokerMainConfig exactly.
         policy = dict(auxiliary_policy)

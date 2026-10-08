@@ -8,8 +8,8 @@ import { ResponsesAdapter, buildResponsesBody } from './upstream_responses.js';
  * `startHostBroker`. Credentials arrive by environment-variable name only; the
  * key value never enters configuration, log lines, or error messages.
  *
- * The wire the provider endpoint speaks is the `protocol` option
- * (AGENT-ABSTRACTION-2-PLAN.md §4.4): `chat_completions` — the default, so an
+ * The wire the provider endpoint speaks is the `protocol` option:
+ * `chat_completions` — the default, so an
  * existing spec without the key keeps byte-identical behavior — or
  * `responses` (OpenAI Responses API, e.g. DeepSeek's `https://api.deepseek.com`
  * base). Both adapters serve the same neutral
@@ -43,6 +43,16 @@ export interface UpstreamAdapterOptions {
    * not declared here refuses to start.
    */
   readonly reasoningEfforts?: readonly string[];
+  /**
+   * Provider-owned context capacity (combined request + response tokens) for
+   * the pinned route. Neither wire offers model discovery, so the owner states
+   * it; ``resolveModel`` echoes it as ``context.contextWindow`` so the harness
+   * records it in the sealed ``request/context`` session event and downstream
+   * evidence (the ATIF agent block) self-carries the window instead of relying
+   * on a caller-declared flag. Absent leaves the capacity unadvertised — never
+   * guessed — and occupancy stays uncomputable downstream.
+   */
+  readonly contextWindow?: number;
 }
 
 /** One OpenAI chat message exactly as it appears on the wire. */
@@ -241,8 +251,9 @@ class ChatCompletionsAdapter extends LlmAdapter {
   readonly #key: string;
   readonly #timeoutMs: number | undefined;
   readonly #efforts: readonly { id: ReturnType<typeof ReasoningEffortId>; name: string }[];
+  readonly #contextWindow: number | undefined;
 
-  constructor(model: string, url: string, headers: Record<string, string>, key: string, timeoutMs: number | undefined, efforts: readonly string[]) {
+  constructor(model: string, url: string, headers: Record<string, string>, key: string, timeoutMs: number | undefined, efforts: readonly string[], contextWindow: number | undefined) {
     super();
     this.#model = model;
     this.#url = url;
@@ -250,6 +261,7 @@ class ChatCompletionsAdapter extends LlmAdapter {
     this.#key = key;
     this.#timeoutMs = timeoutMs;
     this.#efforts = Object.freeze(efforts.map((id) => Object.freeze({ id: ReasoningEffortId(id), name: id })));
+    this.#contextWindow = contextWindow;
   }
 
   override providerInfo(provider: string): LlmProviderInfo {
@@ -257,13 +269,16 @@ class ChatCompletionsAdapter extends LlmAdapter {
   }
 
   // Model resolution is a pure identity echo: the chat-completions wire offers
-  // no discovery endpoint, so this never touches the network.
+  // no discovery endpoint, so this never touches the network. The owner-declared
+  // context capacity is echoed alongside the identity so the harness seals it
+  // into the request/context event.
   override async resolveModel(provider: string, model: string): Promise<LlmResolvedModelInfo> {
     return {
       provider,
       id: model,
       name: model,
       ...(this.#efforts.length > 0 ? { reasoning: { efforts: this.#efforts } } : {}),
+      ...(this.#contextWindow !== undefined ? { context: { contextWindow: this.#contextWindow } } : {}),
     };
   }
 
@@ -441,6 +456,10 @@ export function createUpstreamAdapter(options: UpstreamAdapterOptions): LlmAdapt
   const protocol: UpstreamProtocol = options.protocol ?? 'chat_completions';
   if (protocol !== 'chat_completions' && protocol !== 'responses') invalid("protocol must be 'chat_completions' or 'responses'");
   if (options.timeoutMs !== undefined && (!Number.isSafeInteger(options.timeoutMs) || options.timeoutMs < 1 || options.timeoutMs > TIMER_RANGE_MS)) invalid('timeoutMs must be a positive safe integer within timer range');
+  // The context capacity is descriptive metadata, not a request bound: it only
+  // has to be a positive token count. Refuse a non-integer or non-positive value
+  // rather than seal a nonsense window into evidence.
+  if (options.contextWindow !== undefined && (!Number.isSafeInteger(options.contextWindow) || options.contextWindow < 1)) invalid('contextWindow must be a positive safe integer');
   if (options.headers !== undefined && (typeof options.headers !== 'object' || options.headers === null || Array.isArray(options.headers)
     || Object.entries(options.headers).some(([name, value]) => typeof name !== 'string' || typeof value !== 'string' || /[\r\n]/u.test(name + value)))) invalid('headers must map header names to values');
   let efforts: readonly string[] = [];
@@ -457,7 +476,7 @@ export function createUpstreamAdapter(options: UpstreamAdapterOptions): LlmAdapt
   const baseUrl = httpBase(options.baseUrl);
   const key = readUpstreamKey(options.apiKeyEnv);
   if (protocol === 'responses') {
-    return new ResponsesAdapter(options.model, `${baseUrl}/responses`, options.headers ?? {}, key, options.timeoutMs, efforts);
+    return new ResponsesAdapter(options.model, `${baseUrl}/responses`, options.headers ?? {}, key, options.timeoutMs, efforts, options.contextWindow);
   }
-  return new ChatCompletionsAdapter(options.model, `${baseUrl}/chat/completions`, options.headers ?? {}, key, options.timeoutMs, efforts);
+  return new ChatCompletionsAdapter(options.model, `${baseUrl}/chat/completions`, options.headers ?? {}, key, options.timeoutMs, efforts, options.contextWindow);
 }

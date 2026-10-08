@@ -1,4 +1,4 @@
-"""aeval CLI (plan §6).
+"""aeval CLI.
 
 ``run`` never builds its own trial loop — it validates the suite,
 synthesizes the Harbor job and delegates. ``selftest`` deliberately
@@ -39,7 +39,7 @@ EXIT_VALIDATION_ERROR = 3
 EXIT_SYSTEM_ERROR = 4
 # Harbor exited 0 but the aeval chain is not complete (missing summary,
 # unobserved/unclassified trials, seal or recompute refused). The
-# Harbor exit code alone never means the evaluation completed (P0-8).
+# Harbor exit code alone never means the evaluation completed.
 EXIT_E2E_INCOMPLETE = 5
 
 
@@ -368,7 +368,7 @@ def run_cmd(
             raise SuiteError(violation)
         budget_point = budget_enforcement_point(adapters)
         if force_build:
-            # Doc §6.3: the first run (and every run after the base image
+            # The first run (and every run after the base image
             # digest changes) must rebuild — Harbor reuses an existing
             # template alias otherwise, silently running the experiment on
             # a stale image. `aeval run` delegates to Harbor, so the flag
@@ -389,7 +389,7 @@ def run_cmd(
         images = None
         if sandbox_image is not None:
             # The E2E lock must pin the sandbox image: observed-identity
-            # binding (P0-2) compares the live sandbox against exactly
+            # binding compares the live sandbox against exactly
             # this entry. Both options are required together, and the
             # reference must be digest-pinned.
             from aeval.contracts import ImageIdentity
@@ -528,7 +528,7 @@ def run_cmd(
         raise typer.Exit(result.returncode)
 
     # Harbor exited 0 — that only means the process exited. The aeval
-    # chain is complete only if finalization proves it (P0-8).
+    # chain is complete only if finalization proves it.
     from aeval.bundle.finalize import FinalizeError, finalize_run
 
     try:
@@ -707,7 +707,7 @@ def agents_cmd(
             )
             declaration = resolved.declaration
             # the class the runtime resolves: itself when pinned, the
-            # materialized per-agent class when declaration-driven (G11)
+            # materialized per-agent class when declaration-driven
             adapter = declaration.adapter_class()
             mismatches = declaration_class_mismatches(declaration, adapter)
             if mismatches:
@@ -774,6 +774,22 @@ def export_cmd(
     except (SuiteError, ValueError, OSError) as exc:
         _die(str(exc), EXIT_VALIDATION_ERROR)
     typer.echo(f"Exported native suite and overlay: {result}")
+
+
+def _evidence_context_window(evidence) -> int | None:
+    """读取密封轨迹自携带的上下文窗口（ATIF agent 块 extra.contextWindow）。
+
+    driver 经官方 request/context 事件把 provider 声明的窗口写入会话，mapper
+    再抬进 agent 块的中立键 ``contextWindow``（不绑定具体 agent 名），因此证据
+    自携带、面板可自动换算占用率。缺失或非正整数一律返回 None——绝不臆造窗口。
+    """
+    try:
+        window = (evidence.transcript.atif.agent.extra or {}).get("contextWindow")
+    except AttributeError:
+        return None
+    if type(window) is int and window > 0:
+        return window
+    return None
 
 
 def _iter_sealed_evidence(store: Path, records):
@@ -928,62 +944,29 @@ def dashboard_cmd(
     typer.echo(render_dashboard_html(summary))
 
 
-@app.command("trajectory")
-def trajectory_cmd(
-    store: Annotated[Path, typer.Option()],
-    run_id: Annotated[str, typer.Argument()],
-    task_id: Annotated[str, typer.Argument()],
-    context_window: Annotated[
-        Optional[int],
-        typer.Option(help="声明的模型上下文窗口（tokens）——仅用于占用率"
-                          "阈值线；证据本身不携带窗口"),
-    ] = None,
-    suites_dir: Annotated[
-        Path,
-        typer.Option(help="套件根目录（用于装载轨迹判分器的 turn 指标；"
-                          "缺省时逐轮打分退化为结构切面）"),
-    ] = Path("suites"),
-) -> None:
-    """Render the interactive trajectory analysis panel for one task.
+def _trajectory_task_filename(task_id: str) -> str:
+    """A filesystem-safe ``<task>.html`` name for one task id.
 
-    Loads every sealed trial of ``task_id`` in the run, verifies each
-    canonical transcript against its recorded sha256, and renders one
-    shared timeline plus an offline detail inspector. Selecting a trial
-    or step reveals its messages, tool observations, structural facts,
-    and turn attribution. Turn attribution reuses the SAME metric
-    objects that judge the trajectory (the suite grader's
-    ``turn_metrics(task_id)``)——面板没有第二套判分逻辑。Output is one
-    self-contained HTML file on stdout — redirect to keep it::
-
-        aeval trajectory --store out/run/store.sqlite3 run-... task > t.html
+    Task ids are validated identifiers, but a batch write must not let an
+    unexpected separator escape the output directory, so only filename-safe
+    characters survive; everything else becomes ``_``.
     """
-    from aeval.metrics.trajectory_panel import (
-        TrialPanel,
-        render_trajectory_html,
-    )
-    from aeval.store.sqlite import TrialStore
+    safe = "".join(ch if ch.isalnum() or ch in ("-", ".", "_") else "_" for ch in task_id)
+    return f"{safe or task_id}.html"
+
+
+def _resolve_turn_metrics_factory(suites_dir: Path, manifest):
+    """Load the suite once and return ``(factory, grader_label)`` for turn 归因.
+
+    ``factory(task_id)`` yields the SAME metric objects the trajectory grader
+    uses — the panel judges nothing on its own. A missing suite directory or a
+    grader that declares no ``turn_metrics`` degrades to ``(None, None)``
+    (structural facets only, never a fabricated attribution score). The warning
+    is emitted once here, not once per task in a batch.
+    """
     from aeval.suite_loader.loader import load_suite
     from aeval.verdict.loader import load_grader_module, split_impl
-    from aeval.verdict.trajectory.stats import collect_stats
-    from aeval.verdict.trajectory.turns import analyze_turns
 
-    db = TrialStore(store)
-    try:
-        manifest = db.load_run_manifest(run_id)
-        records = [
-            record for record in db.list_trials([run_id])
-            if record.coordinates.task_id == task_id
-        ]
-    finally:
-        db.close()
-    if not records:
-        _die(f"no trials for task {task_id!r} in {run_id}",
-             EXIT_VALIDATION_ERROR)
-    records = sorted(records, key=lambda r: r.coordinates.trial_index)
-    # turn 归因指标：与轨迹级判分同对象（套件判分器声明
-    # turn_metrics）。未声明/套件不可达 → 仅结构切面，不编造归因分。
-    metrics: tuple = ()
-    grader_label = None
     suite_path = suites_dir / manifest.overlay.suite_id
     if not suite_path.is_dir():
         typer.secho(
@@ -991,23 +974,40 @@ def trajectory_cmd(
             "结构切面（无归因分）",
             fg=typer.colors.YELLOW, err=True,
         )
-    else:
-        suite = load_suite(suite_path)
-        for declared in suite.overlay.verdict.resolved_graders():
-            if declared.layer not in ("trajectory", "both"):
-                continue
-            path, _ = split_impl(declared.impl)
-            module = load_grader_module(suite_path / path, declared)
-            factory = getattr(module, "turn_metrics", None)
-            if factory is None:
-                continue
-            metrics = tuple(factory(task_id) or ())
-            grader_label = (
-                f"{getattr(module, 'GRADER_ID', declared.impl)}@"
-                f"{getattr(module, 'GRADER_VERSION', '')}"
-            )
-            break
+        return None, None
+    suite = load_suite(suite_path)
+    for declared in suite.overlay.verdict.resolved_graders():
+        if declared.layer not in ("trajectory", "both"):
+            continue
+        path, _ = split_impl(declared.impl)
+        module = load_grader_module(suite_path / path, declared)
+        factory = getattr(module, "turn_metrics", None)
+        if factory is None:
+            continue
+        grader_label = (
+            f"{getattr(module, 'GRADER_ID', declared.impl)}@"
+            f"{getattr(module, 'GRADER_VERSION', '')}"
+        )
+        return factory, grader_label
+    return None, None
 
+
+def _render_task_panel(*, store: Path, manifest, run_id: str, task_id: str,
+                       records, context_window: int | None,
+                       factory, grader_label) -> str | None:
+    """Build one task's self-contained trajectory HTML, or ``None`` if unusable.
+
+    Every sealed trial of ``task_id`` is verified against its recorded sha256;
+    a trial whose transcript cannot be read is reported on stderr and skipped.
+    With no usable transcript at all the caller decides — a single requested
+    task fails loudly, a batch skips it — but this never returns an empty panel.
+    """
+    from aeval.metrics.trajectory_panel import TrialPanel, render_trajectory_html
+    from aeval.verdict.trajectory.stats import collect_stats
+    from aeval.verdict.trajectory.turns import analyze_turns
+
+    records = sorted(records, key=lambda r: r.coordinates.trial_index)
+    metrics = tuple(factory(task_id) or ()) if factory is not None else ()
     panels: list[TrialPanel] = []
     unavailable: list[tuple[str, str]] = []
     index_by_trial = {
@@ -1034,10 +1034,11 @@ def trajectory_cmd(
                 ),
                 stats=collect_stats(record, evidence),
                 turn_analysis=analyze_turns(evidence, metrics),
+                context_window=_evidence_context_window(evidence),
             )
         )
     if not panels:
-        _die("no trial had a usable sealed transcript", EXIT_VALIDATION_ERROR)
+        return None
 
     meta_lines = [
         f"运行 {run_id} · 套件 {manifest.overlay.suite_id}@"
@@ -1059,11 +1060,133 @@ def trajectory_cmd(
         meta_lines.append(
             f"上下文窗口 {context_window:,}（调用方声明，非密封证据）"
         )
+    else:
+        # No caller-declared flag: report what the sealed evidence itself
+        # carries, so the occupancy axis is attributable. The panel only draws
+        # a shared window when every trial that carries one agrees, so mirror
+        # that here — a single distinct value is stated, disagreement or
+        # absence is reported honestly rather than guessed.
+        evidence_windows = {p.context_window for p in panels if p.context_window}
+        if len(evidence_windows) == 1:
+            meta_lines.append(
+                f"上下文窗口 {next(iter(evidence_windows)):,}（证据携带，"
+                "来自密封轨迹 agent 块）"
+            )
+        elif evidence_windows:
+            meta_lines.append(
+                "上下文窗口：各试次证据携带的窗口不一致（"
+                + "、".join(f"{w:,}" for w in sorted(evidence_windows))
+                + "）——不换算占用率"
+            )
+        else:
+            meta_lines.append(
+                "上下文窗口：调用方未声明，密封证据也未携带——占用率不可换算"
+            )
     title = f"{title_zh}({task_id}) 轨迹分析"
-    typer.echo(render_trajectory_html(
+    return render_trajectory_html(
         title=title, meta_lines=meta_lines, trials=panels,
         context_window=context_window,
-    ))
+    )
+
+
+@app.command("trajectory")
+def trajectory_cmd(
+    store: Annotated[Path, typer.Option()],
+    run_id: Annotated[str, typer.Argument()],
+    task_id: Annotated[
+        Optional[str],
+        typer.Argument(help="要渲染的 task（打印到 stdout）；批量 --out 时省略"),
+    ] = None,
+    context_window: Annotated[
+        Optional[int],
+        typer.Option(help="声明的模型上下文窗口（tokens）——仅用于占用率"
+                          "阈值线；证据本身不携带窗口"),
+    ] = None,
+    suites_dir: Annotated[
+        Path,
+        typer.Option(help="套件根目录（用于装载轨迹判分器的 turn 指标；"
+                          "缺省时逐轮打分退化为结构切面）"),
+    ] = Path("suites"),
+    out: Annotated[
+        Optional[Path],
+        typer.Option(help="批量模式：把该 run 下每个 task 的面板各写成 "
+                          "<dir>/<task>.html（此时不要给出 TASK 参数）"),
+    ] = None,
+) -> None:
+    """Render the interactive trajectory analysis panel.
+
+    Loads every sealed trial, verifies each canonical transcript against its
+    recorded sha256, and renders one shared timeline plus an offline detail
+    inspector. Selecting a trial or step reveals its messages, tool
+    observations, structural facts, and turn attribution. Turn attribution
+    reuses the SAME metric objects that judge the trajectory (the suite
+    grader's ``turn_metrics(task_id)``)——面板没有第二套判分逻辑。
+
+    Two modes. One task to stdout — redirect to keep it::
+
+        aeval trajectory --store out/run/store.sqlite3 run-... task > t.html
+
+    Or every task in the run into a directory, one self-contained file each
+    (omit the task argument)::
+
+        aeval trajectory --store out/run/store.sqlite3 run-... --out out/panels
+    """
+    from aeval.store.sqlite import TrialStore
+
+    db = TrialStore(store)
+    try:
+        manifest = db.load_run_manifest(run_id)
+        all_records = list(db.list_trials([run_id]))
+    finally:
+        db.close()
+
+    if out is not None:
+        if task_id is not None:
+            _die("--out renders every task in the run; drop the TASK argument",
+                 EXIT_VALIDATION_ERROR)
+        by_task: dict[str, list] = {}
+        for record in all_records:
+            by_task.setdefault(record.coordinates.task_id, []).append(record)
+        if not by_task:
+            _die(f"no trials in {run_id}", EXIT_VALIDATION_ERROR)
+        factory, grader_label = _resolve_turn_metrics_factory(suites_dir, manifest)
+        out_dir = Path(out)
+        out_dir.mkdir(parents=True, exist_ok=True)
+        written = 0
+        for tid in sorted(by_task):
+            html = _render_task_panel(
+                store=store, manifest=manifest, run_id=run_id, task_id=tid,
+                records=by_task[tid], context_window=context_window,
+                factory=factory, grader_label=grader_label)
+            if html is None:
+                typer.secho(f"task {tid}: 无可用密封轨迹 — 已跳过",
+                            fg=typer.colors.YELLOW, err=True)
+                continue
+            dest = out_dir / _trajectory_task_filename(tid)
+            dest.write_text(html, encoding="utf-8")
+            written += 1
+            typer.echo(f"wrote {dest}", err=True)
+        typer.secho(
+            f"{written}/{len(by_task)} 个 task 面板已写入 {out_dir}",
+            fg=typer.colors.GREEN, err=True,
+        )
+        return
+
+    if task_id is None:
+        _die("one task needs the TASK argument; use --out <dir> to render every task",
+             EXIT_VALIDATION_ERROR)
+    records = [r for r in all_records if r.coordinates.task_id == task_id]
+    if not records:
+        _die(f"no trials for task {task_id!r} in {run_id}",
+             EXIT_VALIDATION_ERROR)
+    factory, grader_label = _resolve_turn_metrics_factory(suites_dir, manifest)
+    html = _render_task_panel(
+        store=store, manifest=manifest, run_id=run_id, task_id=task_id,
+        records=records, context_window=context_window,
+        factory=factory, grader_label=grader_label)
+    if html is None:
+        _die("no trial had a usable sealed transcript", EXIT_VALIDATION_ERROR)
+    typer.echo(html)
 
 
 @app.command("rejudge")

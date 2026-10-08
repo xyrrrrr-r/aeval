@@ -148,76 +148,66 @@ def _panel(turn_analysis, verdict="fail", steps=None):
     )
 
 
-def test_panel_renders_turns_badges_and_escapes():
-    """面板：采集版块 + turn 卡同页；记忆基底徽章、脱敏、转义、无脚本。"""
+def test_panel_renders_drilldown_data_deterministically():
+    """面板把 turn、消息、工具和归因装入共享时间轴的安全下钻载荷。"""
     ev = evidence(_forked_steps("商家A的接口密钥是 TENANT-KEY-A9。"))
     analysis = analyze_turns(ev, _metrics())
     html = _panel(analysis)
-    # 两层同页：Trajectory V2 采集版块 + 逐轮打分。
-    assert "<h3>执行图谱</h3>" in html
-    assert "<h3>工具结果矩阵</h3>" in html
-    assert "<h3>逐轮打分（turn 切面）</h3>" in html
-    assert "记忆基底（fork 复制上下文）" in html
-    assert "turn 分 0.00" in html and "turn 分 未评测" in html
+    assert "五轨联动执行视图" in html
+    assert 'id="trajectory-inspector"' in html
+    assert "hallucination_check 0.00" in html
+    assert "记忆基底" in html
+    assert '"score":0.0' in html and '"score":null' in html
     assert "失败(fail)" in html
-    # 归因 chip：维度 + 分数 + 理由（理由里的引号被转义）。
-    assert "hallucination_check" in html and "0.00" in html
-    # 对话正文 = 密封原文直显（不再误用入库脱敏 redact_snippet）：
-    # 源消息完整可读，不再被压成「首4字…末2字」。
+    assert "hallucination_check" in html
     assert "商家A的接口密钥是 TENANT-KEY-A9。" in html
     assert "已记录。" in html
     assert "如需其他帮助请告诉我。" in html
-    assert "<script" not in html
-    # 同输入必得同字节。
+    assert '"reply_step_id":4' in html
     assert html == _panel(analyze_turns(
         evidence(_forked_steps("商家A的接口密钥是 TENANT-KEY-A9。")),
         _metrics(),
     ))
 
 
-def test_panel_without_turn_analysis_keeps_collection_layers():
-    """仅 stats 输入（未做 turn 分析）：采集版块照常，无逐轮节。"""
+def test_panel_without_turn_analysis_keeps_shared_timeline():
+    """仅 stats 输入仍可浏览步骤，但不编造消息或 turn 归因。"""
     html = _panel(None)
-    assert "<h3>执行图谱</h3>" in html
-    assert "<h3>逐轮打分（turn 切面）</h3>" not in html
+    assert "五轨联动执行视图" in html
+    assert '"messages":{}' in html
+    assert '"turns":{}' in html
 
 
 def test_panel_structural_only_degrades_honestly():
-    """判分器未声明 turn 指标：结构切面照常渲染，如实标注无归因分。"""
+    """未声明判分指标时保留结构事实，归因列表如实为空。"""
     ev = evidence(_forked_steps("商家A的接口密钥是 TENANT-KEY-A9。"))
     html = _panel(analyze_turns(ev, ()))
-    assert "仅展示结构切面" in html
-    assert "turn 分 未评测" in html
+    assert '"metrics":[]' in html
+    assert '"structure":0.5' in html
     assert "hallucination_check" not in html
 
 
 def test_panel_snippet_truncates_and_escapes_messages():
-    """显示纪律：密封原文直显——超长截断（带省略号），HTML 全转义。"""
+    """消息截断，且用户正文不能终止内联 JSON script 标签。"""
     steps = [
-        user_step(1, "长" * 400),                  # 超长 → 截断
-        agent_step(2, "含<b>标签</b>与<script>"),  # 短 → 原文转义直显
+        user_step(1, "长" * 400),
+        agent_step(2, "含<b>标签</b>与</script><script>alert(1)</script>"),
     ]
     ev = evidence(steps)
     html = _panel(analyze_turns(ev, ()), steps=steps)
-    assert "长" * 359 + "…" in html      # 截断且末尾带省略号
-    assert "长" * 400 not in html        # 不超显示上限
-    assert "<script>" not in html        # 消息内标签不得裸入页面
-    assert "&lt;script&gt;" in html      # 转义后保留可读原文
-    assert "含&lt;b&gt;标签&lt;/b&gt;" in html
+    assert "长" * 359 + "…" in html
+    assert "长" * 400 not in html
+    assert "</script><script>alert(1)" not in html
+    assert "\\u003c/script\\u003e" in html
+    assert "\\u003cb\\u003e标签\\u003c/b\\u003e" in html
 
 
 def test_system_roles_segment_and_render():
-    """三角色（用户/系统/助手）：系统消息按位置归入轮内或会话前缀。
-
-    - 首条用户消息之前 → prologue（会话系统提示，不构成对话轮）；
-    - 轮跨度内 → turn.system_messages（系统注入，不进应答/字数语义）；
-    - 面板：系统气泡 + 会话前缀折叠块 + 时间轴系统节点。
-    """
+    """会话前缀和轮内系统注入保留在共享时间轴的下钻数据中。"""
     from harbor.models.trajectories import Step as _Step
 
     steps = [
-        _Step(step_id=1, source="system", message="你是会话智能体。",
-              is_copied_context=True),
+        _Step(step_id=1, source="system", message="你是会话智能体。", is_copied_context=True),
         user_step(2, "记住密钥 KEY-1"),
         agent_step(3, "已记住。"),
         _Step(step_id=4, source="system", message="（租户切换提醒）"),
@@ -227,30 +217,22 @@ def test_system_roles_segment_and_render():
     ev = evidence(steps)
     analysis = analyze_turns(ev, ())
     assert [m.step_id for m in analysis.prologue] == [1]
-    assert analysis.prologue[0].copied is True  # 随父会话基底带入
+    assert analysis.prologue[0].copied is True
     t1, t2 = analysis.turns
     assert [m.step_id for m in t1.system_messages] == [4]
     assert t1.system_messages[0].copied is False
     assert t2.system_messages == ()
-    # 系统消息不影响应答/字数语义（replies 只算助手面）。
     assert analysis.scores[0].reply_chars == len("已记住。")
     assert analysis.scores[1].reply_chars == len("KEY-1")
     html = _panel(analysis, steps=steps)
-    # 会话前系统消息渲染为轮次网格里的可见 S 卡（排在 T1 之前）。
-    assert '<span class="tno">S1</span>' in html
-    assert "系统消息（会话前）" in html
-    assert "记忆基底（fork 复制上下文）</span>" in html
-    assert "不构成对话轮" in html
-    assert "你是会话智能体。" in html          # S 卡直显原文
-    assert '<div class="who">系统</div>' in html
-    assert "（租户切换提醒）" in html          # 轮内系统气泡
-    assert 'class="node system' in html        # 时间轴系统节点
-    # S 卡在 T1 之前（时间序）。
-    assert html.index('">S1</span>') < html.index('">T1</span>')
+    assert "你是会话智能体。" in html
+    assert "（租户切换提醒）" in html
+    assert "source-system" in html
+    assert '"copied":true' in html
 
 
 def test_system_only_transcript_all_prologue():
-    """只有系统消息的轨迹：切不出轮，但前缀不丢失。"""
+    """只有系统消息的轨迹仍可在时间轴选中并查看前缀正文。"""
     from harbor.models.trajectories import Step as _Step
 
     steps = [_Step(step_id=1, source="system", message="仅系统提示。")]
@@ -259,9 +241,9 @@ def test_system_only_transcript_all_prologue():
     assert analysis.turns == ()
     assert [m.step_id for m in analysis.prologue] == [1]
     html = _panel(analysis, steps=steps)
-    assert "轨迹无用户面消息，切不出轮次" in html
-    assert '<span class="tno">S1</span>' in html
     assert "仅系统提示。" in html
+    assert "source-system" in html
+    assert '"turns":{}' in html
 
 
 def test_collect_turn_details_orders_by_declaration():
@@ -274,8 +256,8 @@ def test_collect_turn_details_orders_by_declaration():
     assert {d.metric for d in details} == {"hallucination_check"}
 
 
-def test_panel_aggregate_tracks_align_trials():
-    """聚合轨道视图：≥2 试次时渲染——一轨一试次、轮位对齐、汇总行。"""
+def test_panel_shared_timeline_serializes_all_trials():
+    """多试次在一张共享轴中保留通过/失败归因与可定位的回复步骤。"""
     from aeval.verdict.trajectory.stats import collect_stats
     from tests.unit.verdict.test_stats import sample_record
 
@@ -291,36 +273,17 @@ def test_panel_aggregate_tracks_align_trials():
     ):
         steps = _forked_steps(reply)
         ev = evidence(steps)
-        record = sample_record(
-            f"trial-{n}", "memory.tenant_isolation", verdict=verdict
-        )
-        panels.append(
-            TrialPanel(
-                heading=f"试次 {n} · trial-{n}",
-                meta="run-r1",
-                stats=collect_stats(record, ev),
-                turn_analysis=analyze_turns(ev, metrics),
-            )
-        )
+        record = sample_record(f"trial-{n}", "memory.tenant_isolation", verdict=verdict)
+        panels.append(TrialPanel(
+            heading=f"试次 {n} · trial-{n}", meta="run-r1",
+            stats=collect_stats(record, ev), turn_analysis=analyze_turns(ev, metrics),
+        ))
     html = render_trajectory_html(title="t", meta_lines=["m"], trials=panels)
-    # 聚合区在首个试次区之前。
-    assert "聚合视图 · 试次轨道对比" in html
-    assert html.index('class="agg"') < html.index('<section class="trial"')
-    agg = html[html.index('class="agg"'):html.index('<section class="trial"')]
-    # 列头 + 3 条轨道 + 汇总行；轨道头带判定徽标。
-    assert agg.count('class="lane-head"') == 5
-    assert agg.count('class="badge fail"') == 1
-    assert agg.count('class="badge pass"') == 2
-    # T2 轮位对齐：好/坏/好 → 1.00 / 0.00 / 1.00（格内 + 汇总行）。
-    assert agg.count('<span class="ascore red">0.00</span>') == 2
-    assert agg.count('<span class="ascore green">1.00</span>') == 4
-    # T1 记忆基底轮无归因分：三轨格 + 汇总行均为未评测 chip。
-    assert agg.count('<span class="ascore gray">未评测</span>') == 6
-    # 轨道连接箭头（CSS 伪元素）与悬停探针消息（原生 title，零脚本）。
-    assert 'content:"→"' in html
-    assert 'title="（你是商家B的助理）' in agg
-    # 单试次不渲染聚合视图（CSS 注释常驻，须断言区块标记而非文字）。
-    single = _panel(
-        analyze_turns(evidence(_forked_steps("无权访问。")), metrics)
-    )
-    assert '<section class="agg"' not in single
+    assert html.count('class="timeline-trial"') == 12
+    assert html.count('data-trial="trial-') >= 12
+    assert html.count('"verdict":"pass"') == 2
+    assert html.count('"verdict":"fail"') == 1
+    assert html.count('"score":1.0') >= 2
+    assert '"score":0.0' in html
+    assert '"reply_step_id":4' in html
+    assert 'class="agg"' not in html

@@ -11,7 +11,7 @@ import type {
 } from '@deepseek-ai/dsh-llm';
 
 /**
- * The Responses-API production upstream (AGENT-ABSTRACTION-2-PLAN.md §4.4).
+ * The Responses-API production upstream.
  *
  * Some model APIs are served in OpenAI's Responses format rather than chat
  * completions — DeepSeek's is the deployed example: base_url
@@ -451,8 +451,9 @@ export class ResponsesAdapter extends LlmAdapter {
   readonly #key: string;
   readonly #timeoutMs: number | undefined;
   readonly #efforts: readonly { id: ReturnType<typeof ReasoningEffortId>; name: string }[];
+  readonly #contextWindow: number | undefined;
 
-  constructor(model: string, url: string, headers: Record<string, string>, key: string, timeoutMs: number | undefined, efforts: readonly string[]) {
+  constructor(model: string, url: string, headers: Record<string, string>, key: string, timeoutMs: number | undefined, efforts: readonly string[], contextWindow: number | undefined) {
     super();
     this.#model = model;
     this.#url = url;
@@ -460,6 +461,7 @@ export class ResponsesAdapter extends LlmAdapter {
     this.#key = key;
     this.#timeoutMs = timeoutMs;
     this.#efforts = Object.freeze(efforts.map((id) => Object.freeze({ id: ReasoningEffortId(id), name: id })));
+    this.#contextWindow = contextWindow;
   }
 
   override providerInfo(provider: string): LlmProviderInfo {
@@ -467,13 +469,16 @@ export class ResponsesAdapter extends LlmAdapter {
   }
 
   // Model resolution is a pure identity echo: the responses wire offers no
-  // discovery endpoint, so this never touches the network.
+  // discovery endpoint, so this never touches the network. The owner-declared
+  // context capacity is echoed alongside the identity so the harness seals it
+  // into the request/context event.
   override async resolveModel(provider: string, model: string): Promise<LlmResolvedModelInfo> {
     return {
       provider,
       id: model,
       name: model,
       ...(this.#efforts.length > 0 ? { reasoning: { efforts: this.#efforts } } : {}),
+      ...(this.#contextWindow !== undefined ? { context: { contextWindow: this.#contextWindow } } : {}),
     };
   }
 
