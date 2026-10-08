@@ -95,3 +95,8 @@ suites/*/tasks/*/environment/wheelhouse/*.tar.gz
 .qwen/
 examples/offline-chain/out/
 .chrome-tmp*/
+# macOS Finder metadata. Not ignored before, and hatchling ships anything git does
+# not ignore — two stray .DS_Store files appeared and would have gone out in the
+# sdist. Ignoring them keeps them out of the package as well as out of git status.
+.DS_Store
+**/.DS_Store
