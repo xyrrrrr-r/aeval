@@ -11,6 +11,18 @@ schema、CLI 参数、存储格式），每次都会在下方 `Changed`/`Removed
 
 ## [Unreleased]
 
+## [0.1.1] - 2026-10-08
+
+### Fixed
+
+- **Intel macOS 上的纯 pip 安装**（`pip install aeval-harbor`）：cryptography
+  ≥50 不再发布该平台 wheel，会退化为 Rust 源码构建（数十分钟，无可写用户
+  缓存目录的环境直接失败）。0.1.0 的平台约束放在 `[tool.uv]` 下，只有 uv
+  识别；本版将其提升为带环境标记的正式依赖
+  （`cryptography<45; sys_platform=='darwin' and platform_machine=='x86_64'`），
+  pip / uv / 任何 PEP 508 安装器在 Intel Mac 上都解析到 44.0.3（有
+  universal2 wheel，秒装）；Linux 与 Apple Silicon 不受任何影响。
+
 ## [0.1.0] - 2026-10-08
 
 首个公开版本（experimental）。
@@ -60,5 +72,6 @@ schema、CLI 参数、存储格式），每次都会在下方 `Changed`/`Removed
 - `e2b` 依赖锁定 `>=2.25.0,<2.51.0`：自托管 e2b 集群仅实现 v1
   sandbox API（详见 `pyproject.toml` 内注释）。
 
-[Unreleased]: https://gitcode.com/open_kunpeng_agentic_infra/aeval/compare/v0.1.0...HEAD
+[Unreleased]: https://gitcode.com/open_kunpeng_agentic_infra/aeval/compare/v0.1.1...HEAD
+[0.1.1]: https://gitcode.com/open_kunpeng_agentic_infra/aeval/compare/v0.1.0...v0.1.1
 [0.1.0]: https://gitcode.com/open_kunpeng_agentic_infra/aeval/releases/tag/v0.1.0

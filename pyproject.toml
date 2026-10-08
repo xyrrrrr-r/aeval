@@ -1,6 +1,6 @@
 [project]
 name = "aeval-harbor"
-version = "0.1.0"
+version = "0.1.1"
 description = "Agent trajectory evaluation framework built on Harbor"
 readme = "README.md"
 license = "Apache-2.0"
@@ -24,6 +24,15 @@ dependencies = [
     "e2b>=2.25.0,<2.51.0",
     "pydantic>=2.12.0",
     "pyyaml>=6.0.2",
+    # cryptography 是传递依赖（harbor → pyjwt[crypto]），本包不直接 import。
+    # 50.x 起不再发布 Intel macOS wheel（仅 macosx_11_0_arm64；Linux 与
+    # Apple Silicon 不受影响），pip/uv 在 Intel Mac 上会退化为 Rust 源码
+    # 构建（几十分钟，无可写用户缓存目录的环境直接失败）。因此仅在
+    # darwin+x86_64 用环境标记压到 <45——44.0.3 有实测可用的
+    # cp39-abi3-macosx_10_9_universal2 wheel；其余平台标记为假，
+    # cryptography 保持传递依赖、正常解析最新 wheel。
+    # （0.1.0 曾把此约束放在 [tool.uv] 下，pip 不识别，0.1.1 提升至此。）
+    "cryptography<45; sys_platform == 'darwin' and platform_machine == 'x86_64'",
 ]
 keywords = [
     "agent",
@@ -71,17 +80,6 @@ dev = [
 # （产出 2.4）直到发布工具链跟上——升级前先跑 `uvx twine check dist/*`。
 requires = ["hatchling>=1.27,<1.28"]
 build-backend = "hatchling.build"
-
-[tool.uv]
-# cryptography 50.x 起不再发布 Intel macOS wheel（仅 macosx_11_0_arm64；
-# Linux/Apple Silicon 不受影响）。不加约束时，`uv run`/`uv sync` 在
-# Intel Mac 上会退化为 Rust 源码构建（几十分钟），quickstart 直接失效。
-# 因此仅在 darwin+x86_64 平台把它压到 44.x——44.0.3 有实测可用的
-# cp39-abi3-macosx_10_9_universal2 wheel。uv 的 universal lock 会按
-# 环境标记 fork：其余平台仍解析到最新的 50.x。
-constraint-dependencies = [
-    "cryptography<45; sys_platform == 'darwin' and platform_machine == 'x86_64'",
-]
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/aeval"]
