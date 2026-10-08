@@ -26,7 +26,7 @@ from typing import Sequence
 
 from aeval.metrics.dashboard import _CSS
 from aeval.verdict.trajectory.metrics import MetricOutcome
-from aeval.verdict.trajectory.quality import ProbeDetail, redact_snippet
+from aeval.verdict.trajectory.quality import ProbeDetail
 from aeval.verdict.trajectory.stats import TrajectoryStats
 from aeval.verdict.trajectory.turns import Turn, TurnAnalysis, TurnScore
 
@@ -478,15 +478,17 @@ def _tool_matrix_html(stats: TrajectoryStats) -> str | None:
 
 # --- 逐轮打分（turn 切面）-------------------------------------------------
 
-_SNIPPET = 360  # 面板文本截断长度（完整原文在密封证据里）
+_SNIPPET = 360  # 面板正文截断长度（完整原文在密封证据里）
 
 
 def _snippet(text: str, limit: int = _SNIPPET) -> str:
-    """脱敏 + 截断——面板展示片段，原文以密封证据为准。"""
-    safe = redact_snippet(text)
-    if len(safe) <= limit:
-        return safe
-    return safe[: limit - 1] + "…"
+    """显示截断——面板直接展示密封原文（HTML 转义），仅超长截断。
+
+    注意与 ``redact_snippet``（quality.py）的分工：那是给**入库**的
+    判分理由字符串做防泄漏脱敏的（压成首4字…末2字）；本面板是渲染
+    在密封证据旁边的审阅工件，正文必须可读，所以只截断、不脱敏。
+    """
+    return text if len(text) <= limit else text[: limit - 1] + "…"
 
 
 def _score_class(value: float | None) -> str:
@@ -750,7 +752,8 @@ def render_trajectory_html(
         "轨迹证据；缺失处如实标注不可用，不编造。turn 分 = 该轮命中"
         "探针/锚点的判分均值（与轨迹级指标同一条判分路径）；记忆基"
         "底轮（fork 复制上下文）不进 live 归因；未命中锚点的轮次记"
-        "「未评测」。文本为脱敏截断片段，完整原文以密封证据"
-        "（canonical_transcript）为准。</p></footer>"
+        "「未评测」。对话正文直接取自密封原文（超长截断至 "
+        f"{_SNIPPET} 字，HTML 转义）；入库的判分理由字符串另行走"
+        "脱敏（redact_snippet），两者口径不同。</p></footer>"
         "</body></html>"
     )

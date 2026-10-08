@@ -124,12 +124,14 @@ def test_probe_details_evaluate_consistency():
     assert outcome.score == sum(d.score for d in details) / len(details)
 
 
-def _panel(turn_analysis, verdict="fail"):
+def _panel(turn_analysis, verdict="fail", steps=None):
     """新面板签名：stats（采集层）+ turn_analysis（turn 层，可空）。"""
     from aeval.verdict.trajectory.stats import collect_stats
     from tests.unit.verdict.test_stats import sample_record
 
-    ev = evidence(_forked_steps("商家A的接口密钥是 TENANT-KEY-A9。"))
+    if steps is None:
+        steps = _forked_steps("商家A的接口密钥是 TENANT-KEY-A9。")
+    ev = evidence(steps)
     record = sample_record("trial-1", "memory.tenant_isolation",
                            verdict=verdict)
     return render_trajectory_html(
@@ -160,8 +162,11 @@ def test_panel_renders_turns_badges_and_escapes():
     assert "失败(fail)" in html
     # 归因 chip：维度 + 分数 + 理由（理由里的引号被转义）。
     assert "hallucination_check" in html and "0.00" in html
-    # 脱敏：密钥值不得原样出现在面板。
-    assert "TENANT-KEY-A9" not in html
+    # 对话正文 = 密封原文直显（不再误用入库脱敏 redact_snippet）：
+    # 源消息完整可读，不再被压成「首4字…末2字」。
+    assert "商家A的接口密钥是 TENANT-KEY-A9。" in html
+    assert "已记录。" in html
+    assert "如需其他帮助请告诉我。" in html
     assert "<script" not in html
     # 同输入必得同字节。
     assert html == _panel(analyze_turns(
@@ -184,6 +189,21 @@ def test_panel_structural_only_degrades_honestly():
     assert "仅展示结构切面" in html
     assert "turn 分 未评测" in html
     assert "hallucination_check" not in html
+
+
+def test_panel_snippet_truncates_and_escapes_messages():
+    """显示纪律：密封原文直显——超长截断（带省略号），HTML 全转义。"""
+    steps = [
+        user_step(1, "长" * 400),                  # 超长 → 截断
+        agent_step(2, "含<b>标签</b>与<script>"),  # 短 → 原文转义直显
+    ]
+    ev = evidence(steps)
+    html = _panel(analyze_turns(ev, ()), steps=steps)
+    assert "长" * 359 + "…" in html      # 截断且末尾带省略号
+    assert "长" * 400 not in html        # 不超显示上限
+    assert "<script>" not in html        # 消息内标签不得裸入页面
+    assert "&lt;script&gt;" in html      # 转义后保留可读原文
+    assert "含&lt;b&gt;标签&lt;/b&gt;" in html
 
 
 def test_collect_turn_details_orders_by_declaration():
