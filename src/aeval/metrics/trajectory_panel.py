@@ -2,10 +2,16 @@
 
 版式参照「Trajectory V2 实时分析」：会话信息栏 → 执行图谱 → 工具
 调用 → Token 脉冲 → 上下文压力 → 工具失败与重试/时间消耗 → 工具
-结果矩阵 → 耗时分布（按工具）。纪律与 dashboard 相同：自包含单文
-件 HTML、内联 CSS/SVG、零脚本、零外部资源、同输入同字节；渲染器
-不计算任何数字——所有事实来自 ``TrajectoryStats``（采集层），缺失
-的数据如实标注不可用原因，不编造。
+结果矩阵 → 耗时分布（按工具）→ **逐轮打分（turn 切面）**。前八个
+版块消费 ``TrajectoryStats``（采集层）；逐轮打分消费
+``TurnAnalysis``（turns 层）——归因分与轨迹级判分同一条路径（指标
+的 ``details()``，``evaluate`` 折叠同一路径），结构分只陈述密封事
+实；fork 复制上下文轮标记「记忆基底」，不进 live 归因。本模块不
+计算任何数字，缺失的数据如实标注不可用原因，不编造。
+
+纪律与 dashboard 相同：自包含单文件 HTML、内联 CSS/SVG、零脚本、
+零外部资源、同输入同字节；所有 suite 派生文本转义，正文片段脱敏
+截断（完整原文以密封证据为准）。
 
 与实时面板的差异（诚实声明）：本面板是离线静态渲染，没有播放游
 标/搜索交互；上下文占用率仅在调用方显式声明窗口大小时绘制（证据
@@ -19,7 +25,10 @@ from dataclasses import dataclass
 from typing import Sequence
 
 from aeval.metrics.dashboard import _CSS
+from aeval.verdict.trajectory.metrics import MetricOutcome
+from aeval.verdict.trajectory.quality import ProbeDetail, redact_snippet
 from aeval.verdict.trajectory.stats import TrajectoryStats
+from aeval.verdict.trajectory.turns import Turn, TurnAnalysis, TurnScore
 
 __all__ = ["TrialPanel", "render_trajectory_html"]
 
@@ -35,11 +44,17 @@ _PAD = 46         # 左右留白（轴标签）
 
 @dataclass(frozen=True)
 class TrialPanel:
-    """一个试次的面板输入：标题 + 元信息 + 采集结果。"""
+    """一个试次的面板输入：标题 + 元信息 + 采集结果 + turn 切面。
+
+    ``turn_analysis`` 为 None（默认）时不渲染逐轮打分——纯 stats 面
+    板向后兼容；有值但 ``metric_outcomes`` 为空表示套件判分器未声
+    明 turn 指标，退化为仅结构切面（如实标注，不编造归因分）。
+    """
 
     heading: str
     meta: str
     stats: TrajectoryStats
+    turn_analysis: TurnAnalysis | None = None
 
 
 def _e(text: object) -> str:
@@ -103,9 +118,14 @@ def _timeline_svg(stats: TrajectoryStats) -> str | None:
             f'<text x="{(x0 + x1) / 2:.1f}" y="{mid - 32}" class="bandlabel" '
             f'text-anchor="middle">记忆基底</text>'
         )
-    # 轴刻度：5 个（时间或步序）。
-    for t in range(5):
-        i = round(t * (len(steps) - 1) / 4) if len(steps) > 1 else 0
+    # 轴刻度：约 5 个（时间或步序），去重避免小步数时的重复刻度。
+    tick_indices = sorted(
+        {
+            round(t * (len(steps) - 1) / 4) if len(steps) > 1 else 0
+            for t in range(5)
+        }
+    )
+    for i in tick_indices:
         x = x_of(i, steps[i])
         label = (
             _mmss(steps[i].seconds_from_start or 0.0)
@@ -350,6 +370,43 @@ font-size:12px;font-weight:600}
 .badge.fail{background:#fee2e2;color:#991b1b}
 .badge.gray{background:#e5e7eb;color:#374151}
 .summary{font-size:12.5px;color:#26313f;margin:4px 0}
+/* --- 逐轮打分（turn 切面） --- */
+.metrics{display:flex;flex-wrap:wrap;gap:6px;margin-top:4px}
+.mchip{background:#f2f5f9;border:1px solid #dfe5ec;border-radius:6px;
+padding:3px 8px;font-size:12px}
+.mchip b{font-variant-numeric:tabular-nums}
+.mchip.skip{opacity:.62}
+.turns{display:grid;gap:10px;margin-top:12px}
+.turn{border:1px solid #dfe5ec;border-radius:10px;padding:12px 14px;
+background:#fff}
+.turn.copied{background:#f8fafc;border-style:dashed}
+.thead{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+.tno{font-weight:700;font-size:14px}
+.tbadge{font-size:11.5px;border-radius:12px;padding:2px 9px;
+background:#f2f5f9;color:#5b6470}
+.tbadge.base{border:1px dashed #9ca3af}
+.tscore{margin-left:auto;font-size:15px;font-weight:700;
+font-variant-numeric:tabular-nums}
+.tscore.green{color:#16a34a}
+.tscore.yellow{color:#c08a2d}
+.tscore.red{color:#dc2626}
+.tscore.gray{color:#5b6470}
+.bubble{margin-top:8px;padding:8px 12px;border-radius:9px;
+font-size:13.5px;white-space:pre-wrap;word-break:break-word}
+.bubble .who{font-size:11.5px;color:#5b6470;margin-bottom:2px}
+.bubble.user{background:#f2f5f9}
+.bubble.agent{border:1px solid #dfe5ec}
+.tools{margin-top:8px;font-size:12.5px;color:#5b6470;display:grid;gap:3px}
+.tools .ok::before{content:"✓ ";color:#16a34a}
+.tools .missing::before{content:"✗ ";color:#dc2626}
+.attrib{margin-top:8px;display:grid;gap:4px}
+.chip{display:flex;gap:8px;align-items:baseline;font-size:12.5px;
+background:#f2f5f9;border-radius:7px;padding:4px 10px}
+.chip .dim{min-width:9.5em;color:#5b6470}
+.chip .sc{font-weight:700;font-variant-numeric:tabular-nums}
+.chip .sc.green{color:#16a34a}
+.chip .sc.yellow{color:#c08a2d}
+.chip .sc.red{color:#dc2626}
 """
 
 
@@ -417,6 +474,136 @@ def _tool_matrix_html(stats: TrajectoryStats) -> str | None:
         )
     rows.append("</table>")
     return "".join(rows)
+
+
+# --- 逐轮打分（turn 切面）-------------------------------------------------
+
+_SNIPPET = 360  # 面板文本截断长度（完整原文在密封证据里）
+
+
+def _snippet(text: str, limit: int = _SNIPPET) -> str:
+    """脱敏 + 截断——面板展示片段，原文以密封证据为准。"""
+    safe = redact_snippet(text)
+    if len(safe) <= limit:
+        return safe
+    return safe[: limit - 1] + "…"
+
+
+def _score_class(value: float | None) -> str:
+    if value is None:
+        return "gray"
+    if value >= 1.0:
+        return "green"
+    if value >= 0.9:
+        return "yellow"
+    return "red"
+
+
+def _score_text(value: float | None) -> str:
+    return "未评测" if value is None else f"{value:.2f}"
+
+
+def _metric_chips(outcomes: Sequence[MetricOutcome]) -> str:
+    """轨迹级维度 chips（同对象 evaluate 的折叠结果）。"""
+    chips = []
+    for outcome in outcomes:
+        if outcome.score is None:
+            chips.append(
+                f'<span class="mchip skip">{_e(outcome.name)}：跳过</span>'
+            )
+        else:
+            color = {
+                "green": "#16a34a", "yellow": "#c08a2d", "red": "#dc2626",
+            }[_score_class(outcome.score)]
+            chips.append(
+                f'<span class="mchip">{_e(outcome.name)}：<b '
+                f'style="color:{color}">{outcome.score:.2f}</b></span>'
+            )
+    return f'<div class="metrics">{"".join(chips)}</div>'
+
+
+def _detail_chips(details: Sequence[ProbeDetail]) -> str:
+    chips = []
+    for detail in details:
+        cls = _score_class(detail.score)
+        chips.append(
+            f'<div class="chip"><span class="dim">{_e(detail.metric)}</span>'
+            f'<span class="sc {cls}">{detail.score:.2f}</span>'
+            f"<span>{_e(detail.reason)}</span></div>"
+        )
+    return f'<div class="attrib">{"".join(chips)}</div>' if chips else ""
+
+
+def _turn_card(turn: Turn, score: TurnScore) -> str:
+    kind = (
+        '<span class="tbadge base">记忆基底（fork 复制上下文）</span>'
+        if turn.copied
+        else '<span class="tbadge">对话轮</span>'
+    )
+    marker = (
+        f'<span class="tbadge">turn {turn.turn_marker}</span>'
+        if turn.turn_marker is not None
+        else ""
+    )
+    facts = (
+        f"{'已应答' if score.answered else '未应答'}"
+        f" · 回复 {score.reply_chars} 字"
+        + (f" · 工具 {score.tool_calls} 次"
+           f"（闭环 {score.tool_loop:.0%}）" if score.tool_calls else "")
+        + f" · 结构 {score.structure:.2f}"
+    )
+    head = (
+        f'<div class="thead"><span class="tno">T{turn.index}</span>'
+        f"{kind}{marker}"
+        f'<span class="tbadge">{_e(facts)}</span>'
+        f'<span class="tscore {_score_class(score.score)}">'
+        f"turn 分 {_score_text(score.score)}</span></div>"
+    )
+    body = (
+        f'<div class="bubble user"><div class="who">用户</div>'
+        f"{_e(_snippet(turn.user_text))}</div>"
+    )
+    for reply in turn.replies:
+        body += (
+            f'<div class="bubble agent"><div class="who">助手</div>'
+            f"{_e(_snippet(reply.text))}</div>"
+        )
+    if turn.tool_events:
+        rows = "".join(
+            f'<div class="{"ok" if event.observation_present else "missing"}">'
+            f"{_e(event.function_name)}"
+            f"({_e(', '.join(sorted(event.arguments)) or '')})"
+            f"{' → 有观测' if event.observation_present else ' → 无观测'}</div>"
+            for event in turn.tool_events
+        )
+        body += f'<div class="tools">{rows}</div>'
+    body += _detail_chips(score.details)
+    cls = "turn copied" if turn.copied else "turn"
+    return f'<div class="{cls}">{head}{body}</div>'
+
+
+def _turn_section_html(analysis: TurnAnalysis) -> str:
+    """逐轮打分节：轨迹级 chips + 每轮一张卡。"""
+    parts = ["<h3>逐轮打分（turn 切面）</h3>"]
+    if analysis.metric_outcomes:
+        parts.append(_metric_chips(analysis.metric_outcomes))
+    else:
+        parts.append(
+            '<p class="note">该套件判分器未声明 turn 指标——仅展示结构'
+            "切面（应答/工具闭环/回复长度），无归因分。</p>"
+        )
+    if not analysis.turns:
+        parts.append(_note("轨迹无用户面消息，切不出轮次"))
+        return "".join(parts)
+    parts.append(
+        '<div class="turns">'
+        + "".join(
+            _turn_card(turn, score)
+            for turn, score in zip(analysis.turns, analysis.scores)
+        )
+        + "</div>"
+    )
+    return "".join(parts)
 
 
 def _trial_html(panel: TrialPanel, window: int | None) -> str:
@@ -534,6 +721,10 @@ def _trial_html(panel: TrialPanel, window: int | None) -> str:
         dur if dur is not None else _note("无时间戳或无工具调用")
     )
 
+    # 逐轮打分（可选层）：CLI 传入了 turn 切面才渲染。
+    if panel.turn_analysis is not None:
+        parts.append(_turn_section_html(panel.turn_analysis))
+
     parts.append("</section>")
     return "".join(parts)
 
@@ -556,6 +747,10 @@ def render_trajectory_html(
         f'<h1>{_e(title)}</h1><ul class="meta">{head_meta}</ul>'
         f"{body}"
         '<footer><p>aeval 轨迹面板 · 数据全部来自 sha256 校验的密封'
-        "轨迹证据；缺失处如实标注不可用，不编造。</p></footer>"
+        "轨迹证据；缺失处如实标注不可用，不编造。turn 分 = 该轮命中"
+        "探针/锚点的判分均值（与轨迹级指标同一条判分路径）；记忆基"
+        "底轮（fork 复制上下文）不进 live 归因；未命中锚点的轮次记"
+        "「未评测」。文本为脱敏截断片段，完整原文以密封证据"
+        "（canonical_transcript）为准。</p></footer>"
         "</body></html>"
     )

@@ -336,3 +336,14 @@ async def grade(record: Any) -> Any:
             metrics=None,
         )
     return await impl.grade(record)
+
+
+def turn_metrics(task_id: str):
+    """该任务的轨迹判分 metric 对象（轨迹分析模块用）。
+
+    与 ``grade`` 用的是同一批对象（``_IMPLS``）——turn 面板的归因分
+    和轨迹级判分之间没有第二套构建路径。无锚点任务返回 None（面板
+    退化为结构切面）。
+    """
+    impl = _IMPLS.get(task_id)
+    return impl.metrics if impl is not None else None

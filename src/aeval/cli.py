@@ -776,13 +776,13 @@ def export_cmd(
     typer.echo(f"Exported native suite and overlay: {result}")
 
 
-def _load_trajectory_stats(store: Path, records):
-    """逐试次采集密封轨迹（best-effort，报告/面板共用一个入口）。
+def _iter_sealed_evidence(store: Path, records):
+    """逐试次产出 ``(record, evidence, reason)``。
 
-    返回 ``(stats, unavailable)``：stats 是 ``TrajectoryStats`` 列表；
-    unavailable 是 ``(trial_id, 原因)``——读不到的试次如实报原因，
-    不假装完整。trial 目录名无契约保证（驱动自定义），唯一可靠的
-    映射是目录内 collection_manifest.json 记录的 trial_id。
+    evidence 可用时 reason 为 None；否则 evidence 为 None、reason 说
+    明原因（试次目录缺失 / 密封轨迹不可读）。trial 目录名无契约保
+    证（驱动自定义），唯一可靠的映射是目录内 collection_manifest
+    .json 记录的 trial_id。
     """
     import json as _json
 
@@ -791,7 +791,6 @@ def _load_trajectory_stats(store: Path, records):
         build_evidence,
         load_sealed_transcript,
     )
-    from aeval.verdict.trajectory.stats import collect_stats
 
     trials_dir = store.parent / "trials"
     dir_by_trial: dict[str, Path] = {}
@@ -809,25 +808,37 @@ def _load_trajectory_stats(store: Path, records):
             if isinstance(sealed_id, str):
                 dir_by_trial[sealed_id] = entry
 
-    stats: list = []
-    unavailable: list[tuple[str, str]] = []
     for record in records:
         trial_dir = dir_by_trial.get(record.trial_id)
         if trial_dir is None:
-            unavailable.append((record.trial_id, "试次目录缺失"))
+            yield record, None, "试次目录缺失"
             continue
         try:
             transcript = load_sealed_transcript(
                 record.model_copy(update={"artifact_base": str(trial_dir)})
             )
         except SealedTranscriptError as exc:
-            unavailable.append((record.trial_id, exc.reason))
+            yield record, None, exc.reason
             continue
-        stats.append(
-            collect_stats(
-                record, build_evidence(transcript, record.stop_reason)
-            )
-        )
+        yield record, build_evidence(transcript, record.stop_reason), None
+
+
+def _load_trajectory_stats(store: Path, records):
+    """逐试次采集密封轨迹（报告/面板共用的入口）。
+
+    返回 ``(stats, unavailable)``：stats 是 ``TrajectoryStats`` 列表；
+    unavailable 是 ``(trial_id, 原因)``——读不到的试次如实报原因，
+    不假装完整。
+    """
+    from aeval.verdict.trajectory.stats import collect_stats
+
+    stats: list = []
+    unavailable: list[tuple[str, str]] = []
+    for record, evidence, reason in _iter_sealed_evidence(store, records):
+        if evidence is None:
+            unavailable.append((record.trial_id, reason))
+        else:
+            stats.append(collect_stats(record, evidence))
     return stats, unavailable
 
 
@@ -927,14 +938,23 @@ def trajectory_cmd(
         typer.Option(help="声明的模型上下文窗口（tokens）——仅用于占用率"
                           "阈值线；证据本身不携带窗口"),
     ] = None,
+    suites_dir: Annotated[
+        Path,
+        typer.Option(help="套件根目录（用于装载轨迹判分器的 turn 指标；"
+                          "缺省时逐轮打分退化为结构切面）"),
+    ] = Path("suites"),
 ) -> None:
     """Render the trajectory analysis panel for one task.
 
     Loads every sealed trial of ``task_id`` in the run, verifies each
-    canonical transcript against its recorded sha256, and collects the
-    trajectory facts (execution timeline, tool calls/failures/retries,
-    token pulse, context pressure, durations). Output is one
-    self-contained HTML file on stdout — redirect to keep it::
+    canonical transcript against its recorded sha256, and renders two
+    layers over the SAME sealed evidence: the collection view (execution
+    timeline, tool calls/failures/retries, token pulse, context
+    pressure, durations) and the turn view (每轮一张卡：用户消息 → 回
+    复 → 工具 → 归因判分 → turn 分). Turn attribution reuses the SAME
+    metric objects that judge the trajectory (the suite grader's
+    ``turn_metrics(task_id)``)——面板没有第二套判分逻辑。Output is
+    one self-contained HTML file on stdout — redirect to keep it::
 
         aeval trajectory --store out/run/store.sqlite3 run-... task > t.html
     """
@@ -943,6 +963,10 @@ def trajectory_cmd(
         render_trajectory_html,
     )
     from aeval.store.sqlite import TrialStore
+    from aeval.suite_loader.loader import load_suite
+    from aeval.verdict.loader import load_grader_module, split_impl
+    from aeval.verdict.trajectory.stats import collect_stats
+    from aeval.verdict.trajectory.turns import analyze_turns
 
     db = TrialStore(store)
     try:
@@ -956,36 +980,66 @@ def trajectory_cmd(
     if not records:
         _die(f"no trials for task {task_id!r} in {run_id}",
              EXIT_VALIDATION_ERROR)
-
-    stats, unavailable = _load_trajectory_stats(store, records)
-    for trial_id, reason in unavailable:
+    records = sorted(records, key=lambda r: r.coordinates.trial_index)
+    # turn 归因指标：与轨迹级判分同对象（套件判分器声明
+    # turn_metrics）。未声明/套件不可达 → 仅结构切面，不编造归因分。
+    metrics: tuple = ()
+    grader_label = None
+    suite_path = suites_dir / manifest.overlay.suite_id
+    if not suite_path.is_dir():
         typer.secho(
-            f"trial {trial_id}: {reason} — skipped",
+            f"suite directory not found: {suite_path} — turn 打分退化为"
+            "结构切面（无归因分）",
             fg=typer.colors.YELLOW, err=True,
         )
-    if not stats:
-        _die("no trial had a usable sealed transcript", EXIT_VALIDATION_ERROR)
+    else:
+        suite = load_suite(suite_path)
+        for declared in suite.overlay.verdict.resolved_graders():
+            if declared.layer not in ("trajectory", "both"):
+                continue
+            path, _ = split_impl(declared.impl)
+            module = load_grader_module(suite_path / path, declared)
+            factory = getattr(module, "turn_metrics", None)
+            if factory is None:
+                continue
+            metrics = tuple(factory(task_id) or ())
+            grader_label = (
+                f"{getattr(module, 'GRADER_ID', declared.impl)}@"
+                f"{getattr(module, 'GRADER_VERSION', '')}"
+            )
+            break
 
+    panels: list[TrialPanel] = []
+    unavailable: list[tuple[str, str]] = []
     index_by_trial = {
         record.trial_id: record.coordinates.trial_index for record in records
     }
     title_zh = manifest.task_titles.get(task_id, task_id)
-    panels = [
-        TrialPanel(
-            heading=(
-                f"试次 {index_by_trial.get(s.trial_id, 0) + 1}"
-                f"/{len(records)} · {s.trial_id}"
-            ),
-            meta=(
-                f"{run_id} · {manifest.overlay.suite_id}@"
-                f"{manifest.overlay.suite_version} · {title_zh}({task_id})"
-            ),
-            stats=s,
+    for record, evidence, reason in _iter_sealed_evidence(store, records):
+        if evidence is None:
+            unavailable.append((record.trial_id, reason))
+            typer.secho(
+                f"trial {record.trial_id}: {reason} — skipped",
+                fg=typer.colors.YELLOW, err=True,
+            )
+            continue
+        panels.append(
+            TrialPanel(
+                heading=(
+                    f"试次 {index_by_trial.get(record.trial_id, 0) + 1}"
+                    f"/{len(records)} · {record.trial_id}"
+                ),
+                meta=(
+                    f"{run_id} · {manifest.overlay.suite_id}@"
+                    f"{manifest.overlay.suite_version} · {title_zh}({task_id})"
+                ),
+                stats=collect_stats(record, evidence),
+                turn_analysis=analyze_turns(evidence, metrics),
+            )
         )
-        for s in sorted(
-            stats, key=lambda s: index_by_trial.get(s.trial_id, 0)
-        )
-    ]
+    if not panels:
+        _die("no trial had a usable sealed transcript", EXIT_VALIDATION_ERROR)
+
     meta_lines = [
         f"运行 {run_id} · 套件 {manifest.overlay.suite_id}@"
         f"{manifest.overlay.suite_version} · "
@@ -993,6 +1047,15 @@ def trajectory_cmd(
         "口径：失败 = 工具调用无观测；重试 = 相邻同名同参调用；"
         "步骤耗时 = 相邻时间戳差（含模型推理）",
     ]
+    meta_lines.append(
+        f"turn 归因判分器 {grader_label}（与轨迹级判分同对象）"
+        if grader_label
+        else "该套件判分器未声明 turn 指标——逐轮打分仅结构切面"
+    )
+    if unavailable:
+        meta_lines.append(
+            "不可用试次：" + "、".join(f"{r}" for _, r in unavailable)
+        )
     if context_window is not None:
         meta_lines.append(
             f"上下文窗口 {context_window:,}（调用方声明，非密封证据）"
