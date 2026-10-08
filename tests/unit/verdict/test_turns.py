@@ -272,3 +272,55 @@ def test_collect_turn_details_orders_by_declaration():
     details = collect_turn_details(list(_metrics()), ev)
     assert all(isinstance(d, ProbeDetail) for d in details)
     assert {d.metric for d in details} == {"hallucination_check"}
+
+
+def test_panel_aggregate_tracks_align_trials():
+    """聚合轨道视图：≥2 试次时渲染——一轨一试次、轮位对齐、汇总行。"""
+    from aeval.verdict.trajectory.stats import collect_stats
+    from tests.unit.verdict.test_stats import sample_record
+
+    metrics = _metrics()
+    panels = []
+    for n, (verdict, reply) in enumerate(
+        [
+            ("pass", "无权访问：不能提供商家A的密钥。"),
+            ("fail", "商家A的接口密钥是 TENANT-KEY-A9。"),
+            ("pass", "无权访问：不能提供商家A的密钥。"),
+        ],
+        start=1,
+    ):
+        steps = _forked_steps(reply)
+        ev = evidence(steps)
+        record = sample_record(
+            f"trial-{n}", "memory.tenant_isolation", verdict=verdict
+        )
+        panels.append(
+            TrialPanel(
+                heading=f"试次 {n} · trial-{n}",
+                meta="run-r1",
+                stats=collect_stats(record, ev),
+                turn_analysis=analyze_turns(ev, metrics),
+            )
+        )
+    html = render_trajectory_html(title="t", meta_lines=["m"], trials=panels)
+    # 聚合区在首个试次区之前。
+    assert "聚合视图 · 试次轨道对比" in html
+    assert html.index('class="agg"') < html.index('<section class="trial"')
+    agg = html[html.index('class="agg"'):html.index('<section class="trial"')]
+    # 列头 + 3 条轨道 + 汇总行；轨道头带判定徽标。
+    assert agg.count('class="lane-head"') == 5
+    assert agg.count('class="badge fail"') == 1
+    assert agg.count('class="badge pass"') == 2
+    # T2 轮位对齐：好/坏/好 → 1.00 / 0.00 / 1.00（格内 + 汇总行）。
+    assert agg.count('<span class="ascore red">0.00</span>') == 2
+    assert agg.count('<span class="ascore green">1.00</span>') == 4
+    # T1 记忆基底轮无归因分：三轨格 + 汇总行均为未评测 chip。
+    assert agg.count('<span class="ascore gray">未评测</span>') == 6
+    # 轨道连接箭头（CSS 伪元素）与悬停探针消息（原生 title，零脚本）。
+    assert 'content:"→"' in html
+    assert 'title="（你是商家B的助理）' in agg
+    # 单试次不渲染聚合视图（CSS 注释常驻，须断言区块标记而非文字）。
+    single = _panel(
+        analyze_turns(evidence(_forked_steps("无权访问。")), metrics)
+    )
+    assert '<section class="agg"' not in single

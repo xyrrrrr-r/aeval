@@ -1,13 +1,13 @@
 {
   "schemaVersion": 1,
-  "ok": false,
+  "ok": true,
   "command": "visual-check",
-  "status": "fail",
+  "status": "pass",
   "visualReview": "pending",
   "artifact": {
     "path": "path/to/agenteval/aeval/docs/diagrams/eval-chain.html",
-    "sha256": "f812175b703a5e834e0bef26842b13b72a138651a7f9f3e93acdceae3ab83bac",
-    "bytes": 637378
+    "sha256": "d6fa134bcb2fa5aa3c95824b7562f2633c299a1579c08699f57e05cb33290926",
+    "bytes": 638743
   },
   "state": {
     "detail": "read",
@@ -18,7 +18,7 @@
     "executable": "path/to/agenteval/.chrome-wrapper.sh"
   },
   "containment": {
-    "status": "fail",
+    "status": "pass",
     "viewports": [
       {
         "width": 1440,
@@ -27,10 +27,10 @@
         "innerWidth": 1440,
         "innerHeight": 900,
         "scrollWidth": 1440,
-        "scrollHeight": 1597,
+        "scrollHeight": 900,
         "overflowX": false,
-        "overflowY": true,
-        "ok": false,
+        "overflowY": false,
+        "ok": true,
         "resolvedTheme": "light"
       },
       {
@@ -40,10 +40,10 @@
         "innerWidth": 1600,
         "innerHeight": 1000,
         "scrollWidth": 1600,
-        "scrollHeight": 1661,
+        "scrollHeight": 1000,
         "overflowX": false,
-        "overflowY": true,
-        "ok": false,
+        "overflowY": false,
+        "ok": true,
         "resolvedTheme": "light"
       },
       {
@@ -53,10 +53,10 @@
         "innerWidth": 1920,
         "innerHeight": 1080,
         "scrollWidth": 1920,
-        "scrollHeight": 1661,
+        "scrollHeight": 1080,
         "overflowX": false,
-        "overflowY": true,
-        "ok": false,
+        "overflowY": false,
+        "ok": true,
         "resolvedTheme": "light"
       },
       {
@@ -66,10 +66,10 @@
         "innerWidth": 2048,
         "innerHeight": 1320,
         "scrollWidth": 2048,
-        "scrollHeight": 1695,
+        "scrollHeight": 1320,
         "overflowX": false,
-        "overflowY": true,
-        "ok": false,
+        "overflowY": false,
+        "ok": true,
         "resolvedTheme": "light"
       }
     ]
@@ -84,10 +84,10 @@
         "innerWidth": 1440,
         "innerHeight": 900,
         "scrollWidth": 1440,
-        "scrollHeight": 1597,
+        "scrollHeight": 900,
         "overflowX": false,
-        "overflowY": true,
-        "ok": false,
+        "overflowY": false,
+        "ok": true,
         "resolvedTheme": "light",
         "file": "eval-chain.visual-check.1440x900.light.png"
       },
@@ -98,10 +98,10 @@
         "innerWidth": 1440,
         "innerHeight": 900,
         "scrollWidth": 1440,
-        "scrollHeight": 1597,
+        "scrollHeight": 900,
         "overflowX": false,
-        "overflowY": true,
-        "ok": false,
+        "overflowY": false,
+        "ok": true,
         "resolvedTheme": "dark",
         "file": "eval-chain.visual-check.1440x900.dark.png"
       },
@@ -112,10 +112,10 @@
         "innerWidth": 2048,
         "innerHeight": 1320,
         "scrollWidth": 2048,
-        "scrollHeight": 1695,
+        "scrollHeight": 1320,
         "overflowX": false,
-        "overflowY": true,
-        "ok": false,
+        "overflowY": false,
+        "ok": true,
         "resolvedTheme": "light",
         "file": "eval-chain.visual-check.2048x1320.light.png"
       },
@@ -126,10 +126,10 @@
         "innerWidth": 2048,
         "innerHeight": 1320,
         "scrollWidth": 2048,
-        "scrollHeight": 1695,
+        "scrollHeight": 1320,
         "overflowX": false,
-        "overflowY": true,
-        "ok": false,
+        "overflowY": false,
+        "ok": true,
         "resolvedTheme": "dark",
         "file": "eval-chain.visual-check.2048x1320.dark.png"
       }

@@ -334,6 +334,29 @@ _PANEL_CSS = """
 margin:18px 0;background:#fff}
 .trial h2{margin:0 0 2px;font-size:17px}
 .trial .meta{color:#5b6470;font-size:12px;margin-bottom:10px}
+/* --- 聚合视图（试次轨道对比） --- */
+.agg{border:1px solid #d7dce3;border-radius:10px;padding:14px 16px;
+margin:18px 0;background:#fbfcfe}
+.agg h2{margin:0 0 2px;font-size:17px}
+.lane{display:flex;align-items:stretch;margin-top:8px}
+.lane-head{flex:0 0 220px;border:1px solid #dfe5ec;border-radius:8px;
+padding:8px 10px;background:#fff;font-size:13px}
+.lane-head .badge{font-size:11px;padding:1px 8px;margin-left:4px}
+.lane-flow{display:flex;flex:1;align-items:stretch}
+.acell{flex:1;margin-left:16px;position:relative;border:1px solid #dfe5ec;
+border-radius:8px;padding:6px 8px;background:#fff;font-size:12px}
+.acell::before{content:"→";position:absolute;left:-14px;top:50%;
+transform:translateY(-50%);color:#9aa3af;font-size:12px}
+.acell.head{background:#f2f5f9;font-weight:600;text-align:center}
+.acell.empty{border-style:dashed;color:#9aa3af;text-align:center}
+.acell .mini{color:#5b6470;margin-top:2px}
+.lane.plain .acell{border:none;background:none}
+.lane.plain .acell::before{content:none}
+.ascore{font-weight:700}
+.ascore.green{color:#16a34a}
+.ascore.yellow{color:#c08a2d}
+.ascore.red{color:#dc2626}
+.ascore.gray{color:#5b6470}
 .facts{display:flex;flex-wrap:wrap;gap:6px;margin:8px 0 4px}
 .fact{background:#f2f5f9;border:1px solid #dfe5ec;border-radius:999px;
 padding:3px 10px;font-size:12px;color:#26313f}
@@ -785,6 +808,128 @@ def _trial_html(panel: TrialPanel, window: int | None) -> str:
     return "".join(parts)
 
 
+def _verdict_badge(verdict: str | None) -> str:
+    """判定徽标（小号，轨道头用）。"""
+    if not verdict:
+        return ""
+    cls = {"pass": "pass", "fail": "fail"}.get(verdict, "gray")
+    zh = _VERDICT_ZH.get(verdict, verdict)
+    return f' <span class="badge {cls}">{_e(zh)}</span>'
+
+
+def _track_turn_cell(turn: "Turn", score: "TurnScore") -> str:
+    """轨道上的一个 turn 格：轮号 + turn 分 + 结构事实。"""
+    kind = "记忆基底 · " if turn.copied else ""
+    answered = "已应答" if score.answered else "未应答"
+    tip = _e(_snippet(turn.user_text, 120))
+    return (
+        f'<div class="acell" title="{tip}">'
+        f"<b>T{turn.index}</b> "
+        f'<span class="ascore {_score_class(score.score)}">'
+        f"{_score_text(score.score)}</span>"
+        f'<div class="mini">{_e(kind)}{answered} · 回复 {score.reply_chars} 字'
+        "</div></div>"
+    )
+
+
+def _aggregate_tracks_html(trials: Sequence[TrialPanel]) -> str:
+    """聚合轨道视图：一个试次一条轨道，轮位对齐成列（≥2 试次才有）。
+
+    只做排布、不派生新数字——每个格子里是各试次已算出的 turn 分与
+    结构事实，纵向对齐让「哪一轮掉了」一眼可见。记忆基底轮无归因
+    分（如实显示未评测）；悬停可见该轮探针消息（原生 title，零脚本）。
+    """
+    analyzed = [p.turn_analysis for p in trials if p.turn_analysis is not None]
+    if not analyzed:
+        return ""
+    max_turns = max(len(a.turns) for a in analyzed)
+    has_prologue = any(a.prologue for a in analyzed)
+    if max_turns == 0 and not has_prologue:
+        return ""
+
+    def columns(flow_cells: list[str]) -> str:
+        return (
+            '<div class="lane"><div class="lane-head">试次（轨道）</div>'
+            f'<div class="lane-flow">{"".join(flow_cells)}</div></div>'
+        )
+
+    # 列头：S（会话前系统消息）+ T1..Tn。
+    heads: list[str] = []
+    if has_prologue:
+        heads.append('<div class="acell head">S 会话前</div>')
+    heads += [
+        f'<div class="acell head">T{i + 1}</div>' for i in range(max_turns)
+    ]
+    header = columns(heads)
+
+    # 每试次一条轨道。
+    lanes = []
+    for panel in trials:
+        analysis = panel.turn_analysis
+        cells: list[str] = []
+        if analysis is None:
+            cells.append(
+                '<div class="acell empty">未评测——判分器未声明 turn 指标</div>'
+            )
+        else:
+            if has_prologue:
+                if analysis.prologue:
+                    n = len(analysis.prologue)
+                    copied = any(m.copied for m in analysis.prologue)
+                    label = "S1" + (f"…S{n}" if n > 1 else "")
+                    base = "记忆基底 · " if copied else ""
+                    cells.append(
+                        f'<div class="acell"><b>{_e(label)}</b> · 系统（会话前）'
+                        f'<div class="mini">{_e(base)}{n} 条</div></div>'
+                    )
+                else:
+                    cells.append('<div class="acell empty">—</div>')
+            for i in range(max_turns):
+                if i < len(analysis.turns):
+                    cells.append(
+                        _track_turn_cell(analysis.turns[i], analysis.scores[i])
+                    )
+                else:
+                    cells.append('<div class="acell empty">—</div>')
+        lanes.append(
+            f'<div class="lane"><div class="lane-head">{_e(panel.heading)}'
+            f"{_verdict_badge(panel.stats.verdict)}</div>"
+            f'<div class="lane-flow">{"".join(cells)}</div></div>'
+        )
+
+    # 汇总行：每个轮位的 turn 分序列（纯罗列，不做派生统计）。
+    foot_cells: list[str] = []
+    if has_prologue:
+        foot_cells.append('<div class="acell">—</div>')
+    for i in range(max_turns):
+        seq = []
+        for panel in trials:
+            analysis = panel.turn_analysis
+            if analysis is not None and i < len(analysis.scores):
+                value = analysis.scores[i].score
+                seq.append(
+                    f'<span class="ascore {_score_class(value)}">'
+                    f"{_score_text(value)}</span>"
+                )
+            else:
+                seq.append('<span class="ascore gray">未评测</span>')
+        foot_cells.append(
+            f'<div class="acell">{" / ".join(seq)}</div>'
+        )
+    footer = (
+        '<div class="lane plain"><div class="lane-head">turn 分（按轮位）'
+        f'</div><div class="lane-flow">{"".join(foot_cells)}</div></div>'
+    )
+
+    return (
+        '<section class="agg"><h2>聚合视图 · 试次轨道对比</h2>'
+        '<p class="legend">一个试次一条轨道，轮位纵向对齐；格内为该轮 '
+        "turn 分与结构事实（记忆基底轮无归因分，如实记未评测）；悬停"
+        "可看该轮探针消息。汇总行按轮位罗列各试次 turn 分。</p>"
+        f"{header}{''.join(lanes)}{footer}</section>"
+    )
+
+
 def render_trajectory_html(
     *,
     title: str,
@@ -794,6 +939,7 @@ def render_trajectory_html(
 ) -> str:
     """渲染整页轨迹面板（自包含 HTML，同输入同字节）。"""
     head_meta = "".join(f"<li>{_e(m)}</li>" for m in meta_lines)
+    aggregate = _aggregate_tracks_html(trials) if len(trials) > 1 else ""
     body = "".join(_trial_html(p, context_window) for p in trials)
     return (
         "<!doctype html>"
@@ -801,6 +947,7 @@ def render_trajectory_html(
         f"<title>{_e(title)}</title><style>{_CSS}{_PANEL_CSS}</style>"
         "</head><body>"
         f'<h1>{_e(title)}</h1><ul class="meta">{head_meta}</ul>'
+        f"{aggregate}"
         f"{body}"
         '<footer><p>aeval 轨迹面板 · 数据全部来自 sha256 校验的密封'
         "轨迹证据；缺失处如实标注不可用，不编造。turn 分 = 该轮命中"
