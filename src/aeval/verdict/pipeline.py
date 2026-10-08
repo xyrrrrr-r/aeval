@@ -1,4 +1,4 @@
-"""Grading pipeline (P0-7): evidence in, classified record out.
+"""Grading pipeline: evidence in, classified record out.
 
 This is the production path the plugin drives once a trial's evidence
 gate has passed: load the suite's versioned graders, grade the sealed
@@ -32,6 +32,7 @@ from aeval.contracts import (
     TrialRecord,
     VersionsBundle,
 )
+from aeval.hooks.evidence import evaluate_requirements
 from aeval.suite_models import ResolvedSuite
 from aeval.store.sqlite import StoreConflictError, TrialStore
 from aeval.verdict.base import ResolvedGrader, decide_final_verdict
@@ -147,6 +148,23 @@ def build_trial_record(
     return record
 
 
+def _note_requirement_shortfall(
+    extra: dict[str, Any] | None, unmet: list[str]
+) -> dict[str, Any]:
+    """Record which required facts were unmet, under the record's audit extra.
+
+    Merges rather than replaces: whatever the trial already recorded stays
+    readable, and the shortfall is added beside it so a reader of the sealed
+    record can see *why* the verdict is ``cannot_judge``.
+    """
+    merged: dict[str, Any] = dict(extra or {})
+    audit = merged.get("aeval")
+    audit = dict(audit) if isinstance(audit, dict) else {}
+    audit["requirement_shortfall"] = list(unmet)
+    merged["aeval"] = audit
+    return merged
+
+
 async def grade_and_record(
     *,
     suite: ResolvedSuite,
@@ -212,9 +230,27 @@ async def grade_and_record(
         raise GradingPipelineError(f"grader execution failed: {exc}") from exc
 
     progress.mark_judging_finished()
-    record.requirements = progress.snapshot()
+    # The sealed bitmap: the stage bits accumulated during the trial, finalized
+    # here (judge_finished can only be set by this pipeline, and an
+    # ``infra_error`` stop clears it again).
+    record.requirements = evaluate_requirements(
+        evidence, staged=progress.snapshot(), stop_reason=stop_reason
+    )
     record.grades = results
     record.verdict = decide_final_verdict(results)
+    # Requirement gate. A suite declares in ``verdict.requirements`` which facts
+    # must hold for its trials to be judgeable at all. An unmet one means the
+    # outcome cannot be trusted, so the trial is recorded ``cannot_judge`` — an
+    # explicit, reasoned exclusion — rather than silently counting as a pass or
+    # a failure. Grades are kept: the qualifying evidence is not thrown away,
+    # only the verdict it would have produced. ``infra_invalid`` is left alone
+    # (the run itself is soured, which the seal reports separately).
+    unmet = record.requirements.missing(tuple(suite.overlay.verdict.requirements))
+    if unmet and record.verdict != "infra_invalid":
+        record.verdict = "cannot_judge"
+        record.transcript_extra = _note_requirement_shortfall(
+            record.transcript_extra, unmet
+        )
     try:
         store.persist_trial_with_grades(record, results)
     except StoreConflictError:

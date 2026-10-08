@@ -1,10 +1,11 @@
 schema_version: 2
 id: e2e-hello
+# 0.3.0（2026-10-08）：注释清理——去掉对外不可读的内部阶段/缺陷编号与机器名。判分口径与任务集不变；因文件字节变化，本版本不与上一版同域可比。
 # 0.2.0（2026-09-30）：准入规则变更 —— 驱动能力要求收窄为任务真正需要的
 # [acp_stdio, shell]（去掉 DSH 专属的 sdk_jsonrpc），会话槽位改为显式声明。对 DSH 的
 # 被测结果没有变化，但"谁能被这个评测集接受"变了，因此版本进位：本版本的跑次
 # 不与 0.1.0 同域可比。
-version: 0.2.0
+version: 0.3.0
 # 时钟、ready 观测点与 baseline、六项 requirements、指标种类、datasets 路径
 # 约定都来自环境级基座；这里只写本套件特有的事实——包括**驱动能力要求**
 # （基座刻意不含：那是套件对 agent 的要求，不是跨套件的约定）。
@@ -22,12 +23,12 @@ driver:
   # 本套件按 dsh_session 采集证据；换 agent 家族要连同这里一起显式改。
   session_record: dsh_session
 observables:
-  # file: sources only — P0-2 made db:/screenshot:/dom: probes explicitly
+  # file: sources only — db:/screenshot:/dom: probes are explicitly
   # unsupported (fail closed); the e2e chain reads files out-of-band.
   - { name: result, type: string, source: "file:/workspace/result" }
 # 基座提供的 baseline（id: ready）断言 /workspace/ready == "true"：证明种子
 # 拷贝确实到位（环境镜像 ship 了该文件，见 environment/Dockerfile），且 probe
-# 走的是套件声明的 observable（P0-2：裸 file:/db: probe 一律 fail closed）。
+# 走的是套件声明的 observable（裸 file:/db: probe 一律 fail closed）。
 verdict:
   graders:
     default: { impl: "graders/hello_outcome.py@v1", layer: outcome }

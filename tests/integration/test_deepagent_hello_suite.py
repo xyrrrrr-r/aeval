@@ -1,4 +1,4 @@
-"""P2-5a smoke suite: the deepagent-hello pairing is real, not declared.
+"""Smoke suite: the deepagent-hello pairing is real, not declared.
 
 The suite is the "runs at all" carrier for the ACP adapter: same task shape as
 e2e-hello (write ``hello`` to /workspace/result), a driver contract deepagent

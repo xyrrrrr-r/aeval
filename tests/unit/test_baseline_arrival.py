@@ -1,6 +1,6 @@
 """Baseline arrival tests: a non-baseline copy must never score.
 
-P0-2: probes go through the REAL environment API (``await env.exec``),
+Probes go through the REAL environment API (``await env.exec``),
 missing handles/policies are failures (never silent skips), a broker
 ``allowlist`` egress is legitimate, and observed identities bind to
 the expected lock fail-closed.
@@ -216,7 +216,7 @@ async def test_clock_effective_detects_missing_handle():
 
 
 async def test_isolation_missing_handle_is_a_failure():
-    """P0-2: unverifiable isolation must block, not silently pass."""
+    """Unverifiable isolation must block, not silently pass."""
     issues = await assert_isolation_policy(None)
     assert issues and "no environment handle" in issues[0]
 
@@ -253,7 +253,7 @@ async def test_egress_allows_no_network():
 
 
 async def test_egress_accepts_broker_allowlist():
-    """P0-2 fix: a legitimate broker allowlist must NOT be misrejected
+    """A legitimate broker allowlist must NOT be misrejected
     as 'egress is not none'."""
     issues = await assert_egress_effective(
         FakeEnv(network_mode="allowlist", allowed_hosts=["broker.host"])
@@ -301,7 +301,7 @@ async def test_on_environment_started_marks_infra_invalid(tmp_path, demo_suite, 
     assert any("baseline" in r for r in state.infra_invalid_reasons)
 
 
-# --- e2b backend detection + observed identity binding (P0-2) -------
+# --- e2b backend detection + observed identity binding -------
 
 
 def test_verify_e2b_backend_missing_sdk(monkeypatch):
@@ -434,7 +434,7 @@ def test_node_matrix_minor_range_matches():
     assert not _node_in_matrix("24.19.0", ["22.19.x", "24.20.0"])
 
 
-# --- P1-2: what must be observed is declared, not hardcoded to DSH -------------
+# --- what must be observed is declared, not hardcoded to DSH -------------
 
 def test_a_non_dsh_agent_binds_without_a_node_observation(runtime_lock):
     """A python-only agent must not be gated on a Node fact it does not have."""

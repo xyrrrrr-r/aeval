@@ -1,7 +1,7 @@
 # The deepAgent adapter: deepagents-code (dcode) driven over ACP stdio.
 # Values agree with aeval/agents/deepagent/agent.py — the declaration is
-# validated against the class (a disagreement is an error). Source-backed
-# facts: docs/TESTS/DEEPAGENTS-FACTS.md.
+# validated against the class (a disagreement is an error). The facts below
+# are source-backed against the deepagents-code source tree.
 extends: _base/agent.base.yaml
 
 id: deepagent
@@ -22,14 +22,14 @@ mode: acp_stdio
 # enforced rather than refused.
 budget_enforcement: gateway_lease
 
-# The generic control stack (P2-5b): NOT the DSH flavor. dcode is started by
+# The generic control stack: NOT the DSH flavor. dcode is started by
 # Harbor's own ACP runner, so there is no plugin tree to graft — aeval uploads
 # the self-contained facade, starts it in the background and health-gates it
 # before the run proceeds. The fixed port is a shared contract
 # (contracts.FACADE_BASE_URL) the adapter points the agent at.
 control_stack: deepagent-facade
 
-# Model traffic routing (AGENT-ABSTRACTION-2 §4.1): dcode's codex-profile
+# Model traffic routing: dcode's codex-profile
 # provider posts the OpenAI Responses protocol (POST /v1/responses), so the
 # facade serves the responses endpoint (AEVAL_FACADE_PROTOCOLS=responses) and
 # the broker's upstream speaks `responses` to the provider's responses base
@@ -63,7 +63,7 @@ sandbox_home: /root/.deepagents
 # Relative to the DESCRIPTOR's directory, i.e. to Harbor's agent log directory
 # (/logs/agent, downloaded to <trial_dir>/agent/): the ACP runner writes its
 # summary at that root. There is no deepagent-home tree — declaring one made
-# every real run fail with "session_root does not exist" (example-lab, P2-5b).
+# every real run fail with "session_root does not exist" (observed on a real target host).
 session_artifact_dir: "."
 
 # The generic facade only proxies model traffic: nothing in the sandbox ever

@@ -406,7 +406,7 @@ async def test_job_end_exception_can_downgrade_a_nominal_end(owned_job):
 
 
 async def test_agent_start_on_tainted_trial_is_recorded(owned_job, monkeypatch):
-    """P0-2: the model phase starting despite infra failures must be
+    """The model phase starting despite infra failures must be
     visible in the trial record — the agent ran on a tainted baseline."""
     from aeval.hooks.context import TrialState  # noqa: F401
 
@@ -427,7 +427,7 @@ async def test_agent_start_on_tainted_trial_is_recorded(owned_job, monkeypatch):
 
 
 async def test_agent_start_with_a_started_environment_passes_the_audit(owned_job):
-    """P0-4 seam: the owner resolves the live environment at AGENT_START,
+    """The owner resolves the live environment at AGENT_START,
     so a healthy sandbox passes the baseline/policy audit instead of being
     blocked for a missing handle."""
 
@@ -479,7 +479,7 @@ class _FakeTrial:
 
 
 async def test_verification_collects_evidence_from_the_live_trial(owned_job, monkeypatch):
-    """P0-6 producer wiring: a bound trial collects real artifacts through
+    """Producer wiring: a bound trial collects real artifacts through
     the owner's live handle, and the manifest reaches the gate."""
     plugin = await attach_job_plugin(owned_job, "aeval.hooks:AevalPlugin")
     event = event_for(owned_job, "collecting")
@@ -556,7 +556,7 @@ async def _agent_start_with_neutral_audit(owned_job, monkeypatch, name):
 
 
 async def test_agent_start_bootstraps_the_control_binding(owned_job, monkeypatch):
-    """P0-4: at AGENT_START the owner deploys the token and binds control."""
+    """At AGENT_START the owner deploys the token and binds control."""
     plugin, context, event = await _agent_start_with_neutral_audit(
         owned_job, monkeypatch, "bootstrapping"
     )
@@ -589,7 +589,7 @@ async def test_agent_start_derives_control_paths_from_the_adapter(owned_job, mon
     ``trial_control_paths(..., agent=...)``, and the owner refuses a binding
     whose paths differ. Omitting the agent here fell back to the historical DSH
     defaults, so an adapter declaring different ones had its binding refused on
-    a real sandbox (example-lab: deepagent -> /root/.deepagents, deepagent-home).
+    a real sandbox (on a real target host: deepagent -> /root/.deepagents, deepagent-home).
     """
     plugin, context, event = await _agent_start_with_neutral_audit(
         owned_job, monkeypatch, "declared-paths"
@@ -646,7 +646,7 @@ class _HostDescriptorAgent:
 
     Every fact the host needs is declared here — the framework must not know
     this agent's record filename, its session root or how to read an identity
-    out of it (P1-2b adapter layer).
+    out of it (adapter layer).
     """
 
     SESSION_RECORD_OUTPUT = "agent_session_record"
@@ -858,7 +858,7 @@ async def test_bootstrap_failure_taints_the_trial(owned_job, monkeypatch):
 async def test_trial_end_grades_and_persists_when_evidence_is_verified(
     owned_job, monkeypatch
 ):
-    """D34 (real-chain finding): the plugin must run the grading pipeline
+    """Found in a live end-to-end run: the plugin must run the grading pipeline
     at trial end, or no trial reaches the store and the run can never
     seal."""
     from aeval.contracts import BundleDescriptor, EvidenceBundle

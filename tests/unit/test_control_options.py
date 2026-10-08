@@ -1,8 +1,8 @@
 """Control options: a family's knobs stay the family's, end to end.
 
 DSH probes for a bwrap/Landlock runner before it confines a shell command and
-refuses the command when the image ships neither — measured on the first M0
-pilot as "no sandbox backend is usable on this host", which left two of three
+refuses the command when the image ships neither — measured in the first pilot
+run as "no sandbox backend is usable on this host", which left two of three
 Terminal-Bench tasks unanswerable. The knob is DSH's own, so the suite declares
 it under ``driver.control_options.dsh`` (not a framework field), the dispatcher
 hands the dsh flavor exactly its own namespace, and the flavor translates it

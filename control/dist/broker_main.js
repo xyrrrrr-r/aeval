@@ -116,7 +116,7 @@ export function parseBrokerMainConfig(raw) {
         ...(limitsRaw['maxSteps'] !== undefined ? { maxSteps: positiveInt(limitsRaw['maxSteps'], 'limits.maxSteps') } : {}),
         ...(limitsRaw['maxTokens'] !== undefined ? { maxTokens: positiveInt(limitsRaw['maxTokens'], 'limits.maxTokens') } : {}),
     });
-    const upstreamRaw = record(input['upstream'], 'upstream', ['provider', 'baseUrl', 'apiKeyEnv', 'model', 'protocol', 'timeoutMs', 'reasoningEfforts']);
+    const upstreamRaw = record(input['upstream'], 'upstream', ['provider', 'baseUrl', 'apiKeyEnv', 'model', 'protocol', 'timeoutMs', 'reasoningEfforts', 'contextWindow']);
     // Optional and closed-vocabulary: absent = chat_completions, anything else
     // is a config error, never a guess.
     const protocol = upstreamRaw['protocol'] === undefined
@@ -133,6 +133,7 @@ export function parseBrokerMainConfig(raw) {
         ...(protocol !== undefined ? { protocol } : {}),
         ...(upstreamRaw['timeoutMs'] !== undefined ? { timeoutMs: positiveInt(upstreamRaw['timeoutMs'], 'upstream.timeoutMs') } : {}),
         ...(reasoningEfforts !== undefined ? { reasoningEfforts } : {}),
+        ...(upstreamRaw['contextWindow'] !== undefined ? { contextWindow: positiveInt(upstreamRaw['contextWindow'], 'upstream.contextWindow') } : {}),
     });
     // The lease pins identity.model on every dispatch and the meter counts that
     // same wire model, so the upstream route must be the pinned identity itself.
@@ -151,7 +152,7 @@ export function parseBrokerMainConfig(raw) {
             ...(raw['timeoutMs'] !== undefined ? { timeoutMs: positiveInt(raw['timeoutMs'], 'tokenCount.timeoutMs') } : {}),
         });
     }
-    // D47: per-purpose decisions for advisory model calls. Only the two known
+    // Per-purpose decisions for advisory model calls. Only the two known
     // purposes may be configured, and only with an explicit decision; the
     // resolved policy (against refuseAuxiliaryCalls, default refuse) is what
     // the lease serves and /info reports.

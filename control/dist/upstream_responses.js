@@ -405,7 +405,8 @@ export class ResponsesAdapter extends LlmAdapter {
     #key;
     #timeoutMs;
     #efforts;
-    constructor(model, url, headers, key, timeoutMs, efforts) {
+    #contextWindow;
+    constructor(model, url, headers, key, timeoutMs, efforts, contextWindow) {
         super();
         this.#model = model;
         this.#url = url;
@@ -413,18 +414,22 @@ export class ResponsesAdapter extends LlmAdapter {
         this.#key = key;
         this.#timeoutMs = timeoutMs;
         this.#efforts = Object.freeze(efforts.map((id) => Object.freeze({ id: ReasoningEffortId(id), name: id })));
+        this.#contextWindow = contextWindow;
     }
     providerInfo(provider) {
         return { id: provider, name: provider };
     }
     // Model resolution is a pure identity echo: the responses wire offers no
-    // discovery endpoint, so this never touches the network.
+    // discovery endpoint, so this never touches the network. The owner-declared
+    // context capacity is echoed alongside the identity so the harness seals it
+    // into the request/context event.
     async resolveModel(provider, model) {
         return {
             provider,
             id: model,
             name: model,
             ...(this.#efforts.length > 0 ? { reasoning: { efforts: this.#efforts } } : {}),
+            ...(this.#contextWindow !== undefined ? { context: { contextWindow: this.#contextWindow } } : {}),
         };
     }
     async *stream(options) {

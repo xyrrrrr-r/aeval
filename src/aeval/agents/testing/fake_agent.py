@@ -32,7 +32,7 @@ class FakeAtifAgent:
     ADAPTER_VERSION = "1"
     ADAPTER_MODE = "installed_cli"
     # Honest: this adapter has no gateway integration, so its model traffic is
-    # not metered. P1-3 refuses such an adapter for a suite that caps budget.
+    # not metered. Such an adapter is refused for a suite that caps budget.
     BUDGET_ENFORCEMENT = "none"
     WRITE_SURFACE = "persistent"
     SERVER_SIDE_SESSION = "forbidden"

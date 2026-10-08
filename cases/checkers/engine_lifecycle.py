@@ -115,7 +115,7 @@ def _failure_retry_fields():
 
 
 def _status_healthy():
-    # 源方案「重启恢复」在单测脚本里无法真正重启引擎：退化为其健康面
+    # 重启恢复在单测脚本里无法真正重启引擎：退化为其健康面
     # （uptime/恢复状态可观测）。
     status, text = api("GET", "/engine/status")
     if status == 404:

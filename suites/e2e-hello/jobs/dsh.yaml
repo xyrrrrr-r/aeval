@@ -2,8 +2,8 @@
 #
 # The plain job (e2e-hello.yaml) uses the `nop` agent for suite-shape
 # validation; this one is the end-to-end variant used by the environment
-# verification. Paths are the ones verified on example-lab (openEuler 24.03
-# SP1 aarch64) and must be adapted to the deployment.
+# verification. Paths are the ones verified on a real target host (openEuler
+# 24.03 SP1 aarch64) and must be adapted to the deployment.
 job_name: e2e-hello-dsh
 n_attempts: 1
 n_concurrent_trials: 1

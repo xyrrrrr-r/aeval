@@ -1,4 +1,4 @@
-"""Reliability and cost metrics (plan §6): denominator discipline first.
+"""Reliability and cost metrics: denominator discipline first.
 
 valid_trials excludes unfinalized records (verdict=None), infra_invalid,
 baseline failures, claim mismatches and cannot_judge — an exclusion
@@ -36,7 +36,7 @@ def _excluded_reasons(record: TrialRecord) -> list[str]:
     for reason in (
         # A record without a final verdict was never finally classified
         # (grading incomplete, missing trial, crashed pipeline): it must
-        # not silently count as a judged sample (P0-7).
+        # not silently count as a judged sample.
         "unfinalized" if record.verdict is None else None,
         "infra_invalid" if record.stop_reason == "infra_error" else None,
         "baseline_failed" if not record.baseline_ok else None,
@@ -72,7 +72,7 @@ def exclusion_summary(trials: Iterable[TrialRecord]) -> ExclusionSummary:
 
 
 def pass_pow_k(passes: int, total: int, k: int) -> float:
-    """pass^k: probability that ALL k samples pass (plan §8.5).
+    """pass^k: probability that ALL k samples pass.
 
     Unbiased estimator over the hypergeometric combination count:
     C(passes, k) / C(total, k). k > passes ⇒ 0; k > total is a caller

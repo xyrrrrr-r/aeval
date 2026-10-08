@@ -1,4 +1,4 @@
-"""Grader protocol and verdict semantics (plan §5).
+"""Grader protocol and verdict semantics.
 
 Denominator discipline:
 

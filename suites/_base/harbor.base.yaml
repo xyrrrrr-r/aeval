@@ -9,9 +9,11 @@
 # `remove.require` 打补丁。需要能力的套件在自己 suite.yaml 里显式声明。
 #
 # 不在这里放的东西（有意为之）：
-#   * Harbor 的事实 —— 环境镜像、attempts/k、并发、重试、timeout、budget、
+#   * Harbor 的事实 —— 环境镜像、attempts/k、并发、重试、timeout、
 #     egress 等一律留在 Harbor 的 task/job 文件里。基座与套件一样会被
 #     `check_no_harbor_overlap` 检查，基座不能成为复述 Harbor 事实的后门。
+#     （花费上限 `budget` 不在其中：Harbor 的 job 配置没有可让的花费字段，
+#     它是评测事实，写在套件自己的 suite.yaml 里。）
 #   * 身份 —— id / version / harbor.job 禁止出现在基座里，每个套件自己声明，
 #     因为它们决定"跑的是哪一个套件"。
 #   * provenance —— 默认不继承：套件必须自己声明来源，或显式写

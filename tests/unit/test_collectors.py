@@ -1,4 +1,4 @@
-"""P0-6 collector producer tests.
+"""Collector producer tests.
 
 The producers are the trustworthy source behind the hard gate: every
 output lands at its FIXED path, atomically, with its execution status
@@ -71,7 +71,7 @@ class _FakeTranscript:
 def test_the_session_record_lands_in_the_declared_flavor_slot(tmp_path):
     """A non-DSH adapter's record must go to ITS slot.
 
-    example-lab: the host-side read of the ACP record succeeded, but the producer
+    On a real target host: the host-side read of the ACP record succeeded, but the producer
     wrote the historical ``dsh_session`` slot, so the trial was refused for
     "collect outcomes missing for required outputs: ['agent_session_record']".
     """
@@ -161,7 +161,7 @@ async def test_a_declared_flavor_is_what_the_collect_plan_collects(
     """The collect plan follows the suite's declared flavor end to end.
 
     The producer honors the flavor and ``collect_trial_evidence`` passes the
-    suite's declaration into it. example-lab found the two halves disagreeing only on
+    suite's declaration into it. A real target host revealed the two halves disagreeing only on
     a real trial: the record was read host-side, landed in the DSH slot, and the
     trial was refused for a missing required output.
     """

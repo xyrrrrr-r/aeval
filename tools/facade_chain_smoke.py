@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Pre-lab end-to-end check of the metered facade chain (P2-5b ⑤).
+"""Pre-lab end-to-end check of the metered facade chain.
 
 What it proves, with no external credentials and no e2b:
 
@@ -11,7 +11,7 @@ against the PRODUCTION code paths: the broker starts through
 start, health gate), and the lock's recorded facade digest is verified before
 anything is uploaded.
 
-TWO chains run (AGENT-ABSTRACTION-2 §4.1), each against its own broker and
+TWO chains run, each against its own broker and
 facade deployment:
 
 - the chat arm: an agent declaring ``openai_chat``; the facade serves
@@ -506,7 +506,7 @@ async def _responses_chain(
     """The responses arm, end to end through the same production paths.
 
     A second broker whose upstream speaks the responses wire (protocol
-    'responses' — the DeepSeek-shaped upstream of AGENT-ABSTRACTION-2 §4.4),
+    'responses' — the DeepSeek-shaped upstream),
     deployed against by an agent declaring ``openai_responses`` so the facade
     serves ``/v1/responses`` only. Everything else — lock coverage, tar
     upload, detached start, health gate, budget refusal — is the same code

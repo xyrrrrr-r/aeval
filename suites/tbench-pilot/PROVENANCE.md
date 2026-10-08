@@ -72,7 +72,7 @@ editing the vendored tasks by hand.
    file to be (re)written on EVERY code path. Upstream's script
    cannot: `setup-uv-pytest.sh` is sourced and turns on errexit, so
    a failing `run-uv-pytest.sh` exits the script before the reward
-   branch. Measured on the first M0 pilot — the three failed tasks
+   branch. Measured in the first pilot run — the three failed tasks
    produced no reward, Harbor raised `RewardFileNotFoundError`
    instead of recording reward 0, and those trials were excluded as
    unjudgeable for a reason unrelated to the agent. The vendored

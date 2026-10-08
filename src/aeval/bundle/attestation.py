@@ -1,4 +1,4 @@
-"""Test-result attestation and bundle recompute (plan §6)."""
+"""Test-result attestation and bundle recompute."""
 
 from __future__ import annotations
 
@@ -28,7 +28,7 @@ def create_test_result_attestation(run_dir: Path) -> str:
 
     The attestation is a plain content manifest with a timestamp —
     verifiable by anyone with the bundle, no keys required (integrity,
-    not authenticity, is the P0 goal; authenticity rides on the run
+    not authenticity, is the goal; authenticity rides on the run
     manifest's recorded digests).
     """
     run_dir = Path(run_dir)
@@ -84,7 +84,7 @@ def compare_manifests(left: RunManifest, right: RunManifest) -> ComparabilityRep
 
     lock/environment/budget/grader/plugin/overlay differences each
     block comparison — scores from incomparable runs must never be
-    averaged or trended together (plan §8.7).
+    averaged or trended together.
     """
     report = ComparabilityReport()
 
@@ -169,14 +169,14 @@ def _entry_failures(bundle_dir: Path, entry: dict[str, Any]) -> list[str]:
 
 
 def recompute_bundle(bundle_dir: Path, *, verify_signature: bool = True) -> RecomputeReport:
-    """Independently verify a sealed bundle (plan §6, P0-8 strict).
+    """Independently verify a sealed bundle (strict).
 
     Steps: seal integrity → attestation presence and completeness →
     per-entry containment/size/digest → required and manifest-referenced
     files → unattested-file detection. Recompute NEVER re-runs agents
     or collectors; it verifies the sealed artifact set.
 
-    Strictness (P0-8): a missing or empty attestation, a deleted
+    Strictness: a missing or empty attestation, a deleted
     manifest entry, a missing required file, an unattested file, a
     size/digest mismatch, or a path escape each FAIL the recompute —
     none of them downgrade to a warning.
@@ -246,7 +246,10 @@ def recompute_bundle(bundle_dir: Path, *, verify_signature: bool = True) -> Reco
             if actual != config_digest:
                 problems.append("harbor-job.json digest differs from the manifest")
     elif verify_signature:
-        report["note"] = "manifest carries no config_file_sha256 (pre-P0-8 manifest)"
+        report["note"] = (
+            "manifest carries no config_file_sha256 "
+            "(bundle written before job-config pinning)"
+        )
 
     lock_digest = manifest.get("runtime_lock_digest")
     lock_path = bundle_dir / "runtime_lock.json"

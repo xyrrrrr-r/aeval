@@ -4,8 +4,8 @@
 （`dsh-eval-control`）。任何测试集、任何 harness 跑在同一套 e2b 上，都受益于这里的修复；
 所以它单独存放，而不是寄生在某个 suite 的 `tools/` 下。
 
-- 故障机理、证据、验证记录与残留风险：[docs/TESTS/E2B-CONTROL-PLANE-HARDENING.md](../../docs/TESTS/E2B-CONTROL-PLANE-HARDENING.md)
-- 现场验收轮与影响面：[docs/TESTS/TBENCH-M0-PILOT.md](../../docs/TESTS/TBENCH-M0-PILOT.md) §11
+- 故障机理、证据、残留风险与验证记录：内部运维记录（不随发行包分发）
+- 现场验收过程与影响面：内部运维记录（不随发行包分发）
 
 ## 一句话机理
 
@@ -83,7 +83,7 @@ ssh <host> '/opt/e2b-hardening/install-e2b-hardening.sh'
 - 仓库是本目录的**部署源**；主机上 `/opt/e2b-hardening/` 是**自包含副本**（开机自举与自愈都基于它），
   `/usr/local/bin/` 是被 systemd 调用的**运行副本**。
 - 改脚本 = 改仓库 → `rsync` 到 `/opt/e2b-hardening/` → 跑安装脚本（或等 watchdog 自动发现漂移）。
-- 基线校验：`sha256 e2b-leak-guard.sh = 907a02ac741bc76731f20771947aa9f63fb678bc409ca7b1a9c42dbf229d4654`（2026-09-29；改动护栏后请同步更新此处与加固文档 §4.1）
+- 基线校验：`sha256 e2b-leak-guard.sh = 907a02ac741bc76731f20771947aa9f63fb678bc409ca7b1a9c42dbf229d4654`（2026-09-29；改动护栏后请同步更新此处与内部运维记录的对应记录）
 - 安装脚本自身也会核对运行副本与部署源的哈希/内容，不一致会明确报告。
 
 ## 安全边界（为什么它敢自动动手）

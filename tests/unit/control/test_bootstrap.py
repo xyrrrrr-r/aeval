@@ -1,4 +1,4 @@
-"""Sandbox control bootstrap tests (P0-4 offline half)."""
+"""Sandbox control bootstrap tests (offline half)."""
 
 from __future__ import annotations
 
@@ -285,7 +285,7 @@ def test_control_config_mirrors_the_lease_limits(runtime_lock):
 
 
 def test_the_neutral_config_carries_no_flavor_fields():
-    """G7: an agent that declares no stack (or a facade flavor) must not
+    """An agent that declares no stack (or a facade flavor) must not
     carry the DSH plugin's fields — the deepagent arm's config used to drag
     sessionRoot/bundlePath around with nothing consuming them."""
     config = compose_control_config(
@@ -494,7 +494,7 @@ async def test_deploy_control_stack_requires_a_minted_session(tmp_path):
 
 
 def test_control_config_mirrors_the_auxiliary_policy(runtime_lock):
-    """D47: an allowed purpose is dispatched and ledgered, so the control
+    """An allowed purpose is dispatched and ledgered, so the control
     config must mirror the broker's served policy or the sandbox adapter
     fails the lease identity check at /info."""
     paths = TrialPaths(
@@ -520,7 +520,7 @@ def test_control_config_mirrors_the_auxiliary_policy(runtime_lock):
     assert mirrored["configDigest"] != bare["configDigest"]
 
 
-# --- P2-4: the control stack is deployed only where it is declared -------------
+# --- the control stack is deployed only where it is declared -------------
 
 class _StackAgent:
     """Declares the dsh stack AND satisfies the flavor's interface needs."""

@@ -134,7 +134,7 @@ def check_contract(adapter: type) -> ConformanceCheck:
 def check_model_routing(adapter: type) -> ConformanceCheck:
     """Which wire the agent speaks, and whether the deployment can serve it.
 
-    The silent failure this guards (AGENT-ABSTRACTION-2 §4.5) is the one the
+    The silent failure this guards is the one the
     budget columns would still call metered: an agent that speaks an OpenAI
     wire with no translating stack talks straight to the vendor — metered in
     the manifest, unmetered in reality. The mirror case is equally quiet: a
@@ -371,7 +371,7 @@ def run_conformance_for(
     if declaration_path is not None:
         # The declaration IS the adapter's description: resolve the class
         # through it, so a declaration-driven base is judged as the complete
-        # per-agent class it materializes into (G11), not as the bare base.
+        # per-agent class it materializes into, not as the bare base.
         from aeval.agents.declaration import resolve_agent_declaration
 
         resolved = resolve_agent_declaration(

@@ -1,4 +1,4 @@
-"""Control-artifact discovery: the one resolution point (G8).
+"""Control-artifact discovery: the one resolution point.
 
 Both historical call sites (facade dist, DSH session reader) now build their
 candidate lists here; these tests pin the shared discipline itself so a new

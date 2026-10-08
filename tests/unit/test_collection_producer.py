@@ -1,4 +1,4 @@
-"""P0-6 real producer tests: collection driven against a live trial.
+"""Real producer tests: collection driven against a live trial.
 
 The producers themselves are covered in test_collectors.py; this file
 covers the WIRING — what gets collected, from where, and what happens

@@ -16,7 +16,7 @@ so grading never re-reads the sandbox. Three outcomes:
   produce a decidable reward: status ``cannot_judge``. This is
   deliberately NOT a failure score: a verifier that never ran is an
   infrastructure fact, and folding it into "the agent failed" would
-  fabricate an outcome. The M0 acceptance requires ``cannot_judge=0``
+  fabricate an outcome. The pilot acceptance requires ``cannot_judge=0``
   for exactly this reason — it makes a missing verifier impossible to
   hide behind a plausible-looking zero.
 

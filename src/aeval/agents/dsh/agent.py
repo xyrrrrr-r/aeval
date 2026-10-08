@@ -258,7 +258,7 @@ def build_headless_command(
 def session_reader_candidates() -> list[Path]:
     """Built readers to try when the operator has not named one.
 
-    The dsh flavor's control artifact (G8): ``dsh-eval-control`` is a sibling
+    The dsh flavor's control artifact: ``dsh-eval-control`` is a sibling
     checkout in the development layout and an npm dependency in an installed
     one; both are probed, in that order. The search discipline itself lives in
     ``aeval.control.artifacts``, shared with every other control artifact —
@@ -339,7 +339,7 @@ class DshAgent(BaseInstalledAgent):
     # what stops the framework from deploying it into a second agent.
     CONTROL_STACK = "dsh"
 
-    # Model traffic routing (AGENT-ABSTRACTION-2 §4.1): the control stack's
+    # Model traffic routing: the control stack's
     # transport speaks the broker wire (aeval-model-broker/3) natively, so no
     # facade is deployed for this agent and no facade env is injected.
     MODEL_ROUTING = {"agent_protocol": "gateway_native"}
@@ -358,7 +358,7 @@ class DshAgent(BaseInstalledAgent):
     # the synced session root — the historical slot, byte-identical path.
     SESSION_RECORD_OUTPUT = "dsh_session"
     # The record's fixed path inside the trial dir — an agent fact the
-    # framework used to hardcode (AGENT-ABSTRACTION-2 G10). The declaration
+    # framework used to hardcode. The declaration
     # (agents/dsh.yaml ``artifacts:``) mirrors this value and the two are
     # cross-checked, so the collector and the onboarding guide can never
     # disagree about where the record lands.
@@ -377,7 +377,7 @@ class DshAgent(BaseInstalledAgent):
     ADAPTER_VERSION = "1"
     ADAPTER_MODE = "acp_stdio"
     # Availability, not a per-run guarantee: a given run can still be downgraded
-    # to ``partial`` at grading time (e.g. an untrusted token counter, D48).
+    # to ``partial`` at grading time (e.g. an untrusted token counter).
     TRANSCRIPT_CAPABILITY = TranscriptCapability(
         source="native_session_via_bridge",
         reader="dsh-official-session-reader",
@@ -385,7 +385,7 @@ class DshAgent(BaseInstalledAgent):
         fields_available={"events": "ok", "token_usage": "ok"},
     )
     # Model traffic goes through the aeval gateway lease, so budget enforcement
-    # is a real measurement rather than a wall-clock kill (D47 accounting).
+    # is a real measurement rather than a wall-clock kill.
     BUDGET_ENFORCEMENT = "gateway_lease"
     WRITE_SURFACE = "ephemeral_overlay"
 
@@ -422,7 +422,7 @@ class DshAgent(BaseInstalledAgent):
         # The task workspace the run must use. DSH records a session's
         # working directory and refuses to resume it elsewhere, so the
         # owner mints the session and starts the run in the SAME cwd
-        # (found on the real chain: "session was recorded in /workspace,
+        # (seen on a real run: "session was recorded in /workspace,
         # not /home/user").
         self._workspace_dir_value = workspace_dir
         self._session_reader = Path(session_reader) if session_reader else None
@@ -526,7 +526,7 @@ class DshAgent(BaseInstalledAgent):
     def pin_session(self, session_id: str) -> None:
         """Adopt the owner-assigned session identity for the next run.
 
-        ``--session-id`` resumes an EXISTING session (D15), so the owner
+        ``--session-id`` resumes an EXISTING session, so the owner
         mints that session first and pins it here; the run then adopts
         the trial's own identity instead of minting an unrelated one,
         which is also what the control plugin's identity injection is
@@ -569,7 +569,7 @@ class DshAgent(BaseInstalledAgent):
         silently grading a different agent.
         """
         locked = self._locked_version()
-        # Environment verification (example-lab): the DSH dependency tree is
+        # Environment verification on the real target host: the DSH dependency tree is
         # ~502 MB while the e2b sandbox root filesystem can be as small as
         # 737 MB total (~268 MB free), so the default global install fails
         # with ENOSPC. An operator can point the install prefix and the npm
@@ -730,7 +730,7 @@ class DshAgent(BaseInstalledAgent):
         return self._transcript
 
     def _verify_download_complete(self, source_root: Path) -> None:
-        """The synced session must be the official layout, complete (P0-5).
+        """The synced session must be the official layout, complete.
 
         A partially synced or absent session directory is a download
         failure: reading through it would silently grade a truncated
@@ -763,7 +763,7 @@ class DshAgent(BaseInstalledAgent):
         ``_populate_agent_context`` skips otherwise) — which is exactly
         why ``run()`` must NOT write ``context.metadata``: doing so made
         the context non-empty and silently skipped this backfill
-        (P0-5 fix, the reader callback was never invoked).
+        (the reader callback was never invoked).
 
         Numbers come from the durable session, never from the run stream, so
         a claim the agent cannot support cannot inflate the recorded cost.

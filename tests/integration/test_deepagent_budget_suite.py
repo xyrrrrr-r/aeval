@@ -1,4 +1,4 @@
-"""P2-5b budget suite: the metered acceptance carrier.
+"""Budget suite: the metered acceptance carrier.
 
 ``deepagent-hello`` proves the chain runs; this suite proves the chain is
 *accountable* — it declares spend caps, and the adapter now declares
@@ -59,9 +59,9 @@ def test_the_suite_declares_real_caps_at_the_gateway_lease(suite):
 
 
 def test_the_capped_suite_is_now_allowed_for_the_leased_adapter(suite):
-    """The P1-3 gate's refusal flipped because the adapter earned the claim.
+    """The spend-cap gate's refusal flipped because the adapter earned the claim.
 
-    Before P2-5b this same call was a violation (deepagent could not be
+    Before this, the same call was a violation (deepagent could not be
     metered); with the facade stack declared it is allowed — and the run-level
     enforcement point says where the spend is actually stopped.
     """

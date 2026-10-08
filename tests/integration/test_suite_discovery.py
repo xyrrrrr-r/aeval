@@ -1,4 +1,4 @@
-"""Suite discovery integration tests (plan §7 row 2): root-to-report path."""
+"""Suite discovery integration tests: root-to-report path."""
 
 from __future__ import annotations
 

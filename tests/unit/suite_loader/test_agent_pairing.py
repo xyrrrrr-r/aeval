@@ -1,4 +1,4 @@
-"""P2-3: a job describes the task arm — which agent drives it is a declaration.
+"""A job describes the task arm — which agent drives it is a declaration.
 
 The matrix of job files per pairing is what makes a second agent expensive: every
 new agent multiplies the job files. Composing the agent entry from its

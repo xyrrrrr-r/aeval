@@ -1,4 +1,4 @@
-"""Content-addressed artifact store (plan §6).
+"""Content-addressed artifact store.
 
 Blobs are stored by sha256 under ``objects/<aa>/<full-hash>`` — the
 same blob is stored exactly once, and ``get_verified`` re-hashes on

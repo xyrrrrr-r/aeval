@@ -9,7 +9,7 @@ import { buildUpstreamRequestBody, createUpstreamAdapter, type UpstreamAdapterOp
 
 /**
  * Offline acceptance for the responses-wire upstream adapter
- * (AGENT-ABSTRACTION-2-PLAN.md §4.4): the body mapping, the semantic-SSE
+ * — the body mapping, the semantic-SSE
  * reader (payload-typed AND `event:`-line-typed framings), usage/finish
  * mapping, the fail-closed refusals (no `stop` on this wire, no terminal
  * event), and the protocol dispatch in createUpstreamAdapter + the provider

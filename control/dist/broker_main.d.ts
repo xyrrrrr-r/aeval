@@ -35,6 +35,12 @@ export interface BrokerMainConfig {
         readonly protocol?: UpstreamProtocol;
         readonly timeoutMs?: number;
         readonly reasoningEfforts?: readonly string[];
+        /**
+         * Provider-owned context capacity (combined request + response tokens) the
+         * owner declares for the pinned route; echoed by ``resolveModel`` so the
+         * harness seals it into the request/context event. Absent = unadvertised.
+         */
+        readonly contextWindow?: number;
     };
     readonly tokenCount?: {
         readonly endpoint?: string;

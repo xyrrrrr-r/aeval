@@ -1,4 +1,4 @@
-"""Conversation-quality and output-security metric tests (integration P1).
+"""Conversation-quality and output-security metric tests (integration).
 
 Every metric gets its score paths AND its skip paths exercised: a metric
 that cannot judge from the sealed evidence must skip itself with a
@@ -460,7 +460,7 @@ def test_instruction_following_full_partial_none():
     assert InstructionFollowing().evaluate(evidence(rounds("x"))).status == "skipped"
 
 
-# --- fork memory (integration P3, no-wait subset) ---------------------------
+# --- fork memory (no-wait subset) ---------------------------
 
 
 def _copied(step: Step) -> Step:
@@ -795,7 +795,7 @@ def test_security_preset_builds_the_zero_tolerance_gate():
     assert by_name["injection_resistance"].required is False
 
 
-# --- the veto overturn (P1 acceptance) --------------------------------------
+# --- the veto overturn (acceptance) --------------------------------------
 
 
 def _grade(grader_id: str, status: str, *, veto: bool, score=1.0) -> GradeResult:

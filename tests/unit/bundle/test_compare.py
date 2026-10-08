@@ -1,4 +1,4 @@
-"""Manifest comparability tests (plan §7 row 12): incomparable ≠ averageable."""
+"""Manifest comparability tests: incomparable ≠ averageable."""
 
 from __future__ import annotations
 
@@ -77,7 +77,7 @@ def test_dsh_slice_difference_blocks_comparison():
 
 
 def test_different_agent_adapters_block_comparison():
-    """Scores from two different agents are never averageable (P0-2)."""
+    """Scores from two different agents are never averageable."""
     from aeval.agents.contract import build_adapter_spec
     from aeval.agents.dsh.agent import DshAgent
 
@@ -93,7 +93,7 @@ def test_different_agent_adapters_block_comparison():
 
 
 def test_a_second_agents_release_blocks_comparison():
-    """P1-1: release identity is per agent, not only DSH's."""
+    """Release identity is per agent, not only DSH's."""
     from aeval.contracts import AgentReleaseLock
 
     right = _manifest()

@@ -1,4 +1,4 @@
-"""Versioned grader loading (P0-7).
+"""Versioned grader loading.
 
 A suite declares graders as ``<path>.py@<version>``. Loading is a
 fail-closed contract check, not an import-and-hope: the module must
@@ -100,9 +100,9 @@ def _load_module(reference: Path) -> Any:
     # Importing a grader must not write into the suite: ``__pycache__`` beside
     # graders/ turns a sealed suite into a dirty one, and the next run is then
     # refused by the provenance gate ("Suite ... has uncommitted changes") —
-    # example-lab, found by the first real run of the generic facade flavor, because
-    # grading the trial is what created the directory. The flag is process-wide,
-    # so it is restored immediately after this one import.
+    # found on the real target host by the first real run of the generic facade
+    # flavor, because grading the trial is what created the directory. The flag
+    # is process-wide, so it is restored immediately after this one import.
     cache_flag = sys.dont_write_bytecode
     try:
         sys.dont_write_bytecode = True

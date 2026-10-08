@@ -1,12 +1,12 @@
 """Core modules must not import concrete agent adapters (ratchet, G5/G6).
 
-The agent layer's whole point (AGENT-ABSTRACTION-2-PLAN.md §6 red line I3) is
+The agent layer's whole point is
 that the framework core stays agent-agnostic: behavior differences are
 declarations the core reads, never ``if agent == "…"`` branches and never a
 direct dependency on one adapter's module. A core import of a concrete adapter
 is how the FIRST agent quietly becomes a hardcoded default again.
 
-The two historical violations are GONE (plan stage 2.2, 2026-09-30):
+The two historical violations are GONE:
 
 * ``control/bootstrap.py`` used to import ``SESSIONS_DIRNAME`` from the DSH
   adapter — the session mint now lives in the dsh flavor
@@ -52,7 +52,7 @@ BANNED_ADAPTER_PACKAGES = (
     "aeval.agents.openai_acp",
 )
 
-#: Known core→adapter imports. EMPTIED by plan stage 2.2 (2026-09-30): it must
+#: Known core→adapter imports. It is EMPTY and it must
 #: stay empty — an entry is ``"<importing module> -> <banned module>"`` and the
 #: set must match reality exactly in BOTH directions (see the assertions).
 KNOWN_DEBT: frozenset[str] = frozenset()
@@ -105,8 +105,7 @@ def test_core_does_not_import_concrete_adapters():
     added = sorted(actual - KNOWN_DEBT)
     assert not added, (
         "new core→adapter import(s) — the framework core must stay "
-        "agent-agnostic (declare the behavior instead, "
-        "AGENT-ABSTRACTION-2-PLAN.md §6 I3):\n  " + "\n  ".join(added)
+        "agent-agnostic (declare the behavior instead):\n  " + "\n  ".join(added)
     )
 
 
@@ -115,13 +114,13 @@ def test_known_debt_is_still_present():
     stale = sorted(KNOWN_DEBT - actual)
     assert not stale, (
         "a listed core→adapter import is gone — remove it from KNOWN_DEBT so "
-        "the ratchet keeps shrinking (AGENT-ABSTRACTION-2-PLAN.md stage 2.2):\n  "
+        "the ratchet keeps shrinking:\n  "
         + "\n  ".join(stale)
     )
 
 
 def test_the_flavor_registry_is_the_extension_point():
-    """Stage 2.1: a new control flavor registers itself, core stays untouched.
+    """A new control flavor registers itself, core stays untouched.
 
     Registering a fake flavor and deploying a fake agent that declares it must
     reach the fake deploy with the uniform kwargs — no core edit, no
@@ -236,7 +235,7 @@ def test_an_unregistered_stack_is_refused_not_skipped():
         raise AssertionError("an unregistered stack must be refused")
 
 
-# ── the literal ratchet (agent-neutrality cleanup, red line I3) ─────────────
+# ── the literal ratchet ─────────────────────────────────────────────────────
 #
 # Imports are half the coupling surface; the other half is name-keyed
 # behavior: a core module branching on a flavor id, defaulting to a slot
@@ -354,8 +353,8 @@ def test_core_names_no_concrete_agent():
     added = sorted(actual - KNOWN_RETENTION)
     assert not added, (
         "new agent-flavored literal(s) in core — declare the behavior "
-        "(a capability, a slot, a hook) instead of naming the agent "
-        "(AGENT-ABSTRACTION-2-PLAN.md §6 I3), or justify the retention in "
+        "(a capability, a slot, a hook) instead of naming the agent, "
+        "or justify the retention in "
         "KNOWN_RETENTION:\n  " + "\n  ".join(added)
     )
 

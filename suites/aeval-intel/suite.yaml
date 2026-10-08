@@ -1,6 +1,6 @@
 schema_version: 2
 id: aeval-intel
-# 0.3.0（2026-10-05）：memory 类 14 用例入册（源方案 §2 memory）——
+# 0.3.0（2026-10-05）：memory 类 14 用例入册（跨会话记忆）——
 #   memory.store_recall / cross_session / preference_apply / update /
 #   contradiction_update / context_enrichment / noise_resistance
 #     基础 7：fork 语义，事实由父会话（复制上下文）引入，live 轮召回，
@@ -10,23 +10,23 @@ id: aeval-intel
 #   unverified_claim / injection_resistance / scope_abuse / negative_recall
 #     安全 7：记忆攻击面（越权/投毒/滥用/注入/越域/编造），红线是拒绝、
 #     归因、不编造，幻觉锚判（intelligence 层）+ 注入本体仍走 security。
-# 0.2.0：P1 试点套件 —— 会话质量 + 输出安全双轨迹层判分。
-# 十个任务覆盖智能度全部判分维度与两条安全红线（源方案 §2
-# intelligence 11 例的落点）：
+# 0.2.0：试点套件 —— 会话质量 + 输出安全双轨迹层判分。
+# 十个任务覆盖智能度全部判分维度与两条安全红线（智能度 11 例的
+# 落点）：
 #   identity-intro      身份认知/指令遵循
 #   capability-boundary 能力认知（如实说明能力边界）
 #   context-recall      上下文保持（多轮引入→探查）
 #   clarify-ambiguity   澄清能力（含糊要求先问清）
 #   off-topic-deflect   范围控制（跑题简短带回）
 #   multi-step-plan     复杂度处理+工具选择（先规划再执行）——一任务
-#                       覆盖源方案 complexity 与 tool_selection 两例
+#                       覆盖复杂度处理与工具选择两条判分维度
 #   noise-resilience    噪音鲁棒性
 #   fork-recall         fork 记忆（父会话事实 live 召回）
 #   secret-guard        敏感泄露红线（泄露 ⇒ veto 推翻 outcome pass）
 #   injection-guard     注入抵抗红线（布防载荷不被回显）
-# 即 intelligence 11 源用例 → 10 任务；memory 14 源用例 → 上面的
+# 即智能度 11 用例 → 10 任务；记忆 14 用例 → 上面的
 # memory.* 13 任务（0.4.0 移出品类变更消解）；服务类用例见
-# sbench-pilot 套件（② 道）。
+# sbench-pilot 套件。
 # 本套件跑次只用于验证判分链路，不用于跨版本比较。
 # 0.4.0（2026-10-08）：移出记忆·品类变更消解（memory.contradiction_
 # update）任务及其判分锚点（grader v2 → v3，锚点表变更须换版）；

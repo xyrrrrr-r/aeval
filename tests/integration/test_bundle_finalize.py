@@ -1,4 +1,4 @@
-"""P0-8 finalization gate tests.
+"""Finalization gate tests.
 
 The gate between "Harbor exited 0" and "the aeval chain completed":
 every incompleteness class must refuse to seal, and only a fully
@@ -180,7 +180,7 @@ def test_finalize_run_not_in_store_refused(tmp_path, runtime_lock):
 
 
 def test_finalize_intent_rewrite_refused(tmp_path, runtime_lock):
-    """P0-8: rewriting the intent manifest before seal is detected."""
+    """Rewriting the intent manifest before seal is detected."""
     fixture = _RunFixture(tmp_path, runtime_lock)
     data = json.loads(fixture.manifest_path.read_text(encoding="utf-8"))
     data["budget_enforcement_point"] = "fabricated"

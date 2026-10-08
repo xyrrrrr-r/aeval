@@ -1,4 +1,4 @@
-"""The control-stack flavor registry (AGENT-ABSTRACTION-2, G7/G9).
+"""The control-stack flavor registry.
 
 A control flavor owns ONE deployment mechanism: how its in-sandbox stack is
 placed, and which adapter interface it needs. The registry is the extension
@@ -64,7 +64,7 @@ class ControlFlavor:
     deployment needs — checked before anything is uploaded, so an adapter that
     cannot accept the stack is refused with the missing name, not discovered
     mid-deploy. ``config_fields`` is the flavor's half of the composed control
-    config (G7): the neutral identity is every flavor's contract with the
+    config: the neutral identity is every flavor's contract with the
     broker lease, and whatever a flavor's plugin additionally consumes — the
     DSH plugin's session/bundle paths and routing policy — is declared here
     by the flavor, never hardcoded in the composer.

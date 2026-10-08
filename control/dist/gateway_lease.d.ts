@@ -81,7 +81,7 @@ export declare function readJobToken(path: string): string;
  * without dispatching, so the request provably consumed zero tokens. The
  * sandbox transport persists these next to the request purpose, and the
  * transcript reducer uses them to keep an advisory call (a session-title
- * request) from being counted as unaccounted model work (D44).
+ * request) from being counted as unaccounted model work.
  */
 export interface GatewayRejectionRecord {
     readonly code: string;
@@ -89,7 +89,7 @@ export interface GatewayRejectionRecord {
 }
 /**
  * One dispatched auxiliary model call, recorded with the usage the broker
- * metered on the wire (D47). The session an auxiliary call belongs to never
+ * metered on the wire. The session an auxiliary call belongs to never
  * settles its tokens as an ``assistant/message`` sample, so the sandbox
  * transport persists this beside the descriptor and the transcript reducer
  * merges it into the accounted totals — an allowed compaction call is

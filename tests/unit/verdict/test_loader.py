@@ -1,4 +1,4 @@
-"""P0-7 grader loader tests: versioned loading is fail-closed.
+"""Grader loader tests: versioned loading is fail-closed.
 
 A grader module that lies about its identity, mismatches the declared
 version, or lacks the coroutine entry point never executes.

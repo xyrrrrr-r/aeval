@@ -1,4 +1,4 @@
-"""Trajectory-evidence projection tests (integration P2).
+"""Trajectory-evidence projection tests (integration).
 
 The additive ``TrajectoryEvidence`` views — conversation surfaces,
 timestamps, turn count, wall clock — and the two efficiency metrics

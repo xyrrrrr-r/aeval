@@ -26,7 +26,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 from hashlib import sha256
-from typing import Any, Literal
+from typing import Any, Literal, Sequence
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
@@ -140,7 +140,7 @@ def _digest(value: Any) -> str:
 
 
 class RequirementBitmap(BaseModel):
-    """The six fixed P0 requirements every trial is measured against."""
+    """The six fixed requirements every trial is measured against."""
 
     input_complete: bool = False
     agent_finished: bool = False
@@ -159,6 +159,18 @@ class RequirementBitmap(BaseModel):
 
     def to_dict(self) -> dict[str, bool]:
         return {f: getattr(self, f) for f in REQUIREMENT_FIELDS}
+
+    def missing(self, required: Sequence[str] | None = None) -> list[str]:
+        """Required facts that are **not** satisfied, in declaration order.
+
+        ``required`` comes from the suite's ``verdict.requirements`` (a subset
+        of the fixed six); ``None`` means all six. The grading pipeline turns a
+        non-empty result into ``cannot_judge`` — an unmet requirement means the
+        trial's outcome cannot be trusted, so it is recorded as an explicit
+        exclusion rather than counted as a pass or a failure.
+        """
+        names = REQUIREMENT_FIELDS if required is None else tuple(required)
+        return [f for f in names if not getattr(self, f)]
 
 
 class FieldCompleteness(BaseModel):
@@ -341,7 +353,7 @@ class ObservedModel(BaseModel):
     source: Literal["gateway_lease", "session_header", "claim"] = "session_header"
 
 
-# The generic facade contract (P2-5b): the deployment binds this port inside
+# The generic facade contract: the deployment binds this port inside
 # the sandbox and the adapter points the agent at the same URL, so the two
 # sides share one declaration instead of hard-coding a number twice.
 #: Fixed in-sandbox port the OpenAI-compatible facade listens on.
@@ -485,9 +497,9 @@ class TrialPaths(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
 
     sandbox_cwd: str
-    #: The agent's own home inside the sandbox (renamed from ``dsh_home`` in
-    #: the agent-neutrality cleanup C1 — the framework stores whatever home
-    #: the selected agent declares; the dsh adapter fills in its DSH home).
+    #: The agent's own home inside the sandbox (renamed from ``dsh_home`` —
+    #: the framework stores whatever home the selected agent declares; the
+    #: dsh adapter fills in its DSH home).
     agent_home: str
     bundle_path: str
     session_root: str
@@ -566,7 +578,7 @@ class CollectionManifest(BaseModel):
     trial_id: str
     outcomes: list[CollectOutcome] = Field(default_factory=list)
     artifacts: list[ArtifactRef] = Field(default_factory=list)
-    # Binding to the runtime lock the collection ran under (P0-6):
+    # Binding to the runtime lock the collection ran under:
     # an empty digest means the manifest was produced outside the
     # lock-verified pipeline and the evidence is not trustworthy.
     runtime_lock_digest: str = ""
@@ -624,7 +636,7 @@ class CoverageSummary(BaseModel):
 
 
 class MetricOutcome(BaseModel):
-    """One trajectory metric's evaluated outcome (top-level design §2).
+    """One trajectory metric's evaluated outcome.
 
     ``category`` fixes the metric's severity semantics:
 
@@ -837,7 +849,7 @@ class ControlDistLock(BaseModel):
 class ObservedIdentity(BaseModel):
     """Identity observed in a LIVE sandbox, bound to the expected lock.
 
-    Distinct from the pre-start approved ``RuntimeLock`` (doc §3.4):
+    Distinct from the pre-start approved ``RuntimeLock``:
     these are measured values collected after the template build and
     sandbox start — e2b SDK presence, image digest, template alias,
     sandbox architecture, actual Node/npm/plugin content. Every field
@@ -968,7 +980,7 @@ class RunManifest(BaseModel):
     # 的摘要纪律：空值不进摘要。
     category_names: dict[str, str] = Field(default_factory=dict)
     default_category: str | None = None
-    # 维度模型（评测平台设计 §4.2 的评分参数）：categories 详式
+    # 维度模型（评分参数）：categories 详式
     # （name/block/weight/threshold/redline）+ blocks + redline_tasks +
     # default。空时不参与摘要（同 task_titles 的纪律）。
     dimension_model: dict[str, object] = Field(default_factory=dict)

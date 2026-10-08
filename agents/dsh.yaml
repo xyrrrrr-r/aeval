@@ -35,7 +35,7 @@ observations:
 # the cordis patch). Declared, so the framework never deploys it into another agent.
 control_stack: dsh
 
-# Model traffic routing (AGENT-ABSTRACTION-2 §4.1): DSH's control-stack
+# Model traffic routing: DSH's control-stack
 # transport speaks the broker wire (aeval-model-broker/3) natively, so there
 # is no facade to deploy and no facade env to inject — the composition skips
 # both on this declaration.
@@ -69,7 +69,7 @@ runtime:
     - node (Harbor installed-agent 提供)
     - npm 缓存或内网 registry 可达
 launch:
-  # Verified on example-lab (openEuler 24.03 SP1 aarch64); matches the paths the
+  # Verified on a real target host (openEuler 24.03 SP1 aarch64); matches the paths the
   # hand-written jobs/e2e-hello/jobs/dsh.yaml used.
   default:
     override_setup_timeout_sec: 900

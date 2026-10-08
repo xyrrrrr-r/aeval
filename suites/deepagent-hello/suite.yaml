@@ -1,6 +1,7 @@
 schema_version: 2
 id: deepagent-hello
-version: 0.1.0
+# 0.2.0（2026-10-08）：注释清理——去掉对外不可读的内部阶段/缺陷编号与机器名。判分口径与任务集不变；因文件字节变化，本版本不与上一版同域可比。
+version: 0.2.0
 # 与 e2e-hello 同一任务形态（写 hello 到 /workspace/result），但面向
 # ACP 适配器：驱动要求只有 deepagent 提供的三项；会话记录槽位走通用
 # agent_session_record（deepagent 的官方会话记录是 Harbor ACP runner 的

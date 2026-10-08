@@ -1,4 +1,4 @@
-"""Manifest seal / tamper tests (plan §7 row 12): sealed means sealed."""
+"""Manifest seal / tamper tests: sealed means sealed."""
 
 from __future__ import annotations
 

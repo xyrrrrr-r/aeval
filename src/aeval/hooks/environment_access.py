@@ -2,8 +2,8 @@
 
 Harbor's hook events carry only ``event/task_name/config/result/lock`` —
 never the environment object — so the owner (this plugin) has no public
-way to run the out-of-band probes P0-2 requires (``await env.exec``,
-``env.network_policy``) or to produce the P0-6 collection artifacts from
+way to run the out-of-band probes the isolation checks require (``await env.exec``,
+``env.network_policy``) or to produce the collection artifacts from
 the real sandbox. This module is the narrow, defensive integration seam
 that fixes that:
 
@@ -15,7 +15,7 @@ that fixes that:
   onwards, but it is only STARTED after ``ENVIRONMENT_START`` is
   emitted. Therefore the handle is only usable from ``AGENT_START``
   (sandbox created + healthcheck passed + agent installed, agent not
-  yet running) — see the verification report §10 F2.
+  yet running).
 
 Fail-closed contract: if Harbor's private surface is missing or shaped
 differently, installation raises immediately at registration time (the

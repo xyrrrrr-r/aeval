@@ -1,4 +1,4 @@
-"""Conversation-quality and output-security metrics (integration P1/P3).
+"""Conversation-quality and output-security metrics.
 
 Two families on top of the sealed trajectory, both deterministic and
 both pure functions of :class:`TrajectoryEvidence` (design rules 1-3 of
@@ -14,7 +14,7 @@ score, it never flips the verdict):
   probes, tool expectations, format demands…) takes its anchors as
   constructor parameters: the rubric is suite-authored data, never a
   hard-coded guess about the task;
-- ``ForkMemoryRetention`` (P3, no-wait subset) judges cross-session
+- ``ForkMemoryRetention`` (no-wait subset) judges cross-session
   memory across a fork from the child transcript's copied-context
   steps — no live parent lookup, no cross-record join.
 
@@ -27,7 +27,7 @@ which folds to a layer ``fail`` and — with the suite declaring
 
 Anchors travel as plain data (``QualityAnchors``) so a suite grader
 module can dispatch them per task by ``record.coordinates.task_id``
-(the P1 channel; the sealed per-task anchor artifact is the P2 channel).
+(constructor anchors, or the sealed per-task anchor artifact).
 """
 
 from __future__ import annotations
@@ -238,7 +238,7 @@ class QualityAnchors:
 
 @dataclass(frozen=True)
 class ProbeDetail:
-    """One step-attributable judgement (轨迹分析 §turn 切面).
+    """One step-attributable judgement (按 turn 切分的判定).
 
     轨迹级 ``evaluate`` 把这些判分折叠成维度分；turn 分析用同一批
     ``ProbeDetail`` 把分数落回具体轮次（``user_step_id`` 起、
@@ -889,7 +889,7 @@ class InstructionFollowing(TrajectoryMetric):
 
 
 class ForkMemoryRetention(TrajectoryMetric):
-    """Cross-session memory across a fork — the no-wait subset (P3).
+    """Cross-session memory across a fork — the no-wait subset.
 
     The fork machinery copies the parent session's pre-fork steps into
     the child transcript flagged ``is_copied_context``; that copied

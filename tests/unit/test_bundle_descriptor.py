@@ -1,4 +1,4 @@
-"""Bundle descriptor boundary tests (plan §7 row 8).
+"""Bundle descriptor boundary tests.
 
 Python accepts host-emitted descriptors only as untrusted input: the
 model layer rejects absolute/escaping session roots, and the evidence
@@ -195,7 +195,7 @@ def test_evidence_verifier_rejects_invalid_descriptor_json(
 
 
 def test_missing_descriptor_is_a_hard_failure(tmp_path, runtime_lock, demo_suite):
-    """P0-6: without the descriptor there is no session ownership or
+    """Without the descriptor there is no session ownership or
     stop reason — the evidence is incomplete and the gate fails."""
     from aeval.hooks.evidence import build_required_collect_plan
 

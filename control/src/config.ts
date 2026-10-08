@@ -39,7 +39,7 @@ export interface EvalControlConfig {
   readonly jobTokenFile: string;
   readonly refuseAuxiliaryCalls: boolean;
   /**
-   * Per-purpose decisions for advisory model calls, as authored (D47).
+   * Per-purpose decisions for advisory model calls, as authored.
    * Explicit entries win over ``refuseAuxiliaryCalls``; missing entries take
    * that blanket flag (default refuse). Kept as-authored so the config
    * digest matches the harness-composed config field for field; the resolved
@@ -262,7 +262,7 @@ export function resolveEvalControlConfig(raw: unknown): EvalControlConfig {
   // opt-in owner-side finalize (one-shot sandboxed deployments only)
   const ownerFinalize = input['ownerFinalize'] === true;
   if (typeof refuseAuxiliaryCalls !== 'boolean') fail('refuseAuxiliaryCalls', 'must be a boolean');
-  // D47: per-purpose decisions, as authored. Validation here is the last
+  // Per-purpose decisions, as authored. Validation here is the last
   // line before the digest is pinned: only the two known purposes, only
   // explicit decisions. The complete map is resolved where it is compared
   // (see resolveAuxiliaryPolicy) so this config hashes exactly what the

@@ -1,4 +1,4 @@
-"""Verdict semantics tests: matrix, validation, cannot_judge (plan §7 row 9).
+"""Verdict semantics tests: matrix, validation, cannot_judge.
 
 Every negative case asserts the structural invariant: cannot_judge is
 never a disguised 0, a veto is never outvoted, and a grader whose
@@ -238,11 +238,11 @@ def test_grade_trial_crashing_grader_never_scores():
         asyncio.run(grade_trial(record, [ResolvedGrader(grader=spy)]))
 
 
-# --- P0-7: score/status consistency and identity contracts -----------------
+# --- score/status consistency and identity contracts -----------------
 
 
 def test_validate_rejects_pass_on_invalid_score():
-    """P0-7 defect: pass + score.valid=False must never validate."""
+    """Defect: pass + score.valid=False must never validate."""
     bad = _result(status="pass", value=None)  # valid=False, no value
     with pytest.raises(ValueError, match="pass verdict on an invalid score"):
         validate_grade_result(bad)
@@ -273,7 +273,7 @@ def test_validate_allows_fail_with_invalid_score():
 
 
 def test_exec_graders_refused_without_isolation():
-    """P0-7: exec graders never run in-process; the refusal is explicit."""
+    """Exec graders never run in-process; the refusal is explicit."""
     spy = _SpyGrader(result=_result(status="fail", value=0.0, grader_id="spy"))
     with pytest.raises(ExecIsolationUnavailableError, match="no isolated execution"):
         asyncio.run(execute_exec_grader(

@@ -9,7 +9,7 @@
 # shell (set -euo pipefail), so a failing `run-uv-pytest.sh` exits the
 # script on that line and the reward branch never runs.
 #
-# Measured on the first M0 pilot: the three failed tasks published no
+# Measured in the first pilot run: the three failed tasks published no
 # reward at all, Harbor raised RewardFileNotFoundError instead of
 # recording reward 0, and those trials became unjudgeable for a reason
 # that has nothing to do with the agent. Disabling errexit around the run

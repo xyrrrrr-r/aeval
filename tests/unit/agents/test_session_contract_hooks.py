@@ -1,4 +1,4 @@
-"""The session half of the adapter contract (P1-2b).
+"""The session half of the adapter contract.
 
 Session-record shape and session identity are adapter-flavored: DSH persists one
 record per id that aeval minted, while an ACP runner mints its own id and leaves
@@ -118,7 +118,8 @@ def test_the_locator_is_the_adapters_own_rule(tmp_path):
 
 
 def test_the_declared_session_root_is_where_the_record_actually_is():
-    """The declared artifact dir must be the one the locator reads (example-lab: a
+    """The declared artifact dir must be the one the locator reads (a real
+    target host surfaced this: a
     shipped "deepagent-home" made every run fail with "session_root does not
     exist" because nothing created it)."""
     assert DcodeAgent.SESSION_ARTIFACT_DIR == "."

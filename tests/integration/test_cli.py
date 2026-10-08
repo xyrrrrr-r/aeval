@@ -1,9 +1,9 @@
-"""CLI integration tests (plan §7 row 14): exit codes and side effects.
+"""CLI integration tests: exit codes and side effects.
 
 ``run`` must delegate to Harbor (never build its own loop) and pass the
 AEVAL_* contract via the environment; a validation failure must reach
 Harbor zero times. Exit codes: 0 ok, 2 param, 3 validation, 4 system,
-5 Harbor exited 0 but the aeval chain is incomplete (P0-8 final gate).
+5 Harbor exited 0 but the aeval chain is incomplete (final gate).
 """
 
 from __future__ import annotations
@@ -559,7 +559,7 @@ def test_report_refuses_unrecorded_run(tmp_path, runtime_lock):
     assert "not in the store" in result.output
 
 
-# --- P0-2/E2E: the runtime lock must pin the sandbox image -------------
+# --- E2E: the runtime lock must pin the sandbox image -------------
 
 
 def test_run_pins_sandbox_image_in_runtime_lock(tmp_path, native_suite_dir, monkeypatch):
@@ -617,7 +617,7 @@ def test_run_sandbox_image_must_be_digest_pinned(tmp_path, native_suite_dir, har
 
 
 def test_run_force_build_reaches_the_composed_job(tmp_path, native_suite_dir, harbor_calls):
-    """Doc §6.3: aeval run delegates to Harbor, so --force-build must be
+    """aeval run delegates to Harbor, so --force-build must be
     carried into the composed job or a stale template is reused."""
     import json as _json
 

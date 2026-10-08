@@ -1,4 +1,4 @@
-"""Run manifests: intent at start, sealed with exclusions at end (plan §6)."""
+"""Run manifests: intent at start, sealed with exclusions at end."""
 
 from __future__ import annotations
 
@@ -50,7 +50,7 @@ def intent_digest(data: dict[str, Any]) -> str:
     ``seal_digest``) is intent: it is fixed at run start and must be
     byte-identical at seal time. The trusted copy of this digest is
     recorded in the trial store when the run is created, so a manifest
-    rewritten between intent and seal is detectable (P0-8).
+    rewritten between intent and seal is detectable.
     """
     intent = {k: v for k, v in data.items() if k not in ("exclusions", "sealed", "seal_digest")}
     return sha256(
@@ -74,7 +74,7 @@ def seal_run_manifest(
     original intent at run-creation time, e.g. from the trial store)
     the manifest's intent subset is re-derived and compared BEFORE
     sealing: a manifest rewritten after intent time is refused instead
-    of sealed (P0-8 — the previous implementation computed the intent
+    of sealed (the previous implementation computed the intent
     copy and never checked it).
     """
     path = Path(path)

@@ -1,6 +1,6 @@
 """Suite models: thin overlay over Harbor-native declarations.
 
-A suite is a directory (plan §9.1): ``suite.yaml`` declares ONLY the
+A suite is a directory: ``suite.yaml`` declares ONLY the
 four things Harbor does not (baselines, clock, observables, verdict,
 plus metrics/driver/provenance). Any fact Harbor already declares in
 its own task.yaml/job.yaml must NOT appear here — duplication is a CI
@@ -149,7 +149,7 @@ class VerdictSpec(_SuiteModel):
     graders: (
         dict[str, GraderDeclaration | list[GraderDeclaration]] | list[GraderDeclaration]
     ) = Field(default_factory=dict)
-    # Opt-in sealed rubric-anchors channel (integration P2): when set,
+    # Opt-in sealed rubric-anchors channel: when set,
     # every trial's evidence bundle must seal the suite's
     # ``rubric/task_anchors.json`` as the ``task_anchors`` fixed output,
     # and trajectory graders read their anchors from the sealed copy —
@@ -364,7 +364,7 @@ class ResolvedSuite(_SuiteModel):
     # 类别。归组规则在报告侧确定性推导（task_id 首个点前的前缀）。
     category_names: dict[str, str] = Field(default_factory=dict)
     default_category: str | None = None
-    # 维度模型（评测平台设计 §4.2）：categories（name/block/weight/
+    # 维度模型：categories（name/block/weight/
     # threshold/redline 详式或 str 简式）+ blocks + redline_tasks +
     # default——评分参数（阈值/权重/大块/红线），不改变判定/分母语
     # 义。category_names 是它的显示名投影。

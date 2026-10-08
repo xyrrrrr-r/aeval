@@ -1,10 +1,11 @@
 schema_version: 2
 id: deepagent-budget
-version: 0.1.0
+# 0.2.0（2026-10-08）：注释清理——去掉对外不可读的内部阶段/缺陷编号与机器名。判分口径与任务集不变；因文件字节变化，本版本不与上一版同域可比。
+version: 0.2.0
 # 与 deepagent-hello 同一任务形态（写 hello 到 /workspace/result），但**带
-# 预算**：这是 P2-5b 的计量验收套件。适配器声明
+# 预算**：这是计量与拦截的验收套件。适配器声明
 # budget_enforcement=gateway_lease 后，这些上限才真的会被执行（façade →
-# broker lease 逐调用计量/拦截）；在此之前同样的声明会被 P1-3 门正确拒绝。
+# broker lease 逐调用计量/拦截）；在此之前同样的声明会被准入门正确拒绝。
 # 两个套件分开存在：hello 是冒烟（不设上限），本套件是计量与拦截。
 extends: _base/harbor.base.yaml
 harbor:

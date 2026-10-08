@@ -314,7 +314,7 @@ def adapter_classes_recorded_in(lock: Any) -> tuple[list[type], list[str]]:
     The class is the declaration's ``adapter_class()``: a pinned import_path
     resolves to itself, while a declaration-driven base materializes into the
     complete per-agent class (a declared agent has no code of its own to
-    import — the declaration IS its facts, G11).
+    import — the declaration IS its facts).
     """
     from aeval.agents.declaration import default_agents_root, resolve_agent_declaration
 
@@ -338,7 +338,7 @@ def adapter_classes_recorded_in(lock: Any) -> tuple[list[type], list[str]]:
 
 
 #: Declaration: which client protocol the agent itself speaks for model
-#: traffic (AGENT-ABSTRACTION-2-PLAN §4.1). ``gateway_native`` means the
+#: traffic. ``gateway_native`` means the
 #: control stack's transport already speaks the broker wire (DSH); the
 #: ``openai_*`` values mean the agent speaks an OpenAI protocol and the
 #: in-sandbox facade must serve the matching endpoint.
@@ -621,7 +621,7 @@ def adapter_declaration_gap(adapter: type) -> list[str]:
     promise: the gateway lease is enforced *inside* the sandbox by the control
     stack, so an adapter that claims ``gateway_lease`` without declaring a stack
     would run unmetered while looking metered. The same holds for the declared
-    model routing (AGENT-ABSTRACTION-2 §4.5): an ``openai_*`` protocol needs
+    model routing: an ``openai_*`` protocol needs
     a stack whose flavor translates it, and a translating stack with no
     ``openai_*`` protocol would serve an endpoint the agent never calls. Both
     rules consult the flavor registry's ``serves_protocols`` capability —

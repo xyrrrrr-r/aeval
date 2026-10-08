@@ -1,14 +1,13 @@
-"""deepAgent adapter: the deepagents-code CLI driven over ACP stdio (P2-5a).
+"""deepAgent adapter: the deepagents-code CLI driven over ACP stdio.
 
 This is the PINNED member of the OpenAI-protocol ACP family: the behavior
 base (:class:`aeval.agents.openai_acp.OpenAiAcpAgent`) carries everything
 true of any OpenAI-wire ACP CLI, and this subclass pins the dcode facts —
 identity, version pin, model-routing spellings, sandbox layout, the default
 registry entry. A sibling CLI needs none of this: a declaration naming the
-base is materialized into a complete adapter with zero code
-(AGENT-ABSTRACTION-2 G11, stage 4.1).
+base is materialized into a complete adapter with zero code.
 
-Launch shape (source-backed facts in docs/TESTS/DEEPAGENTS-FACTS.md):
+Launch shape (facts verified against upstream sources):
 
 - Harbor's generic ``AcpAgent`` builds an in-sandbox launcher from an inline
   registry entry. This adapter's default entry selects the pinned
@@ -26,7 +25,7 @@ Honest declarations (each one is a refusal to overclaim):
 
 - ``BUDGET_ENFORCEMENT = "gateway_lease"``: dcode speaks OpenAI while our
   broker speaks ``aeval-model-broker/3`` (GET /info, POST /stream), so the two
-  cannot talk directly — the in-sandbox facade (P2-5b, declared here as
+  cannot talk directly — the in-sandbox facade (declared here as
   ``CONTROL_STACK = "deepagent-facade"``) translates, and every model call is
   then metered by the broker lease. The claim is only honest because the
   declaration and the deployment move together: ``MODEL_ROUTING`` below says
@@ -39,7 +38,7 @@ Honest declarations (each one is a refusal to overclaim):
   neither pins nor adopts a session, so the capability is not claimed.
 - ``token_usage`` is ``partial``: Harbor fills usage from the ACP summary
   (``prompt_response.usage``) when the server provides it; live coverage of
-  ``dcode --acp`` is not yet verified (DEEPAGENTS-FACTS.md 未核实项).
+  ``dcode --acp`` is not yet verified.
 """
 
 from __future__ import annotations
@@ -60,15 +59,15 @@ from aeval.agents.openai_acp import (
 from aeval.contracts import TranscriptCapability
 
 # Pinned product version. The registry entry below must name exactly this
-# version so every launch is reproducible (DEEPAGENTS-FACTS.md: version pins
-# matter for any mapper). Bump both together, never one alone.
+# version so every launch is reproducible; version pins matter for any mapper.
+# Bump both together, never one alone.
 _DEEPAGENTS_CODE_VERSION = "0.1.78"
 
 # Where dcode keeps its state inside the sandbox (sessions.db, history.jsonl,
 # conversation_history/; deepagents_code/_paths.py:848-850). Declared so the
-# framework never hands this agent a DSH home it knows nothing about (P1-4);
+# framework never hands this agent a DSH home it knows nothing about;
 # the state is not part of the sealed transcript (the trajectory comes from
-# the host-side runner), so nothing downloads it in P2-5a.
+# the host-side runner), so nothing downloads it.
 _SANDBOX_HOME = "/root/.deepagents"
 # The session artifact directory RELATIVE TO THE DESCRIPTOR's directory, i.e.
 # to Harbor's agent log directory (the framework's "/logs/agent", which Harbor
@@ -110,9 +109,9 @@ def default_deepagent_registry_entry(model: str | None = None) -> dict[str, Any]
     falls back to its own codex-profile default, whose requests carry
     responses-only arguments (``reasoning``, builtin tools) and may name a
     model the lease does not serve — the facade would refuse that name anyway.
-    example-lab: exactly how the first real run of the generic facade flavor died
-    (P2-5b); the responses endpoint itself is now served per the declared
-    ``MODEL_ROUTING`` (AGENT-ABSTRACTION-2 §4.5).
+    Seen on the real target host: exactly how the first real run of the
+    generic facade flavor died; the responses endpoint itself is now served per
+    the declared ``MODEL_ROUTING``.
     """
     return {
         "id": "deepagents-code",
@@ -182,16 +181,15 @@ class DcodeAgent(OpenAiAcpAgent):
     # which would drop the dcode registry entry the launch depends on.
     DECLARATION_DRIVEN = False
 
-    # The in-sandbox control stack this adapter needs (P2-5b): NOT the DSH
+    # The in-sandbox control stack this adapter needs: NOT the DSH
     # flavor (no plugin tree, no cordis patch — dcode is not DSH-managed), but
     # the generic facade deployment aeval knows how to upload, start and
     # health-gate. Without it the agent could not be metered at all.
     CONTROL_STACK = "deepagent-facade"
 
-    # Which wire dcode itself speaks for model traffic
-    # (AGENT-ABSTRACTION-2 §4.1): the codex-profile provider posts the OpenAI
-    # Responses protocol (``POST /v1/responses``; dcode model_config.py, and
-    # DEEPAGENTS-FACTS.md records the same for the default profile), so the
+    # Which wire dcode itself speaks for model traffic: the codex-profile
+    # provider posts the OpenAI Responses protocol (``POST /v1/responses``;
+    # dcode model_config.py, and the same holds for the default profile), so the
     # facade must serve the responses endpoint and the broker's upstream
     # speaks ``responses`` to the provider's responses base (DeepSeek:
     # https://api.deepseek.com). The env spellings below are dcode facts; the
@@ -206,7 +204,7 @@ class DcodeAgent(OpenAiAcpAgent):
     }
 
     # Where the agent's own state lives inside the sandbox, and where its
-    # session artifact would land in the bundle (P1-4: declared rather than
+    # session artifact would land in the bundle (declared rather than
     # inheriting the DSH default).
     SANDBOX_HOME = _SANDBOX_HOME
     SESSION_ARTIFACT_DIR = _SESSION_ARTIFACT_DIR
@@ -249,7 +247,7 @@ class DcodeAgent(OpenAiAcpAgent):
     DEEPAGENTS_CODE_VERSION = _DEEPAGENTS_CODE_VERSION
 
     def default_registry_entry(self, model: str | None = None) -> dict[str, Any] | None:
-        """The pinned dcode entry (the base's hook — see G11)."""
+        """The pinned dcode entry (the base's hook — see the base class)."""
         return default_deepagent_registry_entry(model)
 
     @staticmethod

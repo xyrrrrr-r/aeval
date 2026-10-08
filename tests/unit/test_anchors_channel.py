@@ -1,4 +1,4 @@
-"""Sealed rubric-anchors channel tests (integration P2, §5.6 mid-term).
+"""Sealed rubric-anchors channel tests.
 
 The channel has three links, each tested end to end: the suite declares
 ``verdict.anchors: task_anchors`` → collection seals the suite's

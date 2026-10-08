@@ -210,7 +210,7 @@ export function resolveEvalControlConfig(raw) {
     const ownerFinalize = input['ownerFinalize'] === true;
     if (typeof refuseAuxiliaryCalls !== 'boolean')
         fail('refuseAuxiliaryCalls', 'must be a boolean');
-    // D47: per-purpose decisions, as authored. Validation here is the last
+    // Per-purpose decisions, as authored. Validation here is the last
     // line before the digest is pinned: only the two known purposes, only
     // explicit decisions. The complete map is resolved where it is compared
     // (see resolveAuxiliaryPolicy) so this config hashes exactly what the

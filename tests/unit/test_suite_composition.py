@@ -746,7 +746,7 @@ def test_source_commit_requires_a_full_lowercase_hex_hash(tmp_path, monkeypatch,
         suite_source_commit(tmp_path)
 
 
-# --- P0-2: unsupported sandbox semantics rejected at suite time ------
+# --- unsupported sandbox semantics rejected at suite time ------
 
 
 def test_task_mounts_are_rejected_at_suite_time(native_suite):
@@ -764,7 +764,7 @@ def test_task_mounts_are_rejected_at_suite_time(native_suite):
 
 @pytest.mark.parametrize("filter_key", ["include_logs", "exclude_logs"])
 def test_job_verifier_log_filters_are_rejected(native_suite, filter_key):
-    """P0-2: job-level verifier log filters can silently drop required
+    """Job-level verifier log filters can silently drop required
     evidence logs — rejected at suite validation."""
     job = native_suite / JOB
     _write_yaml(job, {

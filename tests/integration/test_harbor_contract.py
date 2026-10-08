@@ -1,4 +1,4 @@
-"""Harbor contract lock tests (plan §0, §7 row 3).
+"""Harbor contract lock tests.
 
 These pin the real behavior of the locked Harbor 0.23.0 wheel so an
 upstream change cannot silently reposition our hooks. When one of

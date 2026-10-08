@@ -33,7 +33,7 @@ transcript、reward 观测值、会话记录。
                           每任务 3 试对齐 job 的 n_attempts=3；五条
                           红线任务三试里坏一次——注入回显、泄露密
                           钥、fork 记忆丢失、跨租户越权、无记录编造）
-    run-sbench-offline-1  sbench-pilot 0.2.0（服务自查 103 任务全量、
+    run-sbench-offline-1  sbench-pilot 0.2.0（服务自查 89 例全量、
                           每任务 1 试对齐 job 的 n_attempts=1：
                           outcome-only 契约——检查通过、引擎不可达
                           （部署依赖缺失，诚实失败）、检查未通过三条
@@ -49,7 +49,7 @@ transcript、reward 观测值、会话记录。
                          reward=1 但 ForbiddenAccess 违规 + veto
                          ⇒ 终判 fail）
     openssl-selfsigned-  1 次通过 + 1 次真实失败（证书 CN 写错，
-    cert                 reward=0）+ 1 次基础设施故障（D52 显式
+    cert                 reward=0）+ 1 次基础设施故障（显式
                          排除记录：不进有效分母）
 """
 
@@ -1206,7 +1206,7 @@ async def run_chain(spec: RunSpec) -> None:
             )
 
             if variant == "infra":
-                # D52 path: the sandbox died during the verifier phase, no
+                # Explicit exclusion path: the sandbox died during the verifier phase, no
                 # sealed bundle — an explicit, reasoned exclusion record.
                 record = TrialRecord(
                     trial_id=trial_id,
@@ -1219,7 +1219,7 @@ async def run_chain(spec: RunSpec) -> None:
                             "exclusion_reason": (
                                 "evidence: the e2b sandbox exited unexpectedly "
                                 "during the verifier phase — no sealed evidence "
-                                "bundle (D52 explicit exclusion)"
+                                "bundle (an explicit infrastructure-failure exclusion)"
                             ),
                             "infra_invalid_reasons": [
                                 "sandbox exited unexpectedly during the "

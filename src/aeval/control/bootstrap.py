@@ -1,4 +1,4 @@
-"""Sandbox bootstrap for controlled model routing (P0-4 offline half).
+"""Sandbox bootstrap for controlled model routing.
 
 Production order for one trial:
 
@@ -113,7 +113,7 @@ def compose_control_config(
     trial/session ids, gateway routing, pinned model identity. ``flavor_fields``
     is what the trial's control flavor declared its in-sandbox stack consumes
     on top (the DSH plugin's session/bundle paths and routing policy) —
-    contributed by the flavor's registry entry, never hardcoded here (G7), so
+    contributed by the flavor's registry entry, never hardcoded here, so
     a flavor whose stack needs none of it (the generic facade) carries none of
     it. An agent that declares no stack gets the neutral config alone.
 
@@ -147,10 +147,10 @@ def compose_control_config(
 def facade_dist_candidates(start: Path | None = None) -> list[Path]:
     """Where the built deepagent facade dist lives, most specific first.
 
-    The facade flavor's control artifact (G8): the operator override
+    The facade flavor's control artifact: the operator override
     (``AEVAL_FACADE_DIST``, naming the dist directory itself) wins; otherwise
     the sibling ``deepagents-eval-control/dist`` of the aeval checkout — the
-    same layout the lab uses for the neutral control package. The search
+    same sibling layout used for the neutral control package. The search
     discipline itself lives in ``aeval.control.artifacts``, shared with every
     other control artifact.
     """
@@ -216,7 +216,7 @@ async def deploy_generic_facade(
 ) -> str:
     """Deploy and start the OpenAI-compatible facade inside the sandbox.
 
-    The generic flavor the deepagent control stack uses (P2-5b): unlike the
+    The generic flavor the deepagent control stack uses: unlike the
     DSH flavor there is no plugin tree to graft into and no patch to apply —
     the agent process is launched by its own runner, so the ONLY mechanism
     fully in our control is: upload a self-contained tree, start it in the
@@ -256,8 +256,9 @@ async def deploy_generic_facade(
     # The neutral gateway-lease client imports the pinned @deepseek-ai packages
     # (the FacadeOptions source does too). Shipping the dist without its closure
     # uploads a tree that dies inside the sandbox with ERR_MODULE_NOT_FOUND —
-    # found on example-lab, where the checkout had no node_modules — so the missing
-    # closure is refused here, with the remedy, before anything is uploaded.
+    # found on the real target host, where the checkout had no node_modules — so
+    # the missing closure is refused here, with the remedy, before anything
+    # is uploaded.
     if "node_modules/@deepseek-ai/dsh-llm/package.json" not in shipped:
         raise BootstrapError(
             f"the facade runtime closure is not installed beside {facade_dist} — "
@@ -279,10 +280,10 @@ async def deploy_generic_facade(
                 tar.add(source, arcname=relative)
             if control_ca is not None:
                 # A privately signed broker listener is the production
-                # topology (example-lab pins listenHost to a public address), so the
-                # facade's outbound TLS needs the same trust anchor the DSH
-                # control tree ships as ca.crt — without it every model call
-                # dies on certificate verification inside the sandbox.
+                # topology (the real target host pins listenHost to a public
+                # address), so the facade's outbound TLS needs the same trust
+                # anchor the DSH control tree ships as ca.crt — without it every
+                # model call dies on certificate verification inside the sandbox.
                 tar.add(Path(control_ca), arcname="ca.crt")
         sandbox_tar = "/tmp/aeval-facade.tar.gz"
         await upload(str(tar_path), sandbox_tar)
@@ -310,7 +311,7 @@ async def deploy_generic_facade(
         # ``setsid --fork`` both detaches (new session, so no SIGHUP when the
         # exec's shell goes away) and RETURNS: it forks the child and exits.
         # A trailing ``&`` does not — the exec then waits on a shell that holds
-        # the command's pipes, which hung the real deployment on example-lab.
+        # the command's pipes, which hung the real deployment on the target host.
         started = await exec_fn(
             f"cd {shlex.quote(root.as_posix())} && {run_env}"
             f"setsid --fork {shlex.quote(node_bin)} dist/facade_main.js"
@@ -358,7 +359,7 @@ async def _deploy_facade_flavor(
     """The agent-neutral facade flavor: upload, start, health-gate.
 
     Which endpoints the facade serves is derived from the agent's declared
-    model routing (§4.5): the deployment serves exactly what the selected
+    model routing: the deployment serves exactly what the selected
     agent speaks, never a default. A facade-flavor stack without an openai_*
     routing is refused by the declaration gap check; this is the same rule
     enforced at deploy time, fail-closed.
@@ -443,7 +444,7 @@ async def _deploy_declared_stack(
     """Deploy the control stack the adapter declared, by registered flavor.
 
     The dispatch is a registry lookup, not a name-by-name ladder: a flavor
-    registers its deployment mechanism (G7), and this function only checks the
+    registers its deployment mechanism, and this function only checks the
     adapter satisfies the flavor's declared interface requirements before
     anything is uploaded. A declared stack nothing registered is an error,
     never a silent skip: that would run the trial looking metered while
@@ -602,7 +603,7 @@ async def bootstrap_trial_control(
         # authoritative when present): resolve the flavor exactly as the
         # lifecycle does — the live agent's declared stack, else the adapter
         # the runtime lock recorded — so both compose sites shape the config
-        # identically (G7). An agent that declares no stack gets the neutral
+        # identically. An agent that declares no stack gets the neutral
         # config alone.
         from aeval.hooks.broker_lifecycle import _config_flavor_for
 

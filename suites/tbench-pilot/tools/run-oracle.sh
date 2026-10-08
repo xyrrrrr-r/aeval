@@ -12,7 +12,7 @@
 # aeval plugin fails closed with
 # `EvidenceIntegrityError: trial has no trusted control binding`. The
 # oracle arm is a solvability pre-flight, not a graded run: it must NOT
-# write into the M0 store. Harbor reads the reward the upstream
+# write into the pilot store. Harbor reads the reward the upstream
 # `tests/test.sh` publishes at /logs/verifier/reward.txt, which is
 # exactly the fact this arm needs to establish (3/3 reward = 1).
 #

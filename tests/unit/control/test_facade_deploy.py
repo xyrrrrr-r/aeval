@@ -1,4 +1,4 @@
-"""Generic facade deployment flavor tests (P2-5b ③).
+"""Generic facade deployment flavor tests.
 
 The generic flavor is what an agent whose runner starts it itself needs:
 there is no plugin tree to graft and no patch to apply, so the deployment is
@@ -113,7 +113,7 @@ def test_a_loopback_broker_needs_no_extra_ca(tmp_path):
 
 
 def test_a_dist_without_its_closure_is_refused_before_any_upload(tmp_path):
-    """example-lab found this the hard way: a dist shipped without node_modules
+    """A real target host surfaced this the hard way: a dist shipped without node_modules
     uploads fine, starts, and then dies inside the sandbox with
     ERR_MODULE_NOT_FOUND while the health gate times out. The missing closure
     is refused here, with the remedy, before the tar is built."""
@@ -186,7 +186,7 @@ async def test_deploy_generic_facade_uploads_starts_and_health_gates(tmp_path):
         assert "node_modules/@deepseek-ai/dsh-llm/package.json" in tar.getnames()
     # the start contract: detached AND returning, env-pinned, logs captured.
     # ``setsid --fork`` is the load-bearing part: a trailing ``&`` leaves the
-    # exec waiting on a shell that holds the pipes (hung on example-lab).
+    # exec waiting on a shell that holds the pipes (hung on a real target host).
     start = next(cmd for cmd in env.commands if "facade_main.js" in cmd)
     assert "setsid --fork" in start
     # no trailing background job: the command must RETURN (only the && chain)
@@ -270,7 +270,7 @@ async def test_deploy_generic_facade_needs_upload_and_exec(tmp_path):
 
 class _FacadeAgent:
     CONTROL_STACK = "deepagent-facade"
-    # Which wire the agent speaks (AGENT-ABSTRACTION-2 §4.5): the deployment
+    # Which wire the agent speaks: the deployment
     # derives the facade's served endpoints from exactly this declaration.
     MODEL_ROUTING = {
         "agent_protocol": "openai_responses",

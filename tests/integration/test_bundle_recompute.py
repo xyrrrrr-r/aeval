@@ -1,4 +1,4 @@
-"""Bundle recompute integration tests (plan §7 row 12).
+"""Bundle recompute integration tests.
 
 Recompute must verify a sealed bundle's integrity without re-running
 anything, and detect post-attestation tampering.
@@ -82,7 +82,7 @@ def test_recompute_rejects_unsealed_manifest(tmp_path, runtime_lock):
 
 
 def test_recompute_without_attestation_is_a_hard_failure(tmp_path, runtime_lock):
-    """P0-8: a bundle without attestation is unverifiable, not a warning."""
+    """A bundle without attestation is unverifiable, not a warning."""
     run_dir = tmp_path / "run"
     manifest = _manifest(runtime_lock)
     manifest_path = write_intent_manifest(manifest, run_dir)
@@ -92,7 +92,7 @@ def test_recompute_without_attestation_is_a_hard_failure(tmp_path, runtime_lock)
 
 
 def test_recompute_rejects_empty_attestation(tmp_path, runtime_lock):
-    """P0-8: an attestation with no entries seals nothing."""
+    """An attestation with no entries seals nothing."""
     run_dir = tmp_path / "run"
     _build_bundle(run_dir, runtime_lock)
     attestation = json.loads((run_dir / "attestation.json").read_text(encoding="utf-8"))
@@ -105,7 +105,7 @@ def test_recompute_rejects_empty_attestation(tmp_path, runtime_lock):
 
 
 def test_recompute_rejects_deleted_manifest_entry(tmp_path, runtime_lock):
-    """P0-8: deleting a manifest-referenced file AND trimming its entry fails.
+    """Deleting a manifest-referenced file AND trimming its entry fails.
 
     harbor-job.json is bound by the manifest's config_file_sha256, so
     removing both the file and its attestation entry is still detected.
@@ -138,7 +138,7 @@ def test_recompute_rejects_deleted_manifest_entry(tmp_path, runtime_lock):
 
 
 def test_recompute_rejects_runtime_lock_rewrite(tmp_path, runtime_lock):
-    """P0-8: rewriting runtime_lock.json breaks the manifest's lock digest."""
+    """Rewriting runtime_lock.json breaks the manifest's lock digest."""
     run_dir = tmp_path / "run"
     run_dir.mkdir(parents=True)
     manifest = _manifest(runtime_lock)
@@ -170,7 +170,7 @@ def test_recompute_rejects_runtime_lock_rewrite(tmp_path, runtime_lock):
 
 
 def test_recompute_rejects_size_mismatch(tmp_path, runtime_lock):
-    """P0-8: same digest claim but wrong recorded size fails."""
+    """Same digest claim but wrong recorded size fails."""
     run_dir = tmp_path / "run"
     _build_bundle(run_dir, runtime_lock)
     attestation = json.loads((run_dir / "attestation.json").read_text(encoding="utf-8"))
@@ -185,7 +185,7 @@ def test_recompute_rejects_size_mismatch(tmp_path, runtime_lock):
 
 
 def test_recompute_rejects_path_escape(tmp_path, runtime_lock):
-    """P0-8: an entry pointing outside the bundle is refused."""
+    """An entry pointing outside the bundle is refused."""
     run_dir = tmp_path / "run"
     _build_bundle(run_dir, runtime_lock)
     outside = tmp_path / "outside.txt"
@@ -206,7 +206,7 @@ def test_recompute_rejects_path_escape(tmp_path, runtime_lock):
 
 
 def test_recompute_rejects_unattested_extra_file(tmp_path, runtime_lock):
-    """P0-8: a file swapped into the bundle after attestation fails."""
+    """A file swapped into the bundle after attestation fails."""
     run_dir = tmp_path / "run"
     _build_bundle(run_dir, runtime_lock)
     (run_dir / "smuggled.txt").write_text("not attested\n", encoding="utf-8")
@@ -215,7 +215,7 @@ def test_recompute_rejects_unattested_extra_file(tmp_path, runtime_lock):
 
 
 def test_recompute_rejects_config_digest_mismatch(tmp_path, runtime_lock):
-    """P0-8: harbor-job.json rewritten after intent time fails the manifest binding."""
+    """harbor-job.json rewritten after intent time fails the manifest binding."""
     run_dir = tmp_path / "run"
     run_dir.mkdir(parents=True)
     manifest = _manifest(runtime_lock)

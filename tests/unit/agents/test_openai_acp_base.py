@@ -1,8 +1,8 @@
-"""Stage 4.1 acceptance: a fake OpenAI-protocol ACP agent, zero adapter code.
+"""Acceptance: a fake OpenAI-protocol ACP agent, zero adapter code.
 
 The point of the family base (:class:`aeval.agents.openai_acp.OpenAiAcpAgent`)
-is that adding a sibling CLI stops being an adapter-writing task (AGENT-
-ABSTRACTION-2 G11). This module proves it the only way that counts: a
+is that adding a sibling CLI stops being an adapter-writing task. This
+module proves it the only way that counts: a
 declaration under a temporary agents root names the base, carries its own
 facts (protocol, env spellings, registry entry), and the resulting adapter
 passes the whole conformance kit — with no class, no module and no code

@@ -1,4 +1,4 @@
-"""Evidence hard gate (plan §2): best-effort collection becomes a gate.
+"""Evidence hard gate: best-effort collection becomes a gate.
 
 Harbor treats ``[[verifier.collect]]`` failures as warnings and
 collects artifacts best-effort. For score validity that is not enough:
@@ -10,13 +10,13 @@ running — when evidence is missing, mismatched or untrustworthy.
 Everything else (audit reads, record writes) is record-only: audit
 hooks own their I/O errors and never let them break a trial.
 
-P0-6 hardening, all fail-closed:
+Hardening, all fail-closed:
 
 - fixed logical-name → file-path mapping; a manifest artifact at any
   other path for a required output is a failure, and the loose
   ``"session" in path`` heuristic is gone;
 - the collection manifest's own identity is bound by the outer bundle
-  attestation (P0-8) — it is NOT a collect output and never hashes
+  attestation — it is NOT a collect output and never hashes
   itself;
 - empty outcomes, outcomes that never executed (no exit code and no
   exception), missing observable artifacts and a missing bundle
@@ -44,6 +44,7 @@ from aeval.contracts import (
     CollectOutcome,
     CollectionManifest,
     EvidenceBundle,
+    REQUIREMENT_FIELDS,
     RequirementBitmap,
     RuntimeLock,
 )
@@ -76,7 +77,7 @@ class EvidenceIntegrityError(RuntimeError):
 
 # Logical collect output names → the fixed file path inside the trial
 # directory that carries them. The mapping is fixed so a manifest
-# cannot rename evidence post hoc (P0-6).
+# cannot rename evidence post hoc.
 FIXED_OUTPUT_PATHS: dict[str, str] = {
     "runtime_dump": "runtime_dump.json",
     "mock_call_log": "mock_call_log.jsonl",
@@ -268,7 +269,7 @@ def verify_artifact_hashes(bundle: EvidenceBundle, bundle_dir: Path) -> None:
 
     Containment is verified on RESOLVED paths: a symlink or ``..``
     component cannot smuggle an artifact outside the trial directory
-    past a string-prefix comparison (P0-6).
+    past a string-prefix comparison.
     """
     root = bundle_dir.resolve()
     for name, ref in bundle.artifacts.items():
@@ -300,18 +301,29 @@ def verify_artifact_hashes(bundle: EvidenceBundle, bundle_dir: Path) -> None:
 
 def evaluate_requirements(
     evidence: EvidenceBundle,
+    *,
+    staged: RequirementBitmap | None = None,
+    stop_reason: str | None = None,
 ) -> RequirementBitmap:
-    """Map sealed evidence onto the fixed six-requirement bitmap."""
-    ok = evidence.requirements
+    """Map sealed evidence onto the fixed six-requirement bitmap.
+
+    ``staged`` is the bitmap accumulated by the trial's progress tracker as its
+    stages completed; it wins over ``evidence.requirements`` because it is the
+    one derived from the stages that actually ran, rather than copied from an
+    unverified source. ``stop_reason`` overrides the bundle's own; the grading
+    pipeline passes the reason it is about to record, so the two cannot drift.
+
+    An ``infra_error`` stop always clears ``judge_finished``: the verifier may
+    have run, but a trial that died on infrastructure must not be recorded as
+    having been judged. The caller (the grading pipeline) consumes the returned
+    bitmap to decide ``cannot_judge``.
+    """
+    source = staged if staged is not None else evidence.requirements
     bitmap = RequirementBitmap(
-        input_complete=ok.input_complete,
-        agent_finished=ok.agent_finished,
-        integration_valid=ok.integration_valid,
-        render_valid=ok.render_valid,
-        judge_finished=ok.judge_finished,
-        artifact_schema_ok=ok.artifact_schema_ok,
+        **{field: getattr(source, field) for field in REQUIREMENT_FIELDS}
     )
-    if evidence.stop_reason == "infra_error":
+    reason = evidence.stop_reason if stop_reason is None else stop_reason
+    if reason == "infra_error":
         bitmap.judge_finished = False
     return bitmap
 
@@ -387,7 +399,7 @@ def verify_evidence_bundle(
     artifacts: dict[str, ArtifactRef] = {a.path: a for a in manifest.artifacts}
     artifact_paths = {a.path for a in manifest.artifacts}
 
-    # Whose session-record layout this trial's evidence follows (P1-2b):
+    # Whose session-record layout this trial's evidence follows:
     # resolved once, before the fixed-path discipline — a DECLARED slot's
     # path travels on the adapter, so locating it needs the owner first.
     record_owner = _record_owner(adapter, lock)
@@ -428,7 +440,7 @@ def verify_evidence_bundle(
 
     # The bundle descriptor is the host-side control plugin's statement
     # of what was observed. Without it there is no session ownership
-    # and no stop reason: the evidence is incomplete (P0-6 — this used
+    # and no stop reason: the evidence is incomplete (this used
     # to be a recorded issue, not a gate).
     descriptor_path = find_bundle_descriptor(trial_dir)
     if descriptor_path is None:
@@ -473,13 +485,13 @@ def verify_evidence_bundle(
     # artifact is a copy — the invariant that matters is that it IS the
     # official record of this descriptor's session, which is a strictly
     # stronger statement than "the file sits under session_root".
-    # Session ownership is ADAPTER-flavored (P1-2b): DSH persists one record per
+    # Session ownership is ADAPTER-flavored: DSH persists one record per
     # session id under a project-nested tree; the ACP flavor has a single summary
     # whose own session id is the identity. The gate asks the adapter whose trial
     # this is — the live handle, or the adapter the runtime lock recorded,
     # resolved through its declaration (computed once, above the fixed-path
     # discipline). Hardcoding the first agent's class here is what made the
-    # second adapter expensive (G6); missing or ambiguous is fail-closed,
+    # second adapter expensive; missing or ambiguous is fail-closed,
     # never a silent default.
     slot = session_record_output_of(record_owner)
     record = locate_session_record(record_owner, session_root, descriptor.session_id)
@@ -508,12 +520,12 @@ def verify_evidence_bundle(
 
 
 def _record_owner(adapter: Any, lock: Any) -> Any:
-    """Whose session-record layout this trial's evidence follows (P1-2b).
+    """Whose session-record layout this trial's evidence follows.
 
     The live handle when there is one; otherwise the adapter the runtime lock
     recorded, resolved through its declaration. Missing or ambiguous is
     fail-closed: encoding the first agent's layout as the silent default is
-    exactly the mistake the adapter contract exists to prevent (G6) — a
+    exactly the mistake the adapter contract exists to prevent — a
     session record located by the WRONG layout would let mismatched evidence
     pass as complete.
     """
@@ -545,8 +557,8 @@ def _record_owner(adapter: Any, lock: Any) -> Any:
 def _live_adapter(context: Any, trial_id: str) -> Any:
     """The trial's live agent handle, or None when it is unreachable.
 
-    The gate needs it to know how THIS adapter's session record is shaped
-    (P1-2b). An unreachable handle is not an error here: the historical bundle
+    The gate needs it to know how THIS adapter's session record is shaped.
+    An unreachable handle is not an error here: the historical bundle
     shape is the fallback, and every other check still has to pass.
     """
     environments = getattr(context, "environments", None)
@@ -568,10 +580,10 @@ async def gate_verification(event: Any, context: Any) -> None:
     Harbor proceed.
 
     The trial directory comes from the owner state recorded at trial
-    start (P0-1, from ``config.trials_dir / config.trial_name``). There
+    start (from ``config.trials_dir / config.trial_name``). There
     is deliberately NO fallback directory guessing from hook-event
     fields: a trial without a trusted recorded directory is
-    unverifiable and fails closed (P0-6).
+    unverifiable and fails closed.
     """
     trial_id = str(getattr(event, "trial_id", ""))
     state = context.trial_state(trial_id)

@@ -1,4 +1,4 @@
-"""Built-in trajectory metrics — the common agent-runtime rubric (§2).
+"""Built-in trajectory metrics — the common agent-runtime rubric.
 
 Categories fix severity (see ``MetricOutcome``):
 

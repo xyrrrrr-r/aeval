@@ -2,7 +2,7 @@
 invariants.
 
 The pin data is the dsh adapter's own fact (moved out of aeval.provenance in
-the agent-abstraction cleanup B4): what lives here is that the slice is fully
+an earlier refactor): what lives here is that the slice is fully
 pinned, that the neutral control package's build pins equal the slice the
 trial lock records (they live in ONE repo — drift here means the build and
 the attestation disagree), and that the recorded direct-import surface equals

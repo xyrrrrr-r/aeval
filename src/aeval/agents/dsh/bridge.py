@@ -1,4 +1,4 @@
-"""Python side of the DSH session bridge (plan §3).
+"""Python side of the DSH session bridge.
 
 Python NEVER parses DSH session files. The only read path is the
 official ``JsonlSessionPersistence.open(SessionId(id), 'read')`` +

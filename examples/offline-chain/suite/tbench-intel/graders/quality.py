@@ -1,7 +1,7 @@
 """Versioned conversation-quality grader for the tbench-intel variant.
 
-Thin wrapper around ``build_conversation_quality_grader`` (the P1
-preset): twelve score-only dimensions over the conversation surface,
+Thin wrapper around ``build_conversation_quality_grader`` (the preset):
+twelve score-only dimensions over the conversation surface,
 folded with the variant's pass threshold (aggregate < 0.6 ⇒ this layer
 fails, carrying the same valid score and per-metric breakdown).
 
@@ -46,7 +46,7 @@ VETO = False
 # 综合分阈值：各维度平均分低于此值 ⇒ 本层判 fail（积分仍随结果携带）。
 THRESHOLD = 0.6
 
-# --- per-task rubric anchors (P1 channel: keyed by task_id) ---------------
+# --- per-task rubric anchors (keyed by task_id) ---------------
 
 ANCHORS: dict[str, QualityAnchors] = {
     "hello-world": QualityAnchors(

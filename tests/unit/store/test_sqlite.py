@@ -1,4 +1,4 @@
-"""SQLite TrialStore tests (plan §7 row 10): atomic, unique, idempotent."""
+"""SQLite TrialStore tests: atomic, unique, idempotent."""
 
 from __future__ import annotations
 
@@ -111,7 +111,7 @@ def test_same_grader_version_twice_rejected_new_version_ok(store):
 
 
 def test_grade_batch_conflict_rolls_back_whole_batch(store):
-    """P0-7: a mid-batch conflict must not leave a prefix behind."""
+    """A mid-batch conflict must not leave a prefix behind."""
     record = _record("run-1")
     store.persist_trial(record)
     store.persist_grades(record.trial_id, [_grade(grader_id="existing")])
@@ -131,7 +131,7 @@ def test_grade_batch_conflict_rolls_back_whole_batch(store):
 
 
 def test_persist_trial_with_grades_is_one_atomic_unit(store):
-    """P0-7: trial + grades land together or not at all."""
+    """Trial + grades land together or not at all."""
     record = _record("run-1")
     grades = [_grade(), _grade(grader_id="g2", version="v2")]
     store.persist_trial_with_grades(record, grades)

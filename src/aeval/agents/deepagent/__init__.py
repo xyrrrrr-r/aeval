@@ -1,4 +1,4 @@
-"""deepAgent adapter package (deepagents-code over ACP stdio, P2-5a)."""
+"""deepAgent adapter package (deepagents-code over ACP stdio)."""
 
 from aeval.agents.deepagent.agent import (
     DcodeAgent,

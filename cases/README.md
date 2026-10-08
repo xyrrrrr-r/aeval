@@ -1,9 +1,10 @@
 # 共享服务用例库（aeval/cases/）
 
-源方案《Benchmark 测评指标设计方案》§2 的 **12 个服务类共 89 例**
-的用例库（0.2.0 起钉钉集成与 Plan 编排两类退役移出）。它不属于任何单个评测集：terminal-bench、服务基准、会话
-基准……都只是消费方。一个评测集（套件）想用哪些类别，在自己的
-`cases.yaml` 里声明，生成器据此把任务注入该套件的数据集目录。
+本库覆盖 **12 个服务类共 89 例**用例（0.2.0 起第三方集成类与
+计划编排类用例退役移出）。它不属于任何单个评测集：terminal-bench、
+服务基准、会话基准……都只是消费方。一个评测集（套件）想用哪些
+类别，在自己的 `cases.yaml` 里声明，生成器据此把任务注入该套件
+的数据集目录。
 
 ## 为什么是库而不是某个套件的目录
 
@@ -85,12 +86,12 @@ title，随清单封存供报告渲染）；套件自有任务的显示名放套
 - 每个任务自带按类别生成的 `tests/check_<category>.py`（自包含，
   stdlib urllib + hmac）与 `tests/test.sh`；verifier 阶段直接探测
   `ENGINE_BASE_URL` 并发布 `/logs/verifier/reward.txt`：通过 = 1，
-  失败 = 0。引擎不可达 = 失败 + 原因留 verifier 日志（源方案的
+  失败 = 0。引擎不可达 = 失败 + 原因留 verifier 日志（依赖不满足的
   SKIPPED 在"每 verifier 必产出 reward"的契约下映射为 fail+reason）。
 - 部署接口（消费套件的部署侧提供）：`ENGINE_BASE_URL`（默认
   `http://engine:8080`）、`ENGINE_TOKEN`、`ENGINE_TOKEN_B`（跨租户
   用例）、`ENGINE_HMAC_SECRET`（签名/重放用例）。任务网络
   `allowlist: ["engine"]`。
-- 源方案只描述"测什么"；9 张 DDL 表、报告/生命周期端点族、HMAC
+- 评测指标设计只描述"测什么"；9 张 DDL 表、报告/生命周期端点族、HMAC
   形制是按合理标准形态实现的约定，对齐真实引擎时改对应 checker 重
   新注入。

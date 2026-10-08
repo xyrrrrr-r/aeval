@@ -1,4 +1,4 @@
-"""Suite discovery and thin-overlay loading (plan §1).
+"""Suite discovery and thin-overlay loading.
 
 A suite is a directory containing ``suite.yaml`` under a suites root.
 Loading is fail-loud: duplicates, overlaps with Harbor-owned facts,
@@ -140,7 +140,7 @@ def _load_task_categories(suite_dir: Path) -> dict[str, object]:
     """维度模型声明：task_categories.yaml（套件自写）与注入器生成的
     task_categories.cases.yaml 合并（套件侧优先）。
 
-    结构（评测平台设计 §4.2 的维度模型——阈值/权重/大块/红线）::
+    结构（维度模型——阈值/权重/大块/红线）::
 
         categories:
           a2a: A2A 协议            # 简式：只有显示名
@@ -384,7 +384,7 @@ def assert_unique_suite_identity(suites: Sequence[ResolvedSuite]) -> None:
 
 
 def render_suite_explanation(suite: ResolvedSuite) -> str:
-    """Read-only composed view of overlay + Harbor files (plan §9.1).
+    """Read-only composed view of overlay + Harbor files.
 
     The rendered page is an artifact, never an input — it annotates
     where each fact comes from so a reader never mistakes the render

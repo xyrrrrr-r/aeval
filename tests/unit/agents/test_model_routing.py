@@ -1,4 +1,4 @@
-"""The model_routing declaration (AGENT-ABSTRACTION-2 §4.3/§4.5).
+"""The model_routing declaration.
 
 One declaration now answers "which wire does this agent speak for model
 traffic, and which env vars point it at the facade": the composition derives
@@ -129,7 +129,7 @@ def test_facade_routing_env_uses_the_declared_spellings():
     assert facade_routing_env(ModelRouting(agent_protocol="gateway_native")) == {}
 
 
-# ── the reconciliation rules (§4.5) ────────────────────────────────────────
+# ── the reconciliation rules ────────────────────────────────────────
 
 
 def _complete_adapter(**overrides):

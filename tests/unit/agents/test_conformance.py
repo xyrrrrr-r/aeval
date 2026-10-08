@@ -1,4 +1,4 @@
-"""P2-2: the conformance kit — and its honesty rule.
+"""The conformance kit — and its honesty rule.
 
 Six checks, each mapping to a way a second agent breaks an evaluation silently.
 The rule that matters most: a check that could not run reports ``skipped``, never

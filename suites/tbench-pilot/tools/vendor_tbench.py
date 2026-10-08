@@ -387,7 +387,7 @@ def _adapt_dockerfile(
 # writes the reward. Harbor's adapter checklist demands a reward file on
 # EVERY code path ("it never trusts a pre-existing reward file"); without
 # one, a failing task is reported as `RewardFileNotFoundError` instead of
-# reward 0 and the trial cannot be judged. Measured on the first M0 pilot:
+# reward 0 and the trial cannot be judged. Measured in the first pilot run:
 # all three failed tasks became unjudgeable while hello-world passed.
 REWARD_PUBLICATION = """#!/bin/bash
 
@@ -400,7 +400,7 @@ REWARD_PUBLICATION = """#!/bin/bash
 # shell (set -euo pipefail), so a failing `run-uv-pytest.sh` exits the
 # script on that line and the reward branch never runs.
 #
-# Measured on the first M0 pilot: the three failed tasks published no
+# Measured in the first pilot run: the three failed tasks published no
 # reward at all, Harbor raised RewardFileNotFoundError instead of
 # recording reward 0, and those trials became unjudgeable for a reason
 # that has nothing to do with the agent. Disabling errexit around the run
@@ -595,7 +595,7 @@ def main() -> None:
         "   file to be (re)written on EVERY code path. Upstream's script",
         "   cannot: `setup-uv-pytest.sh` is sourced and turns on errexit, so",
         "   a failing `run-uv-pytest.sh` exits the script before the reward",
-        "   branch. Measured on the first M0 pilot — the three failed tasks",
+        "   branch. Measured in the first pilot run — the three failed tasks",
         "   produced no reward, Harbor raised `RewardFileNotFoundError`",
         "   instead of recording reward 0, and those trials were excluded as",
         "   unjudgeable for a reason unrelated to the agent. The vendored",

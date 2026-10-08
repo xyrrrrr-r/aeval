@@ -1,4 +1,4 @@
-"""Owner-side trial/environment access seam (P0-4).
+"""Owner-side trial/environment access seam.
 
 Harbor hook events carry no environment object; the owner wraps the
 queue's ``_setup_hooks`` to reach the live ``Trial`` and its started

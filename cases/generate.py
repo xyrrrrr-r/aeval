@@ -33,13 +33,12 @@ import yaml
 LIBRARY = Path(__file__).resolve().parent
 CHECKERS = LIBRARY / "checkers"
 
-# 源方案《Benchmark 测评指标设计方案》§2 的服务类别用例数（12 类共
-# 89 例；intelligence 11 例与 memory 14 例是会话契约用例，锚定在
-# 消费套件的判分器里，不属于本库。钉钉集成与 Plan 编排两类已按
-# 0.2.0 需求移出评测范围，checker 一并删除；0.3.0 收窄 ddl 类，
-# 五张表与消息顺序/双写检测不再单独成例；0.4.0 移出 error 类
-# HMAC 三用例；0.5.0 移出 report.hmac_auth、task_center.hmac_
-# execute 与 tool_audit 两个 SSRF 用例）。
+# 服务类别用例数（12 类共 89 例；会话契约类用例——智能度与记忆——锚定在
+# 消费套件的判分器里，不属于本库。第三方集成类与流程编排类已按 0.2.0
+# 需求移出评测范围，checker 一并删除；0.3.0 收窄 ddl 类，五张表与消息
+# 顺序/双写检测不再单独成例；0.4.0 移出 error 类 HMAC 三用例；0.5.0 移出
+# report 的 HMAC 鉴权、task_center 的 HMAC 执行与 tool_audit 的两个 SSRF
+# 用例）。
 EXPECTED_COUNTS = {
     "health": 3,
     "chat": 10,
@@ -67,10 +66,9 @@ DEFAULT_COLLECT_COMMAND = (
 HEADER = '''#!/usr/bin/env python3
 # 由 aeval/cases/generate.py 按类别生成 —— 不要手改套件 tasks/ 下的
 # 副本；改用例请改 aeval/cases/checkers/<category>.py 后重新注入。
-"""{doc_title} —— 源方案《Benchmark 测评指标设计方案》§2 服务用例的
-执行脚本：直接探测被测引擎（ENGINE_BASE_URL）并发布
-/logs/verifier/reward.txt（检查通过 = 1，失败 = 0；引擎不可达视为
-失败，原因打印到 verifier 日志留痕）。"""
+"""{doc_title} —— 服务自查用例的执行脚本：直接探测被测引擎
+（ENGINE_BASE_URL）并发布 /logs/verifier/reward.txt（检查通过 = 1，
+失败 = 0；引擎不可达视为失败，原因打印到 verifier 日志留痕）。"""
 
 from __future__ import annotations
 
@@ -206,19 +204,18 @@ RUN mkdir -p /workspace \\
 
 INSTRUCTION = """（服务自查用例 · {category} 类）{title}
 
-本用例来自源方案《Benchmark 测评指标设计方案》§2「{category}」类
-（{doc_line}），检查内容：{description}。
+本用例检查引擎服务的「{category}」能力：{doc_line}。
+本次检查内容：{description}。
 
-这是②道用例：被测对象是引擎服务（ENGINE_BASE_URL 指向的部署），
-不是你的行为。验证阶段由本任务自带的执行脚本
-tests/check_{category}.py 直接探测引擎端点并发布 reward——
-检查通过写入 1，检查失败（含引擎不可达，属于部署依赖缺失）写入 0，
-失败原因会留在 verifier 日志里。
+被测对象是引擎服务（ENGINE_BASE_URL 指向的部署），不是你的行为。
+验证阶段由本任务自带的执行脚本 tests/check_{category}.py 直接探测
+引擎端点并发布 reward——检查通过写入 1，检查失败（含引擎不可达，
+属于部署依赖缺失）写入 0，失败原因会留在 verifier 日志里。
 
 你无需执行任何操作：请保持会话待命，等待验证阶段完成即可。
 """
 
-# 源方案 §2 类别表里每类的「测什么」行（供 instruction 引用）。
+# 每个类别「测什么」的一行说明（供 instruction 引用）。
 _CATEGORY_LINES = {
     "health": "基础连通：服务存活、引擎就绪、记忆系统连通性诊断",
     "chat": "核心对话：流式/非流式、空消息、超长输入、特殊字符、SSE 事件格式",
@@ -386,7 +383,7 @@ def _materialize(suite_dir: Path, categories, overrides) -> int:
         + yaml.safe_dump(titles, allow_unicode=True, sort_keys=True),
         encoding="utf-8",
     )
-    # 维度模型（评测平台设计 §4.2 的评分参数）：选中类别的显示名 +
+    # 维度模型（评分参数）：选中类别的显示名 +
     # 大块 + 权重 + 阈值 + 红线标记。任务归组由报告侧按 task_id 首
     # 个点前的前缀确定性推导；这里封存的是评分参数，消费套件可在
     # task_categories.yaml 覆盖任何字段（套件侧优先）。

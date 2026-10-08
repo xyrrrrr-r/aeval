@@ -1,4 +1,4 @@
-"""Thin-overlay validation (plan §1): refuse drift before it becomes a score.
+"""Thin-overlay validation: refuse drift before it becomes a score.
 
 Rules:
 1. Restating a Harbor-owned fact → error (no precedence merging).
@@ -101,9 +101,9 @@ def _harbor_task_images(task_data: dict[str, Any]) -> dict[str, str]:
 
 
 def validate_task_provenance(task_data: dict[str, Any], source: Path | str = "") -> None:
-    """Every imported task must carry a provenance block (plan §9.5).
+    """Every imported task must carry a provenance block.
 
-    A missing provenance block is a P0 failure — retrofitting it later
+    A missing provenance block is a hard failure — retrofitting it later
     leaves historical tasks with unknown origin.
     """
     where = f" ({source})" if source else ""

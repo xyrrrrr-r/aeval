@@ -1,4 +1,4 @@
-"""P1-3: a spend cap nobody can enforce must block the run, not silently fail.
+"""A spend cap nobody can enforce must block the run, not silently fail.
 
 Before this, budget enforcement was vestigial end to end: ``BudgetSnapshot`` /
 ``RunManifest.budget_enforcement_point`` were never written, no config surface

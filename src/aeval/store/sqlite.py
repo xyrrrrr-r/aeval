@@ -1,4 +1,4 @@
-"""SQLite trial store (plan §6): append-only, idempotent, verifiable.
+"""SQLite trial store: append-only, idempotent, verifiable.
 
 - ``trial_id`` is globally unique (PK);
 - (run, suite, task, index) is unique — a second trial with the same
@@ -26,7 +26,7 @@ from aeval.contracts import (
 
 __all__ = ["TrialStore", "StoreConflictError"]
 # Atomic unit-of-work note: persist_trial_with_grades is the production
-# write path (P0-7); the single-entity persists remain for migrations
+# write path; the single-entity persists remain for migrations
 # and tooling.
 
 
@@ -88,7 +88,7 @@ class TrialStore:
         return RunManifest.model_validate_json(row["manifest_json"])
 
     def run_intent_digest(self, run_id: str) -> str:
-        """The trusted intent digest of a recorded run (P0-8 seal binding).
+        """The trusted intent digest of a recorded run (seal binding).
 
         The stored manifest is the copy written at run creation, before
         any trial existed; comparing its intent digest against the
@@ -119,7 +119,7 @@ class TrialStore:
         except sqlite3.IntegrityError as exc:
             # A conflict must leave the store exactly as it was — a
             # half-written prefix that a later commit could flush is a
-            # corrupted record (P0-7).
+            # corrupted record.
             self._conn.rollback()
             c = record.coordinates
             raise StoreConflictError(
@@ -134,7 +134,7 @@ class TrialStore:
             self._conn.commit()
         except sqlite3.IntegrityError as exc:
             # Roll back the whole batch: a mid-batch conflict must not
-            # leave earlier rows behind (P0-7).
+            # leave earlier rows behind.
             self._conn.rollback()
             raise StoreConflictError(
                 f"grade batch for trial {trial_id!r} rolled back — a grade "
@@ -148,7 +148,7 @@ class TrialStore:
 
         Either the full record with every grade lands, or nothing does.
         A conflict anywhere rolls the whole unit back; no prefix of a
-        trial or of its grade list can survive (P0-7).
+        trial or of its grade list can survive.
         """
         try:
             self._conn.execute("BEGIN IMMEDIATE")

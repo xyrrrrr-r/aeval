@@ -1,4 +1,4 @@
-"""Baseline arrival assertions (plan §2): prove the copy reached baseline.
+"""Baseline arrival assertions: prove the copy reached baseline.
 
 Runs on ENVIRONMENT_START, i.e. after the environment is created but
 before the agent starts. Every failure writes stop_reason=infra_error
@@ -70,7 +70,7 @@ async def probe_observable(
     The read uses the REAL environment API — ``await env.exec(...)`` —
     which is a different surface from the agent's tools (L3 isolation):
     the agent can never invoke this. There is no ``env.inspect()`` in
-    Harbor (P0-2: that was a fabricated API).
+    Harbor (that was a fabricated API).
 
     Supported ``source`` kinds:
     - ``file:<path>`` — read the file inside the sandbox and parse it
@@ -284,7 +284,7 @@ async def assert_isolation_policy(env_handle: Any) -> list[str]:
     Two things are asserted, both from facts the handle really owns:
 
     1. the DSH-side interaction approval policy, when the owner injected
-       one, must not be ``ask`` (case D19) — an unasserted interactive
+       one, must not be ``ask`` — an unasserted interactive
        approval silently changes agent behaviour mid-trial;
     2. the environment itself must be able to enforce the requested
        network policy: providers report this through ``capabilities``
@@ -292,7 +292,7 @@ async def assert_isolation_policy(env_handle: Any) -> list[str]:
        ``dynamic_network_policy``). A provider that can enforce nothing
        cannot isolate the copy.
 
-    P0-2: a missing handle, or an environment where NO isolation fact is
+    A missing handle, or an environment where NO isolation fact is
     observable at all, is an ISSUE — never a silent pass. Environment
     verification on the real e2b backend showed that ``approval_policy``
     does not exist on a Harbor environment object, so treating its
@@ -345,14 +345,14 @@ async def assert_isolation_policy(env_handle: Any) -> list[str]:
 async def assert_egress_effective(env_handle: Any) -> list[str]:
     """Egress must be actually enforced inside the copy, not just configured.
 
-    P0-2: the assertion reads the REAL ``network_policy`` of the live
+    The assertion reads the REAL ``network_policy`` of the live
     environment (what the container can reach), never a fabricated
     ``egress_policy`` attribute. Semantics:
 
     - ``public`` — uncontrolled egress: rejected;
     - ``no-network`` — fixture semantics: accepted;
-    - ``allowlist`` — the broker/package-source allowlist the doc
-      mandates for the model phase: ACCEPTED (the old check
+    - ``allowlist`` — the broker/package-source allowlist the model phase
+      requires: ACCEPTED (the old check
       misrejected it as "not none"); an empty host list is rejected as
       a misdeclared allowlist;
     - no handle / no observable policy — an ISSUE, never a silent pass.

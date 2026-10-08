@@ -1,4 +1,4 @@
-"""Trajectory grading framework — the top-level design (§1).
+"""Trajectory grading framework.
 
 A trajectory grader judges *how* the agent ran, not just *what* it
 produced. This module owns the shared skeleton so concrete graders
@@ -111,8 +111,8 @@ class TrajectoryEvidence:
     total_prompt_tokens: int | None = None
     total_completion_tokens: int | None = None
     total_cached_tokens: int | None = None
-    # --- conversation-surface and timing views (integration P2) ---
-    # Additive with defaults: P1 metrics read ``transcript`` directly,
+    # --- conversation-surface and timing views ---
+    # Additive with defaults: the base metrics read ``transcript`` directly,
     # so existing graders keep working unchanged.
     agent_messages: tuple[TrajectoryMessage, ...] = ()
     user_message_texts: tuple[str, ...] = ()
@@ -201,7 +201,7 @@ def load_sealed_transcript(record: TrialRecord) -> CanonicalTranscript:
 
 
 def load_sealed_anchors(record: TrialRecord) -> dict[str, Any]:
-    """Load and verify the trial's sealed rubric anchors (P2 channel).
+    """Load and verify the trial's sealed rubric anchors.
 
     Returns the parsed ``rubric/task_anchors.json`` mapping (suites key
     it by task_id); raises :class:`SealedArtifactError` when the anchors
@@ -289,7 +289,7 @@ def build_evidence(
     if isinstance(atif_extra, dict):
         extras = dict(atif_extra)
 
-    # --- conversation-surface and timing views (integration P2) ---
+    # --- conversation-surface and timing views ---
     agent_messages = agent_replies_from_steps(steps)
     user_message_texts = user_message_texts_from_steps(steps)
     step_timestamps = tuple(

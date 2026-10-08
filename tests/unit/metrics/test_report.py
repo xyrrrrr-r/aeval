@@ -1,4 +1,4 @@
-"""Aggregation and report tests (plan §7 row 13): traceable numbers only."""
+"""Aggregation and report tests: traceable numbers only."""
 
 from __future__ import annotations
 
@@ -100,7 +100,7 @@ def test_export_jsonl_never_leaks_session_content():
     assert "prompt text" not in blob
 
 
-# --- per-task roll-up (integration P2) -------------------------------------
+# --- per-task roll-up (integration) -------------------------------------
 
 
 def _multi_task_trials():

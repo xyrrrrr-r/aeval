@@ -1,4 +1,4 @@
-"""P0 acceptance: a non-Node, ATIF-only second agent reaches a sealed run.
+"""Acceptance: a non-Node, ATIF-only second agent reaches a sealed run.
 
 The framework's claim is that a second agent costs one adapter, not a core
 change. This pins the part of that claim reachable without Docker: an adapter

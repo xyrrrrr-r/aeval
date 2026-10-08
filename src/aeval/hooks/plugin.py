@@ -116,7 +116,7 @@ def create_run_context(job: Any) -> EvaluationContext:
         trials_dir=trials_dir,
         session_record_override=manifest.session_record_override,
     )
-    # P0-4: controlled model routing is opt-in via the operator's broker
+    # Controlled model routing is opt-in via the operator's broker
     # spec; a BROKEN spec fails registration rather than silently
     # running trials with uncontrolled model access.
     context.broker_spec = parse_broker_spec()
@@ -148,7 +148,7 @@ def register_trial_hooks(job: Any, context: EvaluationContext) -> None:
         state = context.state_for_event(event)
         if state.terminal:
             return
-        # P0-2 audit at the first point where the sandbox is really up:
+        # Environment audit at the first point where the sandbox is really up:
         # the handle comes from the owner's trial registry, never from
         # the (environment-less) hook event.
         env_handle = None
@@ -159,16 +159,16 @@ def register_trial_hooks(job: Any, context: EvaluationContext) -> None:
         except Exception as exc:
             state.mark_infra_invalid(f"environment audit failed: {exc}")
         if state.infra_invalid_reasons:
-            # P0-2: the model phase started on a tainted trial. The
+            # The model phase started on a tainted trial. The
             # real hard block is the owner refusing to hand out a model
-            # token (P0-4); this record makes the violation visible in
+            # token; this record makes the violation visible in
             # the run summary no matter what.
             issue = "agent started despite recorded infra failures"
             if issue not in state.evidence_issues:
                 state.evidence_issues.append(issue)
             state.mark_infra_invalid(issue)
             return
-        # P0-4 owner side: deploy the job token and create the trusted
+        # Owner side: deploy the job token and create the trusted
         # control binding. This is the first point where the sandbox
         # exists (AGENT_START), and it is deliberately skipped for a
         # tainted trial — the owner must not hand out a model token to
@@ -201,7 +201,7 @@ def register_trial_hooks(job: Any, context: EvaluationContext) -> None:
                 broker=state.broker,
                 provider=str(context.broker_spec.identity.get("provider", "")),
                 model=str(context.broker_spec.identity.get("model", "")),
-                # in-sandbox control stack (verified deployment, §7.5/7.6)
+                # in-sandbox control stack (verified deployment)
                 agent=agent_handle,
                 control_dist=getattr(context.broker_spec, "control_dist", None),
                 control_ca=getattr(context.broker_spec, "control_ca", None),
@@ -225,8 +225,8 @@ def register_trial_hooks(job: Any, context: EvaluationContext) -> None:
             return
         # Terminal descriptor: written here only when the adapter declares the
         # OWNER as the terminal observer (a stack with no sandbox-side witness).
-        # example-lab: without it every real run died at the evidence gate with
-        # "bundle descriptor missing (host-side control plugin)".
+        # On the real target host, without it every real run died at the evidence
+        # gate with "bundle descriptor missing (host-side control plugin)".
         await _write_terminal_descriptor(context, state)
         if state.infra_invalid_reasons:
             issue = "agent ended with infra failures recorded"
@@ -241,7 +241,7 @@ def register_trial_hooks(job: Any, context: EvaluationContext) -> None:
                 raise LifecycleError("verification started after trial termination")
             if state.binding is None:
                 raise LifecycleError("trial has no trusted control binding")
-            # P0-6 real producer: trust first, then collect the fixed
+            # Real producer: trust first, then collect the fixed
             # evidence outputs from the live trial. Collection still runs
             # for trials that will fail later checks, so failures and
             # cancellations leave locatable evidence behind.
@@ -273,7 +273,7 @@ def register_trial_hooks(job: Any, context: EvaluationContext) -> None:
         except (LifecycleError, EvidenceIntegrityError) as exc:
             state.evidence_ok = False
             state.mark_infra_invalid(str(exc))
-            # D52: block the verifier (score validity is unchanged) but
+            # Block the verifier (score validity is unchanged) but
             # still leave an explicit, reasoned exclusion record — a trial
             # with no record at all makes the whole run unsealable.
             await _record_unjudgeable_exclusion(event, context, state, str(exc))
@@ -286,7 +286,7 @@ def register_trial_hooks(job: Any, context: EvaluationContext) -> None:
         # Record a broker that died on its own BEFORE stopping it: that
         # closes the lease and makes every later model call fail with
         # AEVAL_LEASE_CLOSED, which is otherwise inexplicable from the
-        # trial log (found on the real chain).
+        # trial log (seen on a real run).
         unexpected = note_broker_unexpected_exit(state)
         if unexpected is not None:
             state.mark_infra_invalid(unexpected)
@@ -294,7 +294,7 @@ def register_trial_hooks(job: Any, context: EvaluationContext) -> None:
         if state.finish(exception, cancelled=cancelled):
             await finalize_trial_record(event, context)
             await _grade_and_record(event, context, state)
-            # D52: an observed trial must never vanish from the store — the
+            # An observed trial must never vanish from the store — the
             # sealer refuses to seal a run holding a record-less trial and
             # every other trial's evidence is lost with it. No-op when
             # grading already recorded the trial.
@@ -490,11 +490,11 @@ async def _stage_task_tests(
 
 
 async def _grade_and_record(event: Any, context: EvaluationContext, state: Any) -> None:
-    """Run the grading pipeline and persist the trial record (P0-7).
+    """Run the grading pipeline and persist the trial record.
 
-    This is the production wiring P0-7 needs: without it no trial ever
+    This is the production wiring: without it no trial ever
     reaches the store and ``finalize_run`` refuses to seal the run
-    (found on the real chain: "trial(s) without a store record").
+    (a real run reported "trial(s) without a store record").
 
     Only a trial whose evidence actually passed the gate is graded; a
     trial without verified evidence stays unrecorded on purpose, because
@@ -559,7 +559,7 @@ async def _record_unjudgeable_exclusion(
 ) -> bool:
     """Persist an explicit, reasoned exclusion for an unverifiable trial.
 
-    D52 (found on the real chain): a trial whose agent died before the
+    A trial whose agent died before the
     official session record existed — e.g. the DSH run hit the
     single-response token cap mid-turn — left no store record at all,
     because only a trial that passed the evidence gate is graded. The run
@@ -677,7 +677,7 @@ def _observed_adapter(context: EvaluationContext, state: Any) -> Any:
     """
     from aeval.agents.contract import build_adapter_spec
 
-    # Recording identity must never cost us the record itself (D52: a trial that
+    # Recording identity must never cost us the record itself (a trial that
     # vanishes from the store refuses the whole seal), so every failure here is
     # appended to the trial's evidence issues and the record is still written.
     try:
@@ -699,7 +699,7 @@ def _transcript_extra(context: EvaluationContext, state: Any) -> dict[str, Any] 
     A failure here is recorded on the trial instead of being swallowed:
     the grader then reports ``cannot_judge`` (its required completeness
     fields are unavailable), and the reason must be visible in the audit
-    rather than inferred (found on the real chain: the verdict was
+    rather than inferred (seen on a real run: the verdict was
     cannot_judge with nothing explaining why).
     """
     environments = context.environments

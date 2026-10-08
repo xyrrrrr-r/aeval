@@ -1,4 +1,4 @@
-"""P0-7 stage-wise requirement progress tests.
+"""Stage-wise requirement progress tests.
 
 The six bits are never defaulted true and judge_finished cannot be set
 before grading actually completed.

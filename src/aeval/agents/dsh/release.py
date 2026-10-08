@@ -1,6 +1,6 @@
 """The DSH official release pin: this adapter's supply-chain facts.
 
-Moved out of ``aeval.provenance`` (agent-abstraction cleanup B4): the exact
+Moved out of ``aeval.provenance``: the exact
 official DSH preview slice — npm packages + integrity, Node versions,
 Cordis/ACP versions, lockfile digest — is DSH's own fact, so it lives in
 DSH's adapter package and reaches the runtime lock through the adapter's
@@ -33,7 +33,7 @@ __all__ = [
 OFFICIAL_DSH_TAG = "dsh-v0.1.7-alpha.1"
 OFFICIAL_DSH_COMMIT = "c36a83ff6bb95e3f82cf79f9be7c724270a8aa61"
 
-# Exact npm compatibility slice for DSH 0.1.7-alpha.1 (plan §0.1). Beyond the
+# Exact npm compatibility slice for DSH 0.1.7-alpha.1. Beyond the
 # packages the CLI itself ships, this pins every package the control plugin
 # imports DIRECTLY inside the DSH process (defense 1 of the control-stack
 # split): the plugin resolves these from DSH's own nested node_modules, so a

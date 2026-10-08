@@ -11,8 +11,9 @@ Three rules keep that layer honest:
 
 1. **A base may never restate a Harbor-owned fact.** Bases go through the
    same overlap check as suites, so a base cannot become a laundering
-   channel for ``trials``/``budget``/``attempts``/… that must stay in the
-   Harbor task/job files.
+   channel for ``trials``/``attempts``/``timeout``/… that must stay in the
+   Harbor task/job files. (``budget`` is deliberately not Harbor-owned —
+   see ``HARBOR_OWNED_TOP_KEYS``.)
 2. **Merge semantics are declared per field, never a generic deep merge.**
    Scalars replace, keyed lists merge by identity, union lists append, and
    ``remove`` is the only way to drop an inherited entry — so "what did

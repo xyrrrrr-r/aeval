@@ -64,7 +64,7 @@ def test_dsh_job_carries_the_verified_agent_settings():
 
 
 def test_verifier_always_writes_a_reward_file():
-    """Regression (real chain): Harbor requires a reward file; a verifier
+    """Regression (a live end-to-end run): Harbor requires a reward file; a verifier
     that only exits non-zero makes the trial crash with
     RewardFileNotFoundError before any grading happens."""
     script = (SUITE / "tasks" / "hello" / "tests" / "test.sh").read_text("utf-8")
@@ -75,7 +75,7 @@ def test_verifier_always_writes_a_reward_file():
 
 
 def test_observables_are_file_sources_only(suite):
-    """P0-2: db:/screenshot:/dom: probes fail closed — the e2e suite
+    """db:/screenshot:/dom: probes fail closed — the e2e suite
     must declare file: observables exclusively."""
     for observable in suite.overlay.observables:
         assert observable.source.startswith("file:"), observable
@@ -149,7 +149,7 @@ def test_pinned_digest_is_the_arm64_manifest_digest():
     assert PINNED_DIGEST.startswith("sha256:")
     assert len(PINNED_DIGEST) == len("sha256:") + 64
     # The runtime lock must record platform arm64 for the sandbox image;
-    # observed-identity binding (P0-2) compares against exactly this.
+    # observed-identity binding compares against exactly this.
     from aeval.contracts import ImageIdentity
 
     image = ImageIdentity(

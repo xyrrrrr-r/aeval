@@ -1,4 +1,4 @@
-# M0 pilot: 3 tasks x 3 attempts with the real DSH agent and the real
+# pilot: 3 tasks x 3 attempts with the real DSH agent and the real
 # provider. Serial execution (n_concurrent_trials: 1): each trial drives a
 # real e2b sandbox plus the TLS model broker, and the cluster runs the
 # sandbox stack on the same host.

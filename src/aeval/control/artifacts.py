@@ -1,4 +1,4 @@
-"""Control-artifact discovery: one resolution point (G8).
+"""Control-artifact discovery: one resolution point.
 
 A control artifact is a built file of one of the TypeScript control packages
 (``dsh-eval-control``, ``deepagents-eval-control`` — the compiled stacks the

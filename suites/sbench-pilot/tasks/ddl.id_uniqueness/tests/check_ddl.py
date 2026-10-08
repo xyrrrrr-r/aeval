@@ -1,10 +1,9 @@
 #!/usr/bin/env python3
 # 由 aeval/cases/generate.py 按类别生成 —— 不要手改套件 tasks/ 下的
 # 副本；改用例请改 aeval/cases/checkers/<category>.py 后重新注入。
-"""ddl —— 源方案《Benchmark 测评指标设计方案》§2 服务用例的
-执行脚本：直接探测被测引擎（ENGINE_BASE_URL）并发布
-/logs/verifier/reward.txt（检查通过 = 1，失败 = 0；引擎不可达视为
-失败，原因打印到 verifier 日志留痕）。"""
+"""ddl —— 服务自查用例的执行脚本：直接探测被测引擎
+（ENGINE_BASE_URL）并发布 /logs/verifier/reward.txt（检查通过 = 1，
+失败 = 0；引擎不可达视为失败，原因打印到 verifier 日志留痕）。"""
 
 from __future__ import annotations
 
@@ -76,9 +75,9 @@ def hmac_headers(body_text):
 # 主键唯一性。0.3.0 需求收窄：messages/plans/plan_steps/tasks/
 # memory_records 五张表与消息顺序、双写检测不再单独成例。
 
-# 引擎持久化的 9 张表（源方案"9 张表"未点名，按被描述的系统域取合
-# 理清单）：schema/时间/主键等横切检查按引擎实际形态覆盖全表；只有
-# CASE_TABLES 里的表单独成例。对齐真实引擎时改此表并重新生成即可。
+# 引擎持久化的 9 张表（按被描述的系统域取合理清单）：schema/时间/
+# 主键等横切检查按引擎实际形态覆盖全表；只有 CASE_TABLES 里的表单独
+# 成例。对齐真实引擎时改此表并重新生成即可。
 TABLES = (
     "sessions", "messages", "plans", "plan_steps", "tasks",
     "artifacts", "tool_calls", "usage_stats", "memory_records",

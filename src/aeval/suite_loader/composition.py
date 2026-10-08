@@ -128,7 +128,7 @@ def _validate_local_task(suite: ResolvedSuite, path: Path, job_data: dict[str, A
     if provenance is None:
         provenance = suite.overlay.provenance.model_dump()
     validate_task_provenance({"provenance": provenance}, path)
-    # P0-2: reject unsupported sandbox semantics up front. e2b
+    # Reject unsupported sandbox semantics up front. e2b
     # sandboxes have no host bind mounts (capabilities.mounted is
     # False; logs are downloaded, not mounted), and verifier log
     # filters can silently drop required evidence.
@@ -141,7 +141,7 @@ def _validate_local_task(suite: ResolvedSuite, path: Path, job_data: dict[str, A
         )
 
     validate_thin_overlay(suite, data, job_data)
-    # P0-6: the task must declare [[verifier.collect]] commands for
+    # The task must declare [[verifier.collect]] commands for
     # every required evidence output — at suite time, before any run.
     from aeval.hooks.evidence import (
         EvidenceIntegrityError,
@@ -303,7 +303,7 @@ def compose_harbor_job(
     a launch argument; for every other adapter it is the same fact recorded in
     the same place. Omitting it is how the generic facade flavor's first real
     run ended up talking the Responses API to a facade that serves chat
-    completions (P2-5b).
+    completions.
     """
     root = Path(suite.suite_dir).resolve()
     inputs = resolve_harbor_inputs(suite)
@@ -347,7 +347,7 @@ def compose_harbor_job(
     _check_agent_capabilities(agents, suite.overlay.driver.require, job_path)
     _check_session_record_pairing(agents, suite, job_path, session_record)
     job = JobConfig.model_validate(deepcopy(job_data), extra="forbid")
-    # P0-2: verifier log filters can silently drop required evidence
+    # Verifier log filters can silently drop required evidence
     # logs — an evaluation job must collect the full verifier log set.
     if job.verifier.include_logs or job.verifier.exclude_logs:
         raise SuiteError(

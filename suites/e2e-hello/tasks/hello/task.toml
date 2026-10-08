@@ -10,7 +10,7 @@ schema_version = "1.4"
 network_mode = "no-network"
 
 [[verifier.collect]]
-# P0-6: the fixed evidence outputs must be produced by a declared
+# The fixed evidence outputs must be produced by a declared
 # collect command; observables are probed via the environment API and
 # are not collect outputs.
 command = "aeval-collect runtime_dump mock_call_log dsh_session canonical_transcript"

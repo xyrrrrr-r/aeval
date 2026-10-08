@@ -1,4 +1,4 @@
-"""Grader execution (plan §5).
+"""Grader execution.
 
 - ``pure`` graders run in the core process over sealed TrialRecords.
 - ``exec`` graders run in Harbor's separate verifier environment:
@@ -49,7 +49,7 @@ class GraderIdentityError(RuntimeError):
 class ExecIsolationUnavailableError(ExecEnvironmentError):
     """Exec graders need an isolated execution environment; none exists.
 
-    P0-7 explicitly refuses to run exec graders in-process: the name
+    This module explicitly refuses to run exec graders in-process: the name
     and comments do not create a filesystem/network sandbox, and the
     orchestration process holds host credentials. Until a real isolated
     executor is implemented and wired, exec graders fail closed.
@@ -81,8 +81,8 @@ async def execute_exec_grader(
     There is no isolated execution environment in this codebase yet:
     calling this raises :class:`ExecIsolationUnavailableError` instead
     of silently grading in-process. Suites must declare pure graders
-    for the first closed loop (the historical E2E Linux plan's exec-
-    isolation clause; see docs/TESTS/E2E-suite-skeleton.md).
+    for the first closed loop; see docs/guides/writing-a-suite.md for
+    the suite-side grader contract.
     """
     raise ExecIsolationUnavailableError(
         f"exec grader {grader.grader.id}@{grader.grader.version} refused: no "

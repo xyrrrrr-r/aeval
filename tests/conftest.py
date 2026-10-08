@@ -103,7 +103,7 @@ def build_complete_trial_dir(
 ) -> tuple[Path, CollectionManifest]:
     """Create a trial dir whose evidence bundle verifies cleanly.
 
-    Files land at their FIXED paths (P0-6); the manifest is bound to
+    Files land at their FIXED paths; the manifest is bound to
     the runtime lock and every outcome records a successful execution.
     ``tamper`` rewrites one output after hashing; ``omit`` drops one
     logical output entirely; ``descriptor=False`` skips the bundle
@@ -113,7 +113,7 @@ def build_complete_trial_dir(
     built-in path for.
     """
     if runtime_lock is None:
-        raise TypeError("runtime_lock is required since P0-6 (manifest binding)")
+        raise TypeError("runtime_lock is required (manifest binding)")
     from aeval.hooks.evidence import output_path_for
 
     if plan is None:

@@ -31,9 +31,9 @@ broker:
   # peak is well under 8k (hello-world ~90, openssl ~0.8k, sqlite 2.7k-6.5k),
   # but the sqlite task's byte-level page analysis reached exactly 8192 twice
   # and killed the turn; 16384 keeps the declared cap far above real turns so
-  # a verbose-but-valid analysis cannot cost the run its seal (D52).
+  # a verbose-but-valid analysis cannot cost the run its seal.
   maxOutputTokens: 16384
-  # D47: compaction is ALLOWED and ACCOUNTED. The dispatch is metered and
+  # Auxiliary calls (compaction) are ALLOWED and ACCOUNTED. The dispatch is metered and
   # ledgered by the sandbox transport (gateway_aux_dispatches.jsonl), and
   # the mapper merges it into the trial's accounted token totals.
   # session-title is left unset, so it keeps the fail-closed default

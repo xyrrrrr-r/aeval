@@ -1,4 +1,4 @@
-"""Python↔TS bridge protocol tests (plan §7 rows 6–7).
+"""Python↔TS bridge protocol tests.
 
 The real TS bridge (official JsonlSessionPersistence) is M3; these
 tests freeze the Python side of the protocol with a stub node process:

@@ -13,7 +13,7 @@ Layers:
     base.py      sealed-evidence loading (sha256-verified), evidence views
     metrics.py   the built-in metric library (efficiency / robustness /
                  governance / integrity)
-    quality.py   conversation-quality + output-security metrics (P1),
+    quality.py   conversation-quality + output-security metrics,
                  anchor data for suite-authored rubrics
     aggregate.py folding rules: integrity ⇒ fail, efficiency ⇒ score,
                  unjudgeable ⇒ cannot_judge

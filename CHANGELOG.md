@@ -11,6 +11,51 @@ schema、CLI 参数、存储格式），每次都会在下方 `Changed`/`Removed
 
 ## [Unreleased]
 
+### Changed
+
+- **对外文档清洗（为社区发布）**：新增三份自足的使用者指南
+  [`docs/guides/writing-a-suite.md`](docs/guides/writing-a-suite.md)、
+  [`docs/guides/adding-an-agent.md`](docs/guides/adding-an-agent.md)、
+  [`docs/guides/metric-semantics.md`](docs/guides/metric-semantics.md) 与索引
+  [`docs/guides/README.md`](docs/guides/README.md)。开发过程记录、阶段台账
+  记录、环境验证报告与设计稿移入 `docs/internal/`，并**不再随 sdist 分发**
+  （`[tool.hatch.build.targets.sdist] exclude = ["/docs/internal", "/ops/e2b"]`——
+  前者是开发过程记录，后者是自托管 e2b 集群的内部运维脚本，两者对使用者都不可读、
+  也不该随包分发）；内部资料按历史原样保留，接口说明一律以使用者指南为准。
+- **套件版本进位（注释与任务正文清洗导致字节变化）**：`sbench-pilot` 0.5.0 → 0.6.0
+  （任务正文与执行脚本去掉对外不可读的来源引用，任务集仍是 12 类 89 例，判分
+  口径不变）；`e2e-hello` 0.2.0 → 0.3.0、`tbench-pilot` 0.2.0 → 0.4.0
+  （注释清理；tbench-pilot 因试点任务 `tests/test.sh` 的注释去术语化在 0.3.0 之后
+  再进一版）、`deepagent-budget` 0.1.0 → 0.2.0、`deepagent-hello` 0.1.0 → 0.2.0
+  （注释清理）。**这些套件的身份摘要已变化，不与各自上一版同域可比**，按旧版本
+  生成的封存 bundle 不能按原值复算（这是预期行为，下限不会被误平均）。
+
+### Added
+
+- **六项前置事实（`verdict.requirements`）成为真正的门**。套件声明的位只要有一位没置位，
+  该试次就记为 `cannot_judge`（是哪几位写在记录的 `aeval.requirement_shortfall` 里），
+  退出有效分母——既不当作通过，也不当作做错；判分层已产出的 grade 仍留在记录里供追溯。
+  在此之前这六位只被记录：`evaluate_requirements()` 的返回值在调用处被直接丢弃，是死代码。
+  现在它是决定试次位图的唯一出口，并负责在 `infra_error` 时清掉 `judge_finished`
+  （死了的试次不算"判过了"）；`RequirementBitmap` 新增 `missing(required)`。
+  **行为变化**：以前崩溃或被取消的试次（`agent_finished` 未置位）照样会拿到 `pass`/`fail`，
+  现在会被记为 `cannot_judge` 并退出分母。`infra_invalid`（基础设施故障）优先于本门，
+  不会被改写；未在 `verdict.requirements` 里声明的位只记录、不判定，共享基座默认声明
+  全部六位，所以默认口径是"六位全要"。
+
+### Fixed
+
+- **README 版本号与实际不符**：README 写 `v0.1.0`，而发行版为 `0.1.1`。
+- **README 套件表任务数过期**：`sbench-pilot` 标注"123 任务全量"，实际为
+  12 类 89 例（0.5.0 起）。README 的 `0.1.0` 版本号与套件数已同步。
+- **指南事实修正**：判分器模块的 `GRADER_VERSION` **不会**与 `impl: "…@vN"`
+  上的版本号做比对（该后缀被解析后丢弃；实际强制的是 `GRADER_ID`／
+  `GRADER_VERSION` 非空、`grade` 是协程函数、以及 `LAYER` 与声明层一致）；
+  `image:`（`pin`/`rebuild`）在本版本一律拒绝组合，镜像请在 `task.toml`
+  与 Dockerfile 中固定。
+- **跨仓库死链**：`docs/internal/INDEX.md` 指向 `dsh-eval-control` 的相对链接
+  少一层 `../`，清洗前即已失效，已修正。
+
 ## [0.1.1] - 2026-10-08
 
 ### Fixed
@@ -65,10 +110,11 @@ schema、CLI 参数、存储格式），每次都会在下方 `Changed`/`Removed
 
 ### 已知限制
 
-- 真实沙箱全链路（Linux 主机 + 自托管 ARM e2b）仍在逐层推进：控制
-  插件库、DSH 运行适配、官方 session reader/stub 与 ATIF 映射已实现，
-  采集/评分/封存的生产接线未完成——逐层验收步骤见
-  `HARBOR_DSH_E2E_LINUX.md`。离线链路（上述 quickstart）不受影响。
+- 真实沙箱全链路（Linux 主机 + 自托管 ARM e2b）：**已在真机上跑通并封存**——真实
+  provider 凭据下沙箱内真实 agent 完成多步推理与工具调用，`exit 0`、
+  `sealed: 1 trial(s) recorded, 34 file(s) attested, recompute passed`，终态产物
+  得到计分 verdict。注意该验证是在作者自己的拓扑（自托管 e2b 集群 + 内网宿主机）
+  上完成的，换环境需按自己的网络与凭据重新验证；离线链路（上述 quickstart）不受影响。
 - `e2b` 依赖锁定 `>=2.25.0,<2.51.0`：自托管 e2b 集群仅实现 v1
   sandbox API（详见 `pyproject.toml` 内注释）。
 

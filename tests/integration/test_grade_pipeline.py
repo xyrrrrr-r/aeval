@@ -1,4 +1,4 @@
-"""P0-7 grading pipeline integration tests.
+"""Grading pipeline integration tests.
 
 Real grader files, a real store, real suites: the production path from
 sealed evidence to an atomically persisted, classified TrialRecord.
@@ -90,7 +90,13 @@ async def grade(record):
 _MISSING_FILE_GRADER = "GRADER_ID = 'x'\nGRADER_VERSION = 'v1'\n"  # no grade()
 
 
-def _suite(tmp_path: Path, grader_body: str, *, veto: bool = False) -> Path:
+def _suite(
+    tmp_path: Path,
+    grader_body: str,
+    *,
+    veto: bool = False,
+    requirements: list[str] | None = None,
+) -> Path:
     root = tmp_path / "suite"
     (root / "graders").mkdir(parents=True)
     (root / "datasets").mkdir()
@@ -110,6 +116,8 @@ def _suite(tmp_path: Path, grader_body: str, *, veto: bool = False) -> Path:
     suite["verdict"]["graders"] = {
         "default": {"impl": "graders/outcome.py@v7", "layer": "outcome", "veto": veto},
     }
+    if requirements is not None:
+        suite["verdict"]["requirements"] = list(requirements)
     (root / "suite.yaml").write_text(yaml.safe_dump(suite), encoding="utf-8")
     (root / "datasets" / "local.yaml").write_text("path: tasks\n", encoding="utf-8")
     (root / "job.yaml").write_text(
@@ -145,6 +153,11 @@ _COORDS = TrialCoordinates(
 )
 
 
+# The transcript completeness a grader needs to produce a real verdict; with
+# no extra at all the executor's precheck synthesises cannot_judge instead.
+_OK_EXTRA = {"aeval": {"completeness": {"fields": [{"field": "events", "status": "ok"}]}}}
+
+
 def _completed_progress() -> RequirementProgress:
     p = RequirementProgress()
     p.mark("input_complete")
@@ -152,6 +165,20 @@ def _completed_progress() -> RequirementProgress:
     p.mark("agent_finished")
     p.mark("integration_valid")
     p.mark("render_valid")
+    return p
+
+
+def _progress_without(*skipped: str) -> RequirementProgress:
+    """The five stage bits, minus the named ones.
+
+    ``judge_finished`` is never marked here: only the pipeline may set it, and
+    these helpers deliberately model a trial whose stages partly completed.
+    """
+    p = RequirementProgress()
+    for bit in ("input_complete", "artifact_schema_ok", "agent_finished",
+                "integration_valid", "render_valid"):
+        if bit not in skipped:
+            p.mark(bit)
     return p
 
 
@@ -367,3 +394,162 @@ def test_load_suite_graders_missing_reference_fails(tmp_path):
     suite = load_suite(root)
     with pytest.raises(GraderLoadError, match="does not exist"):
         load_suite_graders(suite)
+
+
+# --------------------------------------------------------------------------
+# The requirement gate: a fact the suite requires that never got established
+# makes the trial unjudgeable, instead of letting an untrustworthy outcome
+# count as a pass or a failure.
+# --------------------------------------------------------------------------
+
+
+async def test_requirement_gate_turns_an_unmet_bit_into_cannot_judge(
+    tmp_path, runtime_lock
+):
+    """A stage that never completed excludes the trial, grades kept for audit."""
+    suite = load_suite(_suite(tmp_path, _PASSING_GRADER))
+    store = _open_store(tmp_path, runtime_lock)
+    try:
+        record = await grade_and_record(
+            suite=suite,
+            trial_id="trial-gate-1",
+            coordinates=_COORDS,
+            stop_reason="agent_exit_0",
+            baseline_ok=True,
+            progress=_progress_without("render_valid"),
+            evidence=_evidence(tmp_path, "trial-gate-1"),
+            transcript_extra=_OK_EXTRA,
+            store=store,
+        )
+        assert record.requirements.render_valid is False
+        assert record.requirements.missing() == ["render_valid"]
+        assert record.verdict == "cannot_judge"
+        # the qualifying evidence is not thrown away — only the verdict is
+        assert [g.status for g in record.grades] == ["pass"]
+        assert record.transcript_extra["aeval"]["requirement_shortfall"] == [
+            "render_valid"
+        ]
+        # and the exclusion is what the store persisted
+        assert store.load_trial("trial-gate-1").verdict == "cannot_judge"
+    finally:
+        store.close()
+
+
+async def test_requirement_gate_merges_into_existing_transcript_extra(
+    tmp_path, runtime_lock
+):
+    """Recording the shortfall must not clobber what the trial already wrote."""
+    suite = load_suite(_suite(tmp_path, _PASSING_GRADER))
+    store = _open_store(tmp_path, runtime_lock)
+    try:
+        record = await grade_and_record(
+            suite=suite,
+            trial_id="trial-gate-2",
+            coordinates=_COORDS,
+            stop_reason="agent_exit_0",
+            baseline_ok=True,
+            progress=_progress_without("agent_finished"),
+            evidence=_evidence(tmp_path, "trial-gate-2"),
+            transcript_extra={"aeval": {"custom": "kept"}, "other": 1},
+            store=store,
+        )
+        assert record.verdict == "cannot_judge"
+        assert record.transcript_extra["aeval"]["custom"] == "kept"
+        assert record.transcript_extra["other"] == 1
+    finally:
+        store.close()
+
+
+async def test_requirement_gate_only_enforces_what_the_suite_declares(
+    tmp_path, runtime_lock
+):
+    """Bits outside ``verdict.requirements`` are recorded but do not gate."""
+    suite = load_suite(
+        _suite(
+            tmp_path,
+            _PASSING_GRADER,
+            requirements=["input_complete", "agent_finished"],
+        )
+    )
+    store = _open_store(tmp_path, runtime_lock)
+    try:
+        record = await grade_and_record(
+            suite=suite,
+            trial_id="trial-gate-3",
+            coordinates=_COORDS,
+            stop_reason="agent_exit_0",
+            baseline_ok=True,
+            progress=_progress_without("render_valid", "integration_valid"),
+            evidence=_evidence(tmp_path, "trial-gate-3"),
+            transcript_extra=_OK_EXTRA,
+            store=store,
+        )
+        # still recorded honestly...
+        assert record.requirements.render_valid is False
+        assert record.requirements.integration_valid is False
+        # ...but the suite never required them, so the verdict stands
+        assert record.verdict == "pass"
+        assert "requirement_shortfall" not in (record.transcript_extra or {}).get(
+            "aeval", {}
+        )
+    finally:
+        store.close()
+
+
+async def test_requirement_gate_excludes_even_a_failing_trial(tmp_path, runtime_lock):
+    """Unmet requirement ⇒ ``cannot_judge``, whatever the grader concluded.
+
+    Consequence worth being explicit about: an unmet bit takes the trial out of
+    the valid denominator, so a trial whose agent crashed (``agent_finished``
+    never marked) is *excluded* rather than counted against the agent. That is
+    the chosen semantics — "cannot judge" is not the same claim as "did badly" —
+    and the grades stay in the record, so the underlying signal is still
+    readable even though it no longer drives the verdict. Only ``infra_invalid``
+    (the run itself is soured) escapes the gate.
+    """
+    suite = load_suite(_suite(tmp_path, _FAILING_GRADER))
+    store = _open_store(tmp_path, runtime_lock)
+    try:
+        record = await grade_and_record(
+            suite=suite,
+            trial_id="trial-gate-4",
+            coordinates=_COORDS,
+            stop_reason="agent_exit_0",
+            baseline_ok=True,
+            progress=_progress_without("render_valid"),
+            evidence=_evidence(tmp_path, "trial-gate-4"),
+            transcript_extra=_OK_EXTRA,
+            store=store,
+        )
+        assert record.verdict == "cannot_judge"
+        # the failing grade is preserved for audit
+        assert [g.status for g in record.grades] == ["fail"]
+    finally:
+        store.close()
+
+
+async def test_infra_error_clears_judge_finished_so_the_trial_excludes(
+    tmp_path, runtime_lock
+):
+    """A trial that died on infrastructure was not judged, whatever ran."""
+    suite = load_suite(_suite(tmp_path, _PASSING_GRADER))
+    store = _open_store(tmp_path, runtime_lock)
+    try:
+        record = await grade_and_record(
+            suite=suite,
+            trial_id="trial-gate-5",
+            coordinates=_COORDS,
+            stop_reason="infra_error",
+            baseline_ok=True,
+            progress=_completed_progress(),
+            evidence=_evidence(tmp_path, "trial-gate-5"),
+            transcript_extra=_OK_EXTRA,
+            store=store,
+        )
+        assert record.requirements.judge_finished is False
+        assert record.verdict == "cannot_judge"
+        assert record.transcript_extra["aeval"]["requirement_shortfall"] == [
+            "judge_finished"
+        ]
+    finally:
+        store.close()

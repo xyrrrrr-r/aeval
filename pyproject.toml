@@ -7,20 +7,18 @@ license = "Apache-2.0"
 license-files = ["LICENSE"]
 requires-python = ">=3.12"
 dependencies = [
-    # P0-2: the e2b extra is the sandbox backend for the target
-    # environment. This is an approved dependency change per doc §4.2 —
-    # review the lock churn when installing on the Linux host and never
-    # treat the new transitive versions as verified until recorded.
+    # The e2b extra is the sandbox backend. This pin is deliberate: the
+    # upstream release line moved sandbox creation to the v2 API, which
+    # older self-hosted e2b deployments do not serve. Before bumping,
+    # re-verify against the deployment you actually target and record the
+    # result; the lock file churns on every bump.
     "harbor[e2b]==0.23.0",
-    # Environment-verification finding (example-lab, openEuler 24.03 aarch64):
-    # the self-hosted e2b cluster (api:3000 / client-proxy:3002) implements
-    # only the v1 sandbox API. e2b>=2.51.0 switched sandbox creation to
-    # POST /v2/sandboxes, which that API rejects with
-    # "404: validation error: method not allowed", so the upper bound is
-    # required. The lower bound is harbor 0.23.0's own requirement
-    # (e2b>=2.25.0): 2.24.0 is where SandboxNetworkUpdate — imported by
-    # harbor's e2b backend — first exists. 2.50.0 is the newest release
-    # that still speaks the v1 API.
+    # Upper bound: e2b>=2.51.0 creates sandboxes via POST /v2/sandboxes,
+    # which a v1-only self-hosted cluster (api:3000 / client-proxy:3002)
+    # rejects with "404: validation error: method not allowed". 2.50.0 is
+    # the newest release that still speaks the v1 API.
+    # Lower bound: harbor 0.23.0 requires e2b>=2.25.0, and 2.24.0 lacks
+    # SandboxNetworkUpdate, which harbor's e2b backend imports.
     "e2b>=2.25.0,<2.51.0",
     "pydantic>=2.12.0",
     "pyyaml>=6.0.2",
@@ -83,6 +81,18 @@ build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/aeval"]
+
+# 内部资料不进 sdist：
+#  - docs/internal/ 是开发过程的历史记录（内部阶段编号、缺陷编号、机器名、
+#    实测数据），对使用者不可读，也不应随包分发。
+#  - ops/e2b/ 是内部运维工具（自托管 e2b 集群的加固脚本、部署钩子），面向的是
+#    我们自己的服务器，不含任何面向使用者的接口；其中的默认主机名也不该外泄。
+# 使用者指南（docs/guides/）与图示（docs/images/、docs/diagrams/）随包分发。
+[tool.hatch.build.targets.sdist]
+exclude = [
+    "/docs/internal",
+    "/ops/e2b",
+]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

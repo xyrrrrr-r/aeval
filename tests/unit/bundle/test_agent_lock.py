@@ -1,4 +1,4 @@
-"""P1-1: agent release locks, generalised without invalidating sealed evidence.
+"""Agent release locks, generalised without invalidating sealed evidence.
 
 The lock is the run's identity. Generalising it is only safe if a lock recorded
 before the change still digests to the value stored next to it — otherwise every

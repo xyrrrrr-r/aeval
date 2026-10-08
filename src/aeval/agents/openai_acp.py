@@ -4,10 +4,10 @@ Any ACP-stdio CLI whose model traffic speaks an OpenAI wire — chat
 completions or the responses protocol — is the same adapter once the facts
 vary: which registry entry launches the CLI, which env spellings point it at
 the in-sandbox facade, which protocol the facade must serve. Before this
-module those facts were pinned inside ``DcodeAgent`` (G11), so a sibling
+module those facts were pinned inside ``DcodeAgent``, so a sibling
 CLI could not be reused by declaration alone.
 
-The split (AGENT-ABSTRACTION-2 stage 4.1):
+The split:
 
 - **Behavior lives here.** Constructor (registry entry + model routing env,
   merged into the launcher), read-back (the ACP runner's summary and
@@ -120,9 +120,8 @@ def openai_facade_routing_env(routing: Any) -> dict[str, str]:
     (``MODEL_ROUTING`` on the adapter class — pinned, or materialized from a
     declaration): both base spellings are set when the routing names an
     ``alt_base_url`` (deepagents' ModelSpec reads ``OPENAI_API_BASE`` for some
-    providers while Harbor's integration forwards ``OPENAI_BASE_URL``,
-    DEEPAGENTS-FACTS.md §6). A gateway-native (or absent) routing injects
-    nothing.
+    providers while Harbor's integration forwards ``OPENAI_BASE_URL``).
+    A gateway-native (or absent) routing injects nothing.
     """
     if routing is None or routing.agent_protocol == "gateway_native":
         return {}
@@ -314,7 +313,7 @@ class OpenAiAcpAgent(AcpAgent):
         The ACP runtime mints its own session id; aeval's trial session id is
         the control-wire identity and never appears in the record. So the record
         is the only source of the identity the descriptor has to carry —
-        declared here instead of parsed in the framework (P1-2b: observed
+        declared here instead of parsed in the framework: observed
         identity belongs to the adapter that observes it).
         """
         try:

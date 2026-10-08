@@ -34,7 +34,7 @@ export interface EvalControlConfig {
     readonly jobTokenFile: string;
     readonly refuseAuxiliaryCalls: boolean;
     /**
-     * Per-purpose decisions for advisory model calls, as authored (D47).
+     * Per-purpose decisions for advisory model calls, as authored.
      * Explicit entries win over ``refuseAuxiliaryCalls``; missing entries take
      * that blanket flag (default refuse). Kept as-authored so the config
      * digest matches the harness-composed config field for field; the resolved

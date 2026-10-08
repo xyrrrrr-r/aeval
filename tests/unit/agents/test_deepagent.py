@@ -1,4 +1,4 @@
-"""P2-5a: the deepAgent adapter (deepagents-code over ACP stdio).
+"""The deepAgent adapter (deepagents-code over ACP stdio).
 
 Every assertion here is a lock on an honest declaration: the adapter must not
 overclaim (no metering, no resume, no sdk_jsonrpc), the shipped declaration
@@ -88,7 +88,7 @@ class TestContract:
         check_declaration_matches_adapter(resolved.declaration, DcodeAgent)
 
     def test_provides_is_the_honest_set(self) -> None:
-        # The honesty lock: nothing beyond what P2-5a actually delivers.
+        # The honesty lock: nothing beyond what this adapter actually delivers.
         # resume needs session pinning we do not do; sdk_jsonrpc is a DSH
         # channel this agent has nothing to serve.
         assert DcodeAgent.PROVIDES == frozenset(

@@ -1,4 +1,4 @@
-"""P2-1: ``agents/<id>.yaml`` — one declaration, inherited like a suite.
+"""``agents/<id>.yaml`` — one declaration, inherited like a suite.
 
 Onboarding an agent should cost a declaration, not a core change. The declaration
 uses the same inheritance engine as suites, and is proven against the adapter

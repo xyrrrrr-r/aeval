@@ -2,7 +2,7 @@
 # install-e2b-hardening.sh — 部署 / 校验 e2b 控制面加固（幂等，可反复执行）。
 #
 # 环境级脚本：与具体测试集、具体 harness 无关，服务于 e2b 单机部署本身。
-# 背景、证据与验证记录见 aeval/docs/TESTS/E2B-CONTROL-PLANE-HARDENING.md。
+# 背景、证据与验证记录见内部运维记录（不随发行包分发）。
 #
 # 两种模式：
 #   install-e2b-hardening.sh            # apply：把加固装/修到当前主机

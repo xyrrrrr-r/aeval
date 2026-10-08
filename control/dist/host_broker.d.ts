@@ -15,7 +15,7 @@ export interface HostBrokerOptions {
     /** Legacy blanket decision for purposes without an explicit entry. */
     readonly refuseAuxiliaryCalls?: boolean;
     /**
-     * Per-purpose owner decisions for advisory model calls (D47). Explicit
+     * Per-purpose owner decisions for advisory model calls. Explicit
      * entries win; missing entries take ``refuseAuxiliaryCalls`` (default
      * refuse). Allowing a purpose dispatches and meters it — the accounting
      * evidence is the dispatch ledger, not the session.

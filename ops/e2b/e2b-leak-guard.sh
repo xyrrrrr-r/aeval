@@ -1,7 +1,7 @@
 #!/bin/bash
 # e2b-leak-guard.sh — 防止 e2b 单机部署的构建沙箱泄漏再次拖垮控制面。
 #
-# 背景（2026-09-28/29 实测，见 aeval/docs/TESTS/TBENCH-M0-PILOT.md §11）：
+# 背景（2026-09-28/29 实测；内部运维记录，不随发行包分发）：
 #   模板构建的 optimize/内存预取阶段要 resume 一个沙箱采集预取映射；该阶段
 #   wedge（ResumeSandbox context deadline exceeded）时沙箱销毁路径卡住，
 #   firecracker VM 变成孤儿：既不在 API 的沙箱清单里，也不被 /orchestrator

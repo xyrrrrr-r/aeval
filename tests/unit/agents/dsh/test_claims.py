@@ -1,4 +1,4 @@
-"""Claim checks (plan §7 rows 7/9): a DSH self-report is never its own evidence.
+"""Claim checks: a DSH self-report is never its own evidence.
 
 Every finding compares the mapped Session V4 log with an *independent* record —
 the gateway lease for identity and spend, the mock recorder for tool execution.

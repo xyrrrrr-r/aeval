@@ -1,14 +1,18 @@
 schema_version: 2
 id: sbench-pilot
+# 0.6.0（2026-10-08）：任务正文与执行脚本去掉对外不可读的内部来源引用
+# （此前每条 instruction/checker 都标注了外部读者拿不到的来源章节），
+# 改为自足表述。任务集不变（仍为 12 类 89 例），判分口径不变；因任务
+# 正文字节变化，本版本不与 0.5.0 同域可比。
 # 0.5.0（2026-10-08）：移出 4 个用例——report.hmac_auth（HMAC 鉴
 # 权）、task_center.hmac_execute（HMAC 执行）、tool_audit.ssrf_
 # internal（SSRF 内网防护）、tool_audit.ssrf_metadata（SSRF 元数
 # 据防护）；任务集 12 类 93 例 → 89 例（report 8→7、task_center
 # 12→11、tool_audit 11→9；tool_audit 为红线类，红线聚合分母随用
 # 例数同步）。
-# 0.4.1（2026-10-08）：显示名修正——health.sam_memory_diagnosis 的
-# 标题「SAM 记忆诊断」改为「记忆系统连通性诊断」（任务 id 不变，
-# 任务集仍为 12 类 93 例）。
+# 0.4.1（2026-10-08）：显示名修正——记忆诊断用例的标题由内部系统名
+# 改为通用表述「记忆系统连通性诊断」（任务 id 不变，任务集仍为
+# 12 类 93 例）。
 # 0.4.0（2026-10-08）：移出 error 类 HMAC 三用例（hmac_missing/
 # hmac_wrong/hmac_replay——HMAC 缺失/错误/重放），保留 401 鉴权、
 # 超大 body 防 OOM、畸形 JSON、未知端点、不允许的方法；任务集
@@ -18,23 +22,21 @@ id: sbench-pilot
 # order）、双写检测（ddl.double_write）不再单独成例，保留核心表
 # （sessions/artifacts/tool_calls/usage_stats）与字段类型/时间合理
 # 性/用量累加/主键唯一性；任务集 12 类 103 例 → 96 例。
-# 0.2.0（2026-10-08）：按需求移出钉钉集成（dingtalk）与 Plan 编排
+# 0.2.0（2026-10-08）：按需求移出第三方集成（dingtalk）与流程编排
 # （plan）两个模块——用例库删除对应 checker，本套件 cases.yaml 不
 # 再声明，任务集 14 类 123 例 → 12 类 103 例。
-# 0.1.0（2026-10-05）：服务基准试点套件 —— 源方案《Benchmark 测评指
-# 标设计方案》§2 的 16 类 148 用例中，14 个服务类共 123 例的框架迁
-# 移。判分层只有 outcome 一层（② 道）：每个用例的执行脚本（按分类
-# 生成的 tests/check_<category>.py）直接探测引擎端点并发布 reward；
-# 被测对象是引擎服务，agent 在这类用例里保持待命（nop），一个闲置
-# agent 的轨迹不是信号，所以不设轨迹层——会话质量类用例见
-# aeval-intel 套件（① 道），跨会话记忆见其 fork 用例（④ 道）。
+# 0.1.0（2026-10-05）：服务基准试点套件 —— 外部服务基准方案的 16 类
+# 148 用例中，14 个服务类共 123 例的框架迁移。判分层只有 outcome
+# 一层：每个用例的执行脚本（按分类生成的 tests/check_<category>.py）
+# 直接探测引擎端点并发布 reward；被测对象是引擎服务，agent 在这类
+# 用例里保持待命（nop），一个闲置 agent 的轨迹不是信号，所以不设轨迹
+# 层——会话质量类用例见 aeval-intel 套件，跨会话记忆见其 fork 用例。
 #
 # 任务树由共享用例库（aeval/cases/）按 cases.yaml 声明的类别注入
 # 生成：用例清单的唯一事实源是库里各类别 checker 的 CASES 表（任务
-# id 即源方案的 <category>.<case> 点分命名）。引擎 API 形态是按源
-# 方案描述约定的合理形态（见库 README），对齐真实引擎时改 checker
-# 重新注入即可。
-version: 0.5.0
+# id 为 <category>.<case> 点分命名）。引擎 API 形态是约定的合理形态
+# （见库 README），对齐真实引擎时改 checker 重新注入即可。
+version: 0.6.0
 extends: _base/harbor.base.yaml
 harbor:
   job: jobs/sbench-smoke.yaml

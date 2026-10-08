@@ -1,4 +1,4 @@
-"""Stage-wise requirement progress (P0-7).
+"""Stage-wise requirement progress.
 
 The six fixed requirement bits are produced stage by stage during a
 trial — they are never defaulted to ``True`` and never bulk-copied from

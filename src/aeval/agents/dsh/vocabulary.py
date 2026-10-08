@@ -1,4 +1,4 @@
-"""The dsh adapter's transcript-extra vocabulary (agent-neutrality C3).
+"""The dsh adapter's transcript-extra vocabulary.
 
 ``CanonicalTranscript.atif.extra`` is a keyed namespace: the framework owns
 ``aeval`` (``AEVAL_EXTRA_KEY`` in aeval.contracts) for its own claims, and

@@ -3,9 +3,9 @@
 # 主键唯一性。0.3.0 需求收窄：messages/plans/plan_steps/tasks/
 # memory_records 五张表与消息顺序、双写检测不再单独成例。
 
-# 引擎持久化的 9 张表（源方案"9 张表"未点名，按被描述的系统域取合
-# 理清单）：schema/时间/主键等横切检查按引擎实际形态覆盖全表；只有
-# CASE_TABLES 里的表单独成例。对齐真实引擎时改此表并重新生成即可。
+# 引擎持久化的 9 张表（按被描述的系统域取合理清单）：schema/时间/
+# 主键等横切检查按引擎实际形态覆盖全表；只有 CASE_TABLES 里的表单独
+# 成例。对齐真实引擎时改此表并重新生成即可。
 TABLES = (
     "sessions", "messages", "plans", "plan_steps", "tasks",
     "artifacts", "tool_calls", "usage_stats", "memory_records",

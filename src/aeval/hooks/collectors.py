@@ -1,10 +1,10 @@
-"""Evidence collectors (P0-6): the producers behind the hard gate.
+"""Evidence collectors: the producers behind the hard gate.
 
 Every required evidence output is produced HERE, atomically, with its
 exit status, timestamps, digest and size recorded in a
 ``CollectionManifest``. The manifest itself is written last and is
 never an artifact of itself: its identity is bound by the outer bundle
-attestation (P0-8).
+attestation.
 
 The producers are pure host-side code (no sandbox interaction): the
 sandbox-side ``[[verifier.collect]]`` commands are validated at suite
@@ -170,11 +170,11 @@ def produce_session_record(
     adapter's own DECLARED slot — whose fixed path travels with the adapter
     (``SESSION_RECORD_OUTPUT_PATH``), because only it knows where its record
     belongs. Writing the historical DSH slot for a non-DSH adapter leaves the
-    trial's required output missing even though the read succeeded — example-lab
-    caught exactly that: the ACP record was read host-side, landed in the DSH
-    path, and the trial was refused for "collect outcomes missing for
+    trial's required output missing even though the read succeeded — the real
+    target host caught exactly that: the ACP record was read host-side, landed
+    in the DSH path, and the trial was refused for "collect outcomes missing for
     required outputs: ['agent_session_record']". The default keeps the
-    historical DSH plan byte-identical (name, path and command).
+    historical DSH layout byte-identical (name, path and command).
     """
     from aeval.agents.contract import SESSION_RECORD_OUTPUTS
 

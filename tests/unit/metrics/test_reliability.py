@@ -1,4 +1,4 @@
-"""Reliability metrics tests (plan §7 row 13): denominator discipline first."""
+"""Reliability metrics tests: denominator discipline first."""
 
 from __future__ import annotations
 
@@ -50,7 +50,7 @@ def test_valid_trials_exclude_all_four_classes():
 
 
 def test_unfinalized_records_never_enter_the_denominator():
-    """P0-7 defect: verdict=None (never finally classified) must be excluded.
+    """Defect: verdict=None (never finally classified) must be excluded.
 
     A record whose grading never completed — crashed pipeline, missing
     trial, interrupted run — silently counted as a judged sample before.

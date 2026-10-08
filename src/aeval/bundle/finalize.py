@@ -1,4 +1,4 @@
-"""Run finalization (P0-8): the gate between "Harbor exited" and "done".
+"""Run finalization: the gate between "Harbor exited" and "done".
 
 ``harbor run`` returning 0 only means the process exited; it is not a
 verdict on the evaluation. Finalization proves, in order:

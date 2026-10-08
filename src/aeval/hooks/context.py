@@ -35,7 +35,7 @@ class TrialState:
     # The agent-side identity, read by the owner out of this trial's own session
     # record when the adapter's recorder is a foreign runtime that mints its own
     # id (the ACP runner). None until observed; never set from anywhere but the
-    # trial's live record (P1-2b observed identity).
+    # trial's live record (observed identity).
     observed_agent_session_id: str | None = None
     phase: Literal["created", "running", "ended", "failed", "cancelled"] = "created"
     trial_dir: Path | None = None

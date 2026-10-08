@@ -1,4 +1,4 @@
-"""RuntimeLock / supply-chain gate tests (plan §7 row 1).
+"""RuntimeLock / supply-chain gate tests.
 
 The negative tests must assert that no run bookkeeping is created by a
 failing lock (the gate runs before any manifest/trial), and messages

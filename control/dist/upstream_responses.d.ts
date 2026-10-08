@@ -1,7 +1,7 @@
 import { LlmAdapter } from '@deepseek-ai/dsh-llm';
 import type { GenerateOptions, LlmProviderInfo, LlmResolvedModelInfo, StreamChunk } from '@deepseek-ai/dsh-llm';
 /**
- * The Responses-API production upstream (AGENT-ABSTRACTION-2-PLAN.md §4.4).
+ * The Responses-API production upstream.
  *
  * Some model APIs are served in OpenAI's Responses format rather than chat
  * completions — DeepSeek's is the deployed example: base_url
@@ -72,7 +72,7 @@ export declare function buildResponsesBody(model: string, options: Readonly<Gene
 /** The `/responses` counterpart of the chat-completions upstream adapter. */
 export declare class ResponsesAdapter extends LlmAdapter {
     #private;
-    constructor(model: string, url: string, headers: Record<string, string>, key: string, timeoutMs: number | undefined, efforts: readonly string[]);
+    constructor(model: string, url: string, headers: Record<string, string>, key: string, timeoutMs: number | undefined, efforts: readonly string[], contextWindow: number | undefined);
     providerInfo(provider: string): LlmProviderInfo;
     resolveModel(provider: string, model: string): Promise<LlmResolvedModelInfo>;
     stream(options: GenerateOptions): AsyncIterable<StreamChunk>;

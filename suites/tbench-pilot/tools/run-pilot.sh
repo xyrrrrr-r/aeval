@@ -1,5 +1,5 @@
 #!/bin/bash
-# M0 pilot arm: 3 tasks x 3 attempts with the real DSH agent and the real
+# pilot arm: 3 tasks x 3 attempts with the real DSH agent and the real
 # upstream provider (api.deepseek.com), graded by the outcome layer
 # (upstream verifier reward) and the trajectory layer (framework rubric
 # with the Terminal-Bench integrity gates).
@@ -26,7 +26,7 @@ pgrep -f "token_count.py --host 127.0.0.1 --port $TOKEN_COUNT_PORT" >/dev/null |
         > /root/e2e/token-count.log 2>&1 < /dev/null &
     sleep 1
 }
-# The pilot budget (maxSteps 60 / maxTokens 2M) and the D47 auxiliary
+# The pilot budget (maxSteps 60 / maxTokens 2M) and the auxiliary-call
 # policy (compaction allowed + accounted) are generated from the suite's
 # budgets.yaml by tools/gen_broker_spec.py.
 export AEVAL_BROKER_JSON=/root/e2e/broker-spec-tbench.json
@@ -45,7 +45,7 @@ pgrep -f stub_upstream.py >/dev/null || {
 
 rm -rf "/root/e2e/runs/$RUN_NAME" "/root/e2e/runs/$RUN_NAME.sqlite3"
 mkdir -p /root/e2e/runs
-echo "########## aeval M0 PILOT (3 tasks x 3 attempts, real provider) ##########"
+echo "########## aeval PILOT (3 tasks x 3 attempts, real provider) ##########"
 date -u
 .venv/bin/python -m aeval.cli run \
   --suite "$SUITE" \

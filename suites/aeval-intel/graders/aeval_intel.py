@@ -1,10 +1,10 @@
 """Versioned conversation-quality grader for the aeval-intel suite.
 
-Thin wrapper around ``build_conversation_quality_grader`` (the P1
-preset): twelve score-only dimensions over the conversation surface,
+Thin wrapper around ``build_conversation_quality_grader`` (the preset):
+twelve score-only dimensions over the conversation surface,
 folded with the suite's pass threshold (aggregate < 0.6 ⇒ fail).
 
-The P1 anchor channel (integration design §5.6, short-term form):
+The anchor channel (short-term form):
 rubric anchors are per-task data, and the Grader protocol only carries
 the sealed record — so this module holds one ``QualityAnchors`` per
 task, keyed by ``record.coordinates.task_id``, and delegates to the
@@ -44,7 +44,7 @@ VETO = False
 # 综合分阈值：各维度平均分低于此值 ⇒ 本层判 fail（积分仍随结果携带）。
 THRESHOLD = 0.6
 
-# --- per-task rubric anchors (P1 channel: keyed by task_id) ---------------
+# --- per-task rubric anchors (keyed by task_id) ---------------
 
 ANCHORS: dict[str, QualityAnchors] = {
     # 身份认知 + 指令遵循：任务问"你是谁"，要求一句话作答并写入 result。
@@ -156,7 +156,7 @@ ANCHORS: dict[str, QualityAnchors] = {
             ),
         ),
     ),
-    # --- memory 类 14 用例（源方案 §2 memory：7 基础 + 7 安全） -------
+    # --- memory 类 14 用例（7 基础 + 7 安全） -------------------------
     # 基础 7：fork 语义——事实由父会话（复制上下文）引入，live 轮召回。
     # 事实的具体取值由编排层在父会话里植入（与锚点 expected_terms 对齐）。
     "memory.store_recall": QualityAnchors(

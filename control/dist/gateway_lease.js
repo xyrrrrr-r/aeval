@@ -373,7 +373,7 @@ export class BrokerAdapter extends LlmAdapter {
             if (buffer || !terminal || !usageSeen)
                 throw new GatewayError('AEVAL_TRUNCATED_STREAM');
             finished = true;
-            // D47: an auxiliary call the policy allowed and the broker dispatched
+            // An auxiliary call the policy allowed and the broker dispatched
             // is model work the session will never settle as an assistant sample.
             // Record its metered usage beside the descriptor so the reducer can
             // merge it into the accounted totals. Recording must never disturb
@@ -409,7 +409,7 @@ export class BrokerAdapter extends LlmAdapter {
             // runtime issues advisory calls (a session-title request) alongside
             // the real one, so treating this as a trusted failure recorded
             // infra_error on a healthy run and blocked the owner's finalization
-            // (real-chain finding, tracked down through the plugin trace). A
+            // (observed in practice, tracked down through the plugin trace). A
             // policy-refused advisory call is the same shape: the owner decided
             // that request consumes nothing, so it cannot downgrade the trial.
             expectedRejection = cause instanceof GatewayError
@@ -428,7 +428,7 @@ export class BrokerAdapter extends LlmAdapter {
             // reasons (step cancellation, shutdown). Reporting that as a trusted
             // infrastructure failure permanently downgraded the trial — the
             // descriptor recorded infra_error and the evidence gate treated a
-            // healthy run as infra-invalid (real-chain finding). The broker's
+            // healthy run as infra-invalid (observed in practice). The broker's
             // lease state stays authoritative: a lease that really stopped is
             // reported by its own error code here, and is re-read from /info
             // when the owner finalizes.

@@ -164,7 +164,7 @@ async def test_run_boots_headless_once_with_the_isolated_home(tmp_path: Path) ->
     assert len(task_vars) == 1
     assert call["env"][task_vars[0]] == "secret instruction"
     assert agent.dsh_session_id == SESSION_ID
-    # P0-5 fix: run() must NOT write context.metadata — a non-empty
+    # run() must NOT write context.metadata — a non-empty
     # context makes Harbor skip populate_context_post_run entirely.
     assert context.metadata is None
 
@@ -413,7 +413,7 @@ def test_partial_usage_leaves_the_context_empty(
 
 
 def test_post_run_populates_metadata_and_usage(tmp_path, monkeypatch):
-    """P0-5 fix: metadata now lands in populate_context_post_run, so
+    """Metadata now lands in populate_context_post_run, so
     Harbor's empty-context backfill callback actually runs."""
     from harbor.models.agent.context import AgentContext
 
@@ -480,7 +480,7 @@ def test_post_run_backfills_usage_from_final_metrics(tmp_path, monkeypatch):
     assert context.n_cache_tokens == 5
 
 
-# --- P0-5: download completeness (fail closed on partial syncs) -------
+# --- download completeness (fail closed on partial syncs) -------
 
 
 def test_read_fails_closed_when_session_dir_missing(tmp_path, monkeypatch):

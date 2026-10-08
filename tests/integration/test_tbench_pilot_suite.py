@@ -618,7 +618,7 @@ def test_every_task_publishes_a_reward_on_every_code_path():
     EVERY code path. Upstream's does not — setup-uv-pytest.sh is sourced
     and enables errexit, so a failing test run exits before the reward
     branch, and Harbor then reports RewardFileNotFoundError instead of
-    reward 0 (measured on the first M0 pilot: all three failed tasks were
+    reward 0 (measured in the first pilot run: all three failed tasks were
     excluded as unjudgeable)."""
     for task in sorted((SUITE / "tasks").iterdir()):
         if not task.is_dir():

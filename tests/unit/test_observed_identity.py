@@ -1,4 +1,4 @@
-"""Observed session identity (P1-2b).
+"""Observed session identity.
 
 When the adapter's recorder is a foreign runtime (the ACP runner mints its own
 session id), one trial has two trusted identities: the id aeval minted for the

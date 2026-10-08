@@ -1,10 +1,9 @@
 #!/usr/bin/env python3
 # 由 aeval/cases/generate.py 按类别生成 —— 不要手改套件 tasks/ 下的
 # 副本；改用例请改 aeval/cases/checkers/<category>.py 后重新注入。
-"""tools —— 源方案《Benchmark 测评指标设计方案》§2 服务用例的
-执行脚本：直接探测被测引擎（ENGINE_BASE_URL）并发布
-/logs/verifier/reward.txt（检查通过 = 1，失败 = 0；引擎不可达视为
-失败，原因打印到 verifier 日志留痕）。"""
+"""tools —— 服务自查用例的执行脚本：直接探测被测引擎
+（ENGINE_BASE_URL）并发布 /logs/verifier/reward.txt（检查通过 = 1，
+失败 = 0；引擎不可达视为失败，原因打印到 verifier 日志留痕）。"""
 
 from __future__ import annotations
 

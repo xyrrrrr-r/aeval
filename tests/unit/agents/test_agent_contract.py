@@ -126,7 +126,7 @@ def _job_path(relative: str):
     return Path(relative)
 
 
-# --- P0-2: recorded adapter identity -----------------------------------------
+# --- recorded adapter identity -----------------------------------------
 
 def test_session_record_output_of_reads_the_declared_slot():
     from aeval.agents.contract import session_record_output_of
@@ -211,7 +211,7 @@ def test_run_start_refuses_an_adapter_that_cannot_describe_itself(tmp_path, monk
     ))
 
 
-# --- P0-3: required members (fail at start, not mid-collection) ---------------
+# --- required members (fail at start, not mid-collection) ---------------
 
 def test_dsh_satisfies_the_adapter_contract_members():
     assert adapter_member_gap(DshAgent) == []
@@ -237,7 +237,7 @@ def test_adapter_that_cannot_be_read_is_refused_before_the_run(tmp_path, monkeyp
         _require_adapter_contract(job)
 
 
-# --- P0-4: graded archives must name the agent that ran, never a hardcoded one -
+# --- graded archives must name the agent that ran, never a hardcoded one -
 
 def _record_with(adapter):
     from aeval.contracts import TrialCoordinates, TrialRecord

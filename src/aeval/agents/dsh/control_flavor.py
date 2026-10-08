@@ -4,7 +4,7 @@ The registry (``aeval.control.flavors``) is agent-agnostic by construction;
 this module owns what is genuinely DSH's:
 
 - the owner-assigned session mint (``dsh --session-id`` only adopts an
-  existing session, D15) in the official session-store layout;
+  existing session) in the official session-store layout;
 - the adapter interface the plugin stack needs (a CLI install prefix to
   graft into, patch injection to mount it);
 - the graft mechanism itself: WHERE inside the CLI's nested ``node_modules``
@@ -52,19 +52,19 @@ CONTROL_DIR_NAME = "aeval-control"
 def dsh_config_fields(
     *, paths: TrialPaths, auxiliary_policy: dict[str, str] | None = None,
 ) -> dict[str, Any]:
-    """The DSH control plugin's half of the composed control config (G7).
+    """The DSH control plugin's half of the composed control config.
 
     ``sessionRoot``/``bundlePath`` tell the in-sandbox plugin where the
     session store and the bundle descriptor live; ``refuseAuxiliaryCalls``
     pins the routing (no default provider, no title/auxiliary model calls —
-    everything goes through the broker). ``auxiliary_policy`` (D47) overrides
+    everything goes through the broker). ``auxiliary_policy`` overrides
     that blanket decision per purpose and must mirror what the broker's
     ``/info`` serves, or the sandbox adapter fails the lease identity check.
 
     ``ownerFinalize`` is always set: inside the sandbox no external party can
     reach ``evalControl``, so the harness process performs the owner's
     durable-then-finalize sequence itself; without it a completed run can only
-    report stop_reason=infra_error (real chain).
+    report stop_reason=infra_error (a real run).
     """
     fields: dict[str, Any] = {
         "sessionRoot": paths.session_root,
@@ -81,7 +81,7 @@ async def mint_owner_session(
     *, environment: Any, paths: TrialPaths, target: PurePosixPath,
     trial_id: str, config: dict[str, Any],
 ) -> None:
-    """Create the owner-assigned session so the run can resume it (D15).
+    """Create the owner-assigned session so the run can resume it.
 
     The control plugin's model-identity injection is scoped to the id in
     the control config, and ``dsh --session-id`` only adopts an existing
@@ -175,8 +175,7 @@ async def deploy_control_stack(
 ) -> str:
     """Graft the in-sandbox control stack into the DSH CLI tree.
 
-    The shape is fixed by environment verification (example-lab full-chain
-    report §7.5–7.6):
+    The shape is fixed by environment verification on the real target host:
 
     - plugin files live inside the DSH install tree, because the CLI
       installs its dependencies NESTED (``@deepseek-ai/dsh/node_modules``)
@@ -189,7 +188,7 @@ async def deploy_control_stack(
       ``control_options`` namespace (e.g. ``DSH_PERMISSION_MODE``).
 
     ``mint_session`` creates the owner-assigned session the run must resume
-    (``dsh --session-id`` only adopts an existing one, D15); the default is
+    (``dsh --session-id`` only adopts an existing one); the default is
     this module's own :func:`mint_owner_session`. Everything here — target
     layout, patch rows, the interface the DSH CLI exposes — is DSH
     knowledge; the core bootstrap contributes nothing but the dispatch.
@@ -231,7 +230,7 @@ async def deploy_control_stack(
 
         if mint_session is not None:
             # The flavor that owns the session-store layout mints the
-            # owner-assigned session the run will resume (D15).
+            # owner-assigned session the run will resume.
             await mint_session(
                 environment=environment, paths=paths, target=target,
                 trial_id=trial_id, config=config,

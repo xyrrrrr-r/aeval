@@ -1,4 +1,4 @@
-"""P2-4: the in-sandbox control stack is declared, not assumed.
+"""The in-sandbox control stack is declared, not assumed.
 
 It is what makes ``gateway_lease`` enforceable, and it is DSH-specific, so a
 framework that deploys it for every agent both breaks the second agent and claims

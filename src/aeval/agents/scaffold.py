@@ -188,7 +188,7 @@ def scaffold_agent(
     if not (root / "_base" / AGENT_BASE_FILENAME).is_file():
         raise SuiteError(
             f"{root} has no _base/{AGENT_BASE_FILENAME} — run the generator from a repo "
-            "that holds the agent declaration base (see docs/TESTS/AGENT-ONBOARDING.md)"
+            "that holds the agent declaration base (see docs/guides/adding-an-agent.md)"
         )
     declaration_path = root / f"{agent_id}.yaml"
     if declaration_path.exists() and not force:

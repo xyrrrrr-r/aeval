@@ -11,7 +11,7 @@ the trajectory grader's thresholds must be the same numbers:
     during the trial AND mirrored into the control config, so the
     sandbox adapter's lease identity check compares like with like;
   * ``maxOutputTokens`` — single-response cap;
-  * ``auxiliaryPolicy`` — D47: compaction allowed (metered + ledgered),
+  * ``auxiliaryPolicy`` — compaction allowed (metered + ledgered),
     session-title left at the fail-closed default.
 
 Usage::

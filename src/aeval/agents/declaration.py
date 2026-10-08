@@ -80,7 +80,7 @@ def materialize_declaration_adapter(declaration: "AgentDeclaration") -> type:
 
     The declaration's own facts become the class attributes every contract
     seam reads (``build_adapter_spec``, the evidence gates, conformance), so
-    a declared agent needs zero adapter code (G11): the declaration names a
+    a declared agent needs zero adapter code: the declaration names a
     behavior base (``OpenAiAcpAgent``) and carries every per-agent fact
     itself. The declaration↔class check then agrees by construction — what
     it validates for a materialized agent is that this synthesis is faithful.
@@ -169,8 +169,8 @@ class LaunchProfile(BaseModel):
 class ModelRoutingDeclaration(BaseModel):
     """How the agent's model traffic reaches the broker (``model_routing``).
 
-    ``agent_protocol`` names the wire the agent itself speaks
-    (AGENT-ABSTRACTION-2 §4.1): ``gateway_native`` — the control stack's
+    ``agent_protocol`` names the wire the agent itself speaks:
+    ``gateway_native`` — the control stack's
     transport already speaks the broker wire, no facade involved — or
     ``openai_chat`` / ``openai_responses``, which the in-sandbox facade
     translates. ``env`` names the env VARIABLES the agent's runtime reads for
@@ -373,7 +373,7 @@ class AgentDeclaration(BaseModel):
         materialized: this declaration's own facts become the class
         attributes every contract seam reads (spec, gates, conformance), so
         the runtime source of a declared agent's facts is a class built from
-        the declaration — zero adapter code (AGENT-ABSTRACTION-2 G11).
+        the declaration — zero adapter code.
         """
         from aeval.agents.contract import load_adapter_class
 

@@ -1,7 +1,7 @@
 """RuntimeLock: the identity of everything a run executes on.
 
 A run may only start when the software stack and images match an
-expected, fully pinned lock (plan §0/§0.1):
+expected, fully pinned lock:
 
 - Harbor version + commit, clean and non-shallow source tree, build
   lock-file digests.
@@ -9,7 +9,7 @@ expected, fully pinned lock (plan §0/§0.1):
 - OCI images pinned by digest — mutable tags are a hard error.
 - The aeval plugin distribution itself (wheel digest, import path).
 - Every pinned AGENT release, contributed by the selected adapters'
-  ``OFFICIAL_RELEASE_LOCK`` hooks (agent-abstraction cleanup B4): the
+  ``OFFICIAL_RELEASE_LOCK`` hooks: the
   core builds locks from what the run's own agents declare and names no
   agent. The legacy ``dsh`` section of the lock format — and its
   well-formedness gate below — stays here because it is part of the
@@ -439,7 +439,7 @@ def lock_report(lock: RuntimeLock) -> str:
 class BackendNotAvailableError(RuntimeError):
     """The selected sandbox backend's SDK is not installed.
 
-    P0-2: startup-time detection — an e2b run with a missing SDK must
+    Startup-time detection — an e2b run with a missing SDK must
     fail before any template or sandbox is created, not mid-trial.
     """
 
@@ -449,7 +449,7 @@ def verify_e2b_backend() -> str:
 
     The pyproject dependency is ``harbor[e2b]==0.23.0``; this check is
     the runtime half — the extra being declared does not prove the SDK
-    landed in the active environment (doc §4.4).
+    landed in the active environment.
     """
     try:
         import e2b  # noqa: F401
@@ -490,7 +490,7 @@ def bind_observed_identity(
     *,
     required_observations: Iterable[str] | None = None,
 ) -> None:
-    """Bind a live sandbox's observed identity to the expected lock (§3.4).
+    """Bind a live sandbox's observed identity to the expected lock.
 
     Fail-closed: every expected dimension must be OBSERVED and equal.
     A missing observation is a binding failure — never a silent

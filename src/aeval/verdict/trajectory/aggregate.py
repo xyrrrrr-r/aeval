@@ -1,4 +1,4 @@
-"""Fold metric outcomes into one GradeResult (§3).
+"""Fold metric outcomes into one GradeResult.
 
 The rules, in order:
 

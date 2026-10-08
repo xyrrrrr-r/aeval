@@ -1,9 +1,9 @@
 """Evidence hard-gate tests: incomplete evidence must block the verifier.
 
 Every negative case asserts the SIDE EFFECT (verifier spy zero-call),
-not just the raised error, per the plan's verification matrix.
+not just the raised error.
 
-P0-6 additions: fixed logical-name → path mapping, empty outcomes,
+Additions: fixed logical-name → path mapping, empty outcomes,
 never-executed outcomes, missing observables, manifest/lock binding,
 missing descriptor is fatal, session ownership, resolved containment,
 and no directory guessing without the owner-recorded trial dir.
@@ -69,8 +69,8 @@ class _Event:
         self.timestamp = datetime.now(timezone.utc)
 
         class _Result:
-            # deliberately present: the gate must NOT use it (P0-6
-            # forbids directory guessing from hook-event fields)
+            # deliberately present: the gate must NOT use it
+            # (it forbids directory guessing from hook-event fields)
             directory = str(trial_dir)
 
         class _Config:
@@ -240,7 +240,7 @@ def test_bundle_rejects_unbound_manifest(tmp_path, demo_suite, runtime_lock):
 
 
 def test_bundle_rejects_missing_descriptor(tmp_path, demo_suite, runtime_lock):
-    """P0-6: a missing bundle descriptor is fatal, not a recorded issue."""
+    """A missing bundle descriptor is fatal, not a recorded issue."""
     trial_dir, _ = build_complete_trial_dir(
         tmp_path / "trial", plan=_full_plan(demo_suite), runtime_lock=runtime_lock,
         descriptor=False,
@@ -327,7 +327,7 @@ def test_bundle_rejects_symlink_escape(tmp_path, demo_suite, runtime_lock):
 async def test_gate_blocks_without_trusted_trial_dir(tmp_path, demo_suite, runtime_lock):
     """No owner-recorded trial dir → fail closed, no directory guessing.
 
-    The event carries result.directory, but P0-6 forbids using it.
+    The event carries result.directory, but the gate forbids using it.
     """
     trial_dir = tmp_path / "trial"
     build_complete_trial_dir(
@@ -400,7 +400,7 @@ def test_collect_plan_lists_atomic_outputs(demo_suite):
             assert name not in plan
             continue
         assert name in plan
-    # the manifest itself is NOT a collect output (P0-6): its identity
+    # the manifest itself is NOT a collect output: its identity
     # is bound by the outer bundle attestation, never self-hashed
     assert "collection_manifest" not in plan
     assert "canonical_transcript" in plan
@@ -408,7 +408,7 @@ def test_collect_plan_lists_atomic_outputs(demo_suite):
 
 
 def test_anchors_channel_is_opt_in_and_gates_the_plan(demo_suite):
-    """The sealed rubric-anchors channel (integration P2): a suite that
+    """The sealed rubric-anchors channel (integration): a suite that
     does not declare it keeps a byte-identical plan; a suite that does
     gets ``task_anchors`` in its plan — and its tasks' collect commands
     must then name it like any other required output."""
@@ -590,7 +590,7 @@ async def test_gate_resolves_the_record_owner_from_the_lock(tmp_path, demo_suite
 
 
 async def test_a_declared_slot_passes_the_gate_end_to_end(tmp_path):
-    """Stage 3 acceptance: an adapter's OWN slot name and path — plan,
+    """Acceptance: an adapter's OWN slot name and path — plan,
     collection, gate — without the framework's table knowing either.
 
     The third slot kind beyond dsh_session/agent_session_record: a declared

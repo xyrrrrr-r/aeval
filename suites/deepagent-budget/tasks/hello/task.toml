@@ -5,8 +5,8 @@ schema_version = "1.4"
 #
 # 出网只留 broker 主机：agent 的 CLI 是镜像里预装的（自举不需要 PyPI），但
 # façade 在**沙箱内**跑，它必须能到达宿主侧的 broker —— no-network 下这条
-# 链路必挂（example-lab 真跑实测：façade 起不来，日志 `fetch failed`），所以这里
-# 用 allowlist 只放行 broker，和 lab 上真实 DSH run 的写法一致。不允许 public：
+# 链路必挂（真实目标机实测：façade 起不来，日志 `fetch failed`），所以这里
+# 用 allowlist 只放行 broker，和真实目标机上 DSH run 的写法一致。不允许 public：
 # baseline_arrival 的 egress 门会拒绝 public。
 network_mode = "allowlist"
 allowed_hosts = ["193.126.4.2"]

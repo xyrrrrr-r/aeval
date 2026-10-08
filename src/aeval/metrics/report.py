@@ -1,4 +1,4 @@
-"""Run aggregation and reporting (plan §6).
+"""Run aggregation and reporting.
 
 Every number in the report is traceable: evidence refs, versions, the
 denominator, comparability, recompute level. Session content never
@@ -86,7 +86,7 @@ class RunSummary:
     # 轨迹采集聚合（可选输入）：CLI 从密封轨迹逐试次采集后传入。
     # None = 未采集 → 报告不加「轨迹采集」节（向后兼容）。
     trajectory: TrajectoryAggregate | None = None
-    # per-task roll-up (integration P2): the skill/dimension cut. Only
+    # per-task roll-up: the skill/dimension cut. Only
     # meaningful when a run spans several tasks; empty otherwise.
     task_groups: dict[str, TaskGroupSummary] = field(default_factory=dict)
 
@@ -121,7 +121,7 @@ def aggregate_run(
         counts[verdict] = counts.get(verdict, 0) + 1
     summary.verdict_counts = counts
 
-    # Per-task roll-up (integration P2): the skill/dimension cut of the
+    # Per-task roll-up: the skill/dimension cut of the
     # same numbers — same valid-trial denominator, same pass counting,
     # per-task pass^k when a k was declared.
     groups: dict[str, TaskGroupSummary] = {}
@@ -518,7 +518,7 @@ def render_static_report(
             lines.append(
                 f"- 可比性：不可比——{comparison.first_difference()}"
             )
-    # 维度达标（评测平台设计 §4.2 的评分机制）：阈值/权重/大块/红线
+    # 维度达标评分机制：阈值/权重/大块/红线
     # 来自清单封存的维度模型；值为类别聚合的通过率，这里不重新数任何
     # 试次。未声明维度模型的套件不渲染本层（向后兼容）。
     watermark = score_watermark(summary)
@@ -610,7 +610,7 @@ def render_static_report(
     # 按任务表：技能/维度切口（只在有信息量时渲染——单任务 run 直接
     # 读上面的行）。套件声明了类别（清单里有 category_names /
     # default_category）时按类别聚合：先给「按类别结果」的汇总表
-    # （类别是源方案的天然切口），明细表再按类别分组、不再平铺。
+    # （类别是天然的切口），明细表再按类别分组、不再平铺。
     if summary.task_groups and len(summary.task_groups) > 1:
         rollup = rollup_categories(summary)
         if rollup is not None:

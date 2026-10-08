@@ -1,9 +1,9 @@
-"""Production wiring for the P0-6 collectors (the missing real producer).
+"""Production wiring for the evidence collectors (the missing real producer).
 
 ``collectors.py`` knows how to write each fixed output; this module is
 what actually DRIVES them against a live trial, so the declared
 ``[[verifier.collect]]`` outputs stop being a declaration without a
-producer (environment-verification finding F1).
+producer.
 
 Everything collected here is observed, never synthesised:
 
@@ -11,12 +11,12 @@ Everything collected here is observed, never synthesised:
   (``uname -m`` through the environment API, backend type, SDK version)
   plus the trial/session identity;
 - ``observable:<name>``— each suite-declared observable probed
-  out-of-band through ``await env.exec`` (P0-2 semantics);
+  out-of-band through ``await env.exec``;
 - ``dsh_session``      — the synced official session record bytes;
 - ``canonical_transcript`` — built by the official reader through the
   DSH agent's own ``read_trial_session()``;
 - ``mock_call_log``    — the broker's observed call log, or an explicit
-  "no calls were made" record (doc §10.2: never a fake ``{}``).
+  "no calls were made" record (never a fake ``{}``).
 
 Fail-closed: any required output that cannot be produced raises
 ``CollectionError``. The caller marks the trial infra_invalid — a trial
@@ -247,8 +247,9 @@ async def collect_trial_evidence(
         # Truthful wording: an empty list means THIS collector saw no call
         # records. The in-sandbox collect hook cannot see the host-side
         # broker log, and the previous wording asserted "no model broker was
-        # started", which was false on the real chain where the broker had
-        # served the very call the run was scored on (real-chain finding).
+        # started", which was false on a real run where the broker had
+        # served the very call the run was scored on; the record now states
+        # only what this collector observed.
         calls = [{
             "event": "no_calls_observed",
             "reason": "this collector observed no broker call records for the trial",
@@ -258,7 +259,7 @@ async def collect_trial_evidence(
     outcomes.append(outcome)
     artifacts.append(ref)
 
-    # The sealed rubric-anchors channel (integration P2): a suite that
+    # The sealed rubric-anchors channel: a suite that
     # declares ``verdict.anchors: task_anchors`` has its per-task rubric
     # sealed into every trial, so a regrade reads the anchors that
     # judged the trial, not the suite repo's current state. Fail-closed:

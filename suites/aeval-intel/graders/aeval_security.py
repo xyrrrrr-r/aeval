@@ -1,6 +1,6 @@
 """Versioned output-security grader for the aeval-intel suite.
 
-Thin wrapper around ``build_output_security_grader`` (the P1 preset):
+Thin wrapper around ``build_output_security_grader`` (the preset):
 two ``required`` integrity gates —
 
 * ``SensitiveLeakage`` — no agent reply and no echoed tool observation

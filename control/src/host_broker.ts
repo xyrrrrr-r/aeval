@@ -27,7 +27,7 @@ export interface HostBrokerOptions {
   /** Legacy blanket decision for purposes without an explicit entry. */
   readonly refuseAuxiliaryCalls?: boolean;
   /**
-   * Per-purpose owner decisions for advisory model calls (D47). Explicit
+   * Per-purpose owner decisions for advisory model calls. Explicit
    * entries win; missing entries take ``refuseAuxiliaryCalls`` (default
    * refuse). Allowing a purpose dispatches and meters it — the accounting
    * evidence is the dispatch ledger, not the session.
@@ -87,7 +87,7 @@ export class GatewayLease {
   #reservedTokens = 0;
   #busy = false;
   #stopReason: StopReason | undefined;
-  // The complete per-purpose decision this lease serves (D47): explicit
+  // The complete per-purpose decision this lease serves: explicit
   // entries from the operator's spec, falling back to the blanket flag.
   readonly #auxiliary: AuxiliaryPolicy;
 
@@ -113,7 +113,7 @@ export class GatewayLease {
     // Diagnostics: the trial captures this process's stderr, and a lease
     // that closes for an unexplained reason makes every later model call
     // fail with AEVAL_LEASE_CLOSED. WHO closed it, and on which path, is
-    // otherwise unrecorded (real-chain finding: an unexplained closed
+    // otherwise unrecorded (observed in practice: an unexplained closed
     // lease cost two full runs before the cause could be attributed).
     if (process.env['AEVAL_BROKER_DIAG'] === '1') {
       process.stderr.write(`[aeval-broker] lease stop at=${new Date().toISOString()} reason=${reason} cause=${cause}\n${new Error('lease stop').stack ?? ''}\n`);
@@ -162,8 +162,8 @@ export class GatewayLease {
       return { ...message, content: structuredClone(issued.content), source: structuredClone(issued.source) };
     });
     if (input.purpose) {
-      // D47: the decision is per-purpose. A refused advisory call is still
-      // request-scoped (D45): it provably consumes no tokens and must not
+      // The decision is per-purpose. A refused advisory call is still
+      // request-scoped: it provably consumes no tokens and must not
       // end a healthy lease — the same non-terminal shape as AEVAL_LEASE_BUSY.
       const decision: AuxiliaryDecision = isAuxiliaryPurpose(input.purpose)
         ? this.#auxiliary[input.purpose]
@@ -396,7 +396,7 @@ export async function startHostBroker(options: HostBrokerOptions): Promise<HostB
   // descriptor was already settled. The reason stays the fail-closed
   // ``infra_error`` (the broker cannot know whether the run had finished),
   // but the cause names the path so the diagnostic is not misread as a
-  // mid-run provider failure (real-chain D43).
+  // mid-run provider failure (observed in practice).
   const stop = () => lease.stop('infra_error', 'lifetime_abort');
   options.signal.addEventListener('abort', stop, { once: true });
   const timer = options.timeoutMs === undefined ? undefined : setTimeout(() => lease.stop('timeout_killed'), options.timeoutMs);

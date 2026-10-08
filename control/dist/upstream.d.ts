@@ -7,8 +7,8 @@ import { buildResponsesBody } from './upstream_responses.js';
  * `startHostBroker`. Credentials arrive by environment-variable name only; the
  * key value never enters configuration, log lines, or error messages.
  *
- * The wire the provider endpoint speaks is the `protocol` option
- * (AGENT-ABSTRACTION-2-PLAN.md §4.4): `chat_completions` — the default, so an
+ * The wire the provider endpoint speaks is the `protocol` option:
+ * `chat_completions` — the default, so an
  * existing spec without the key keeps byte-identical behavior — or
  * `responses` (OpenAI Responses API, e.g. DeepSeek's `https://api.deepseek.com`
  * base). Both adapters serve the same neutral
@@ -40,6 +40,16 @@ export interface UpstreamAdapterOptions {
      * not declared here refuses to start.
      */
     readonly reasoningEfforts?: readonly string[];
+    /**
+     * Provider-owned context capacity (combined request + response tokens) for
+     * the pinned route. Neither wire offers model discovery, so the owner states
+     * it; ``resolveModel`` echoes it as ``context.contextWindow`` so the harness
+     * records it in the sealed ``request/context`` session event and downstream
+     * evidence (the ATIF agent block) self-carries the window instead of relying
+     * on a caller-declared flag. Absent leaves the capacity unadvertised — never
+     * guessed — and occupancy stays uncomputable downstream.
+     */
+    readonly contextWindow?: number;
 }
 /** One OpenAI chat message exactly as it appears on the wire. */
 export type WireMessage = {

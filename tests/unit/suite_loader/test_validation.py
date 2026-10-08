@@ -1,4 +1,4 @@
-"""Suite loader / thin-overlay validation tests (plan §7 row 2).
+"""Suite loader / thin-overlay validation tests.
 
 Duplicate identities, Harbor-owned restatements, loosened image pins,
 missing mandatory sections and provenance gates must all fail loudly,
@@ -693,7 +693,7 @@ def test_task_categories_merge_and_default(tmp_path):
 
 
 def test_dimension_model_extended_schema(tmp_path):
-    """维度模型详式（评测平台设计 §4.2）：name/block/weight/threshold/
+    """维度模型详式：name/block/weight/threshold/
     redline + blocks + redline_tasks；简式只有显示名，其余取默认；坏
     参数报错。"""
     suite_dir = _copy_demo(tmp_path)

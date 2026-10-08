@@ -3,16 +3,20 @@
 **确定性、证据可密封的 agent 轨迹评测框架。**
 
 Deterministic, evidence-sealed agent trajectory evaluation built on Harbor.
-（experimental · v0.1.0 · Apache-2.0）
+（experimental · v0.1.1 · Apache-2.0）
 
 [![判分链路](docs/images/architecture.png)](docs/diagrams/eval-chain.html)
 
 > 交互版架构图（含引导视图 / 明暗主题 / 导出）：[`docs/diagrams/eval-chain.html`](docs/diagrams/eval-chain.html)
 
 aeval 把执行委托给 Harbor（PyPI `harbor[e2b]==0.23.0`），自己专注一件事：**让"分数"可信**。
-requirements 门先行、再进 grader，阈值折叠、违规 veto 终裁——不做加权平均；每份采集产物
-逐一 sha256 校验并绑定运行时锁，密封 bundle 可被 `recompute` 独立复算；可靠性用 pass^k
-度量，而不是"跑一次过了"。
+每份采集产物逐一 sha256 校验并绑定运行时锁，证据门不通过就整条拒绝（fail loud），密封
+bundle 可被 `recompute` 独立复算；判分分 outcome 与轨迹两层，阈值折叠、违规 veto 终裁——
+不做简单加权平均；可靠性用 pass^k 度量，而不是"跑一次过了"。每个试次按阶段逐位记录
+六项前置事实（input_complete / agent_finished / integration_valid / render_valid /
+judge_finished / artifact_schema_ok），套件在 `verdict.requirements` 里声明其中哪些必须
+成立；**任何一项该成立却没成立，这条试次就记 `cannot_judge` 并排除出有效分母**——判不了
+既不当作通过，也不当作做错。报告与复算可以逐条核对这六位。
 
 ## 安装
 
@@ -51,15 +55,83 @@ uv run python examples/offline-chain/run_offline_chain.py   # 跑完自动在浏
 | 真实失败 | openssl-selfsigned-cert（证书 CN 写错，reward=0） |
 | 基础设施故障排除 | 显式排除记录，不进有效分母 |
 
-![dashboard](docs/images/dashboard-aeval-intel.png)
+## 面板导览
 
-*`aeval dashboard` 产出的是单个自包含 HTML，可直接分享给别人。*
+三类面板都是**自包含单文件 HTML**（零外部资源，发给别人即可打开），全部由真实 CLI
+渲染：面板是已校验数字的第二渲染器，不是第二数据源。跑完上面的 30 秒体验，
+`examples/offline-chain/out/` 里就能找到下表全部成品。
+
+### 运行面板 · `aeval dashboard`
+
+一个 run 的全局视图：pass@k / pass^k、综合评分、红线状态、判定分布与排除明细、
+token/时长/工具调用统计。与 `aeval report`（Markdown 报告）同 store、同一条
+`aggregate_run` 聚合管线。
+
+```bash
+aeval dashboard --store examples/offline-chain/out/run-aeval-intel-1/store.sqlite3 \
+    run-aeval-intel-1 > dash.html
+```
+
+demo 对四个 run 各产出一份（`out/dashboard-*.html`）：
+
+| 面板 | run（套件 · 契约） | 内容 |
+|---|---|---|
+| `dashboard-aeval-intel.html` | aeval-intel 0.3.0 · intel | **旗舰**：24 任务 × 3 试 = 72 判定（pass@3 0.9998 · pass^3 0.8032 · 红线告警）；demo 跑完自动打开的就是它 |
+| `dashboard-sbench-offline.html` | sbench-pilot 0.2.0 · offline | 服务自查 89 例全量（outcome-only，pass@1 0.7753） |
+| `dashboard-tbench-intel.html` | tbench-intel 0.1.0 · intel | terminal-bench 扩展：outcome 之上叠会话质量 12 维 + 阈值折叠 + veto |
+| `dashboard-tbench-offline.html` | tbench-pilot 0.2.0 · offline | terminal-bench 基线：outcome 层 + 标准轨迹层九项指标 |
+
+两种契约的差别在判分层：**offline** 到 outcome 层为止（± 标准轨迹指标），**intel**
+再叠会话质量 12 维、阈值折叠与安全 veto。同一批 tbench 任务的两个 run（表内后两行）
+就是一组天然对照。
+
+![intel 运行面板](docs/images/dashboard-aeval-intel.png)
+
+*intel 运行面板（旗舰；demo 自动打开）*
+
+![offline 运行面板](docs/images/dashboard-sbench-offline.png)
+
+*offline 运行面板（sbench 服务自查 89 例，outcome-only）*
+
+### 每任务轨迹面板 · `aeval trajectory`
+
+单个 task 的下钻视图。加载全部密封试次、逐份 transcript 对照 sha256 校验；主视图是
+**五轨联动执行视图**——执行、工具、Token、输入 Token 与上下文压力五条轨道共享横轴
+（纵向轨道只作对比、不表示并发），各试次按自身起点的相对执行时间对齐，虚线轨道为
+记忆基底（fork base）。点击任一轨道标记同步高亮同一步，右侧详情检查器展示消息、
+工具观测与 turn 判分理由；高密度轨迹自动按密度分桶，选轨道或桶继续下钻。turn 判分
+复用轨迹判分的**同一套指标对象**（`turn_metrics(task_id)`）——面板没有第二套判分
+逻辑。
+
+```bash
+# 单任务 → stdout（重定向保存）
+aeval trajectory --store examples/offline-chain/out/run-aeval-intel-1/store.sqlite3 \
+    run-aeval-intel-1 memory.tenant_isolation > task.html
+
+# 批量：run 下每个 task 各一份自包含面板 → <dir>/<task>.html
+aeval trajectory --store examples/offline-chain/out/run-aeval-intel-1/store.sqlite3 \
+    run-aeval-intel-1 --out /tmp/aeval-trajectory/
+```
+
+可选：`--context-window N` 声明模型上下文窗口（只用于画占用率阈值线，证据本身不
+携带窗口）；`--suites-dir` 指向套件根以装载 turn 指标（缺省时逐轮打分退化为结构
+切面）。
+
+demo 用一个代表性任务（fork 记忆基底 + 一个坏试次 + 工具调用）走真实 CLI 产出
+`out/trajectory-memory.tenant_isolation.html`。
+
+![轨迹面板](docs/images/trajectory-panel.png)
+
+*任务轨迹面板（五轨联动执行视图 + 详情检查器）*
 
 ## 为什么用 aeval
 
-- **确定性判分，不是 LLM 拍脑袋**——requirements 门（input_complete / agent_finished /
-  integration_valid / render_valid / judge_finished / artifact_schema_ok）先行，grader
-  版本化加载（`graders/outcome.py@v7`），outcome 与轨迹分层，阈值折叠，veto 终裁。
+- **确定性判分，不是 LLM 拍脑袋**——证据门逐产物 sha256 校验，不通过即整条拒绝（fail
+  loud）；判分器按 `graders/outcome.py@v7` 引用并自证身份（`GRADER_ID` 非空、入口是
+  协程、`LAYER` 与声明层一致）；outcome 与轨迹分层，阈值折叠，veto 终裁。六项前置事实
+  （input_complete / agent_finished / integration_valid / render_valid / judge_finished /
+  artifact_schema_ok）是**真正的门**：套件声明哪些必须成立，未成立即 `cannot_judge`，
+  该试次退出有效分母——不假装通过，也不记成做错。
 - **防篡改证据链**——采集清单绑定运行时锁，逐产物 sha256；`recompute` 对密封 bundle
   独立复算；`rejudge` 在前置条件不满足时**拒绝执行**而不是悄悄重判（fail loud）。
 - **pass^k 可靠性**——k 次尝试次次通过才算数，报告同时给出 pass@k 与 pass^k。
@@ -114,7 +186,7 @@ provenance: { source: authored-internally, license: MIT }
 |---|---|
 | `tbench-pilot` | terminal-bench 试点（含镜像摘要锁定与来源说明） |
 | `aeval-intel` | 会话智能 10 任务 + 跨会话记忆 14 任务（含红线注入：回显、密钥泄露、跨租户越权等） |
-| `sbench-pilot` | 服务自查 123 任务全量（outcome-only 契约） |
+| `sbench-pilot` | 服务自查 12 类 89 例（outcome-only 契约） |
 | `deepagent-hello` / `deepagent-budget` / `e2e-hello` | deepagent 与端到端冒烟 |
 | `_base` | 共享基座（继承源） |
 
@@ -130,14 +202,28 @@ aeval conformance my-agent        # 一致性验证：跳过的检查如实报�
 aeval check --suite <suite> --agent my-agent
 ```
 
+## 使用者指南
+
+三份自足的指南，从零讲清三件事（不需要先读源码或设计文档）：
+
+| 指南 | 回答什么 |
+|---|---|
+| [写一个评测套件](docs/guides/writing-a-suite.md) | 套件目录结构、最小 `suite.yaml`、全字段参考、继承与合并规则、哪些事实不许写进套件、校验与运行命令、常见错误 |
+| [接入一个新的 agent](docs/guides/adding-an-agent.md) | 两条接入路径（零代码 / 写适配器类）、五步走、声明与实现必须一致、预算声明、模型协议、运行时镜像、三条红线、排错表 |
+| [指标语义与判分规则](docs/guides/metric-semantics.md) | 报告里每个状态词和每个数字的确切含义：判分分层、六项前置事实门（未成立即 `cannot_judge`）、全部轨迹指标的公式与阈值、折叠与 veto、pass@k 与 pass^k、怎么读报告 |
+
 ## 成熟度（诚实说明）
 
 - ✅ **离线判分链路**：任何机器可复现（见 30 秒体验），判分/密封/存储/报告全部是生产代码。
 - ✅ **静态组合与验证**：`check` / `probe` / `job` / `explain` / `conformance` / `selftest`。
-- 🚧 **真实沙箱全链路**：目标是 Linux 主机 + 自托管 ARM e2b 沙箱；控制面、会话读取、
-  ATIF 映射已实现，采集/评分/封存的生产接线仍在推进——逐层验收步骤见
-  [HARBOR_DSH_E2E_LINUX.md](HARBOR_DSH_E2E_LINUX.md)。
-- 版本号 0.1.0，接口可能变化；`harbor`/`e2b` 依赖有精确锁定（原因见 [pyproject.toml](pyproject.toml) 注释）。
+- 🚧 **真实沙箱全链路**：目标环境是 Linux 主机 + 自托管 ARM e2b 沙箱，**该链路已在真机
+  上跑通并封存**——真实 provider 凭据下，沙箱内真实 agent 完成多步推理与工具调用，
+  运行 `exit 0`、`sealed: 1 trial(s) recorded, 34 file(s) attested, recompute passed`，
+  终态判分产出计分 verdict（`score 1.0 / status pass`）。离线链路（见上面的 30 秒体验）
+  不依赖上述环境，任何机器可复现。
+  ⚠️ 真机验证是在**我们自己的**拓扑上做的（自托管 e2b 集群 + 内网宿主机），
+  换环境需要按你自己的网络与凭据重新验证。
+- 版本号 0.1.1，接口可能变化；`harbor`/`e2b` 依赖有精确锁定（原因见 [pyproject.toml](pyproject.toml) 注释）。
 
 ## 仓库结构
 

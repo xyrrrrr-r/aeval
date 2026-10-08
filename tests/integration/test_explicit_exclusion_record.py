@@ -1,6 +1,6 @@
-"""D52: an unverifiable trial must leave an explicit, reasoned exclusion.
+"""An unverifiable trial must leave an explicit, reasoned exclusion.
 
-Found on the real chain: the DSH agent died at the single-response token
+Found in a live end-to-end run: the DSH agent died at the single-response token
 cap (``turn_end`` reason ``max-tokens``), so no official session record
 existed; the evidence gate fired correctly, but the trial then left NO
 store record at all. ``finalize_run`` refused to seal the whole run

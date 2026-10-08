@@ -108,7 +108,7 @@ td { border-bottom: 1px solid var(--line); }
 td.tbar { min-width: 120px; }
 .mbar { height: 8px; border-radius: 4px; background: var(--chipbg);
         overflow: hidden; display: flex; }
-/* —— 能力水位（评测平台设计 §4.2）—— */
+/* —— 能力水位 —— */
 .health { display: flex; flex-wrap: wrap; gap: 28px; align-items: center;
           background: var(--panel); border: 1px solid var(--line);
           border-radius: 10px; padding: 18px 22px; margin-top: 16px; }
@@ -636,7 +636,7 @@ def render_dashboard_html(
         _category_section(summary, rollup) if rollup is not None else ""
     )
 
-    # 能力水位（评测平台设计 §4.2 首屏核心视图）：未声明维度模型的
+    # 能力水位（首屏核心视图）：未声明维度模型的
     # 套件不加这四层（向后兼容）。
     watermark = score_watermark(summary)
     if watermark is not None:

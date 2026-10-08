@@ -699,7 +699,7 @@ test('malformed listen targets never reach the resolver', async () => {
 });
 
 test('a lifetime abort records how the lease stopped', async () => {
-  // Real-chain D43: the broker's lifetime signal aborts on owner shutdown,
+  // Real-chain: the broker's lifetime signal aborts on owner shutdown,
   // which can arrive after the descriptor was settled. The diagnostic must
   // name that path instead of leaving the cause unspecified (where it reads
   // as an unexplained mid-run failure in the trial's broker_diagnostics).
@@ -783,7 +783,7 @@ test('cleanupJobToken removes only an existing owned 0600 regular file', () => {
   } finally { rmSync(root, { recursive: true, force: true }); }
 });
 
-test('a refused advisory call neither stops the lease nor consumes budget (D45)', async () => {
+test('a refused advisory call neither stops the lease nor consumes budget', async () => {
   const upstream = new OfflineAdapter();
   const broker = await startHostBroker(policy(upstream));
   try {
@@ -813,7 +813,7 @@ test('a refused advisory call neither stops the lease nor consumes budget (D45)'
   } finally { await broker.close(); }
 });
 
-test('resolveAuxiliaryPolicy: explicit per-purpose entries win over the blanket flag (D47)', () => {
+test('resolveAuxiliaryPolicy: explicit per-purpose entries win over the blanket flag', () => {
   assert.deepEqual(resolveAuxiliaryPolicy(undefined, undefined), { compaction: 'refuse', 'session-title': 'refuse' });
   assert.deepEqual(resolveAuxiliaryPolicy(undefined, true), { compaction: 'refuse', 'session-title': 'refuse' });
   assert.deepEqual(resolveAuxiliaryPolicy(undefined, false), { compaction: 'allow', 'session-title': 'allow' });
@@ -821,7 +821,7 @@ test('resolveAuxiliaryPolicy: explicit per-purpose entries win over the blanket 
   assert.deepEqual(resolveAuxiliaryPolicy({ 'session-title': 'allow' }, true), { compaction: 'refuse', 'session-title': 'allow' });
 });
 
-test('an allowed compaction call dispatches, is metered, and is ledgered with its usage (D47)', async () => {
+test('an allowed compaction call dispatches, is metered, and is ledgered with its usage', async () => {
   const upstream = new OfflineAdapter();
   const broker = await startHostBroker(policy(upstream, { auxiliaryPolicy: { compaction: 'allow' } }));
   try {
@@ -846,7 +846,7 @@ test('an allowed compaction call dispatches, is metered, and is ledgered with it
   } finally { await broker.close(); }
 });
 
-test('a control config that disagrees with the served auxiliary policy fails closed at /info (D47)', async () => {
+test('a control config that disagrees with the served auxiliary policy fails closed at /info', async () => {
   const upstream = new OfflineAdapter();
   const broker = await startHostBroker(policy(upstream, { auxiliaryPolicy: { compaction: 'allow' } }));
   try {
@@ -857,7 +857,7 @@ test('a control config that disagrees with the served auxiliary policy fails clo
   } finally { await broker.close(); }
 });
 
-test('ordinary model calls never produce dispatch ledger entries (D47)', async () => {
+test('ordinary model calls never produce dispatch ledger entries', async () => {
   const upstream = new OfflineAdapter();
   const broker = await startHostBroker(policy(upstream));
   try {

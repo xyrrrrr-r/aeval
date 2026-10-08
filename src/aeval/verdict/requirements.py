@@ -1,4 +1,4 @@
-"""Requirement/cannot-judge logic (plan §5).
+"""Requirement/cannot-judge logic.
 
 A grader declares the transcript fields it needs. If any required
 field is partial or unavailable, the grader MUST emit cannot_judge —

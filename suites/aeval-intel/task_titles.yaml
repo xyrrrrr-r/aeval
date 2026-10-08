@@ -1,6 +1,5 @@
 # 会话套件任务的中文显示名（报告渲染用）。坐标、判分、存储永远用
-# 原 task_id——标题只是给人看的名字。memory.* 的标题即源方案 §2「④
-# 道·记忆」的用例名。
+# 原 task_id——标题只是给人看的名字。
 identity-intro: 身份认知·一句话自我介绍
 capability-boundary: 能力边界·如实申报
 context-recall: 上下文召回

@@ -1,4 +1,4 @@
-"""Artifact store tests (plan §7 row 10): content addressing + tamper proof."""
+"""Artifact store tests: content addressing + tamper proof."""
 
 from __future__ import annotations
 
