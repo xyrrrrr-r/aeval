@@ -1,11 +1,12 @@
 """Offline validation of the sbench-pilot suite (service benchmark).
 
 Everything checkable without a deployed engine: suite/job composition
-with the full 96-task dataset registered via ``datasets/local.yaml``,
+with the full 93-task dataset registered via ``datasets/local.yaml``,
 the outcome-only verdict contract, the per-category generated execution
 scripts (compile + case dispatch + reward semantics), and the inventory
-counts against the source plan (12 service categories, 96 cases —
-dingtalk/plan retired in 0.2.0; ddl narrowed in 0.3.0).
+counts against the source plan (12 service categories, 93 cases —
+dingtalk/plan retired in 0.2.0; ddl narrowed in 0.3.0; error hmac
+cases removed in 0.4.0).
 """
 
 from __future__ import annotations
@@ -21,8 +22,8 @@ from aeval.suite_loader.loader import load_suite
 SUITE = Path(__file__).parents[2] / "suites" / "sbench-pilot"
 REPO = Path(__file__).parents[2]
 
-# 用例库现役服务类（12 类共 96 例；钉钉集成/Plan 编排 0.2.0 退役，
-# ddl 类 0.3.0 收窄为 8 例）。
+# 用例库现役服务类（12 类共 93 例；钉钉集成/Plan 编排 0.2.0 退役，
+# ddl 类 0.3.0 收窄为 8 例，error 类 0.4.0 收窄为 6 例）。
 EXPECTED_COUNTS = {
     "health": 3,
     "chat": 10,
@@ -30,7 +31,7 @@ EXPECTED_COUNTS = {
     "tools": 6,
     "a2a": 8,
     "ddl": 8,
-    "error": 9,
+    "error": 6,
     "task_center": 12,
     "artifact": 5,
     "engine_lifecycle": 8,
@@ -65,17 +66,18 @@ def test_suite_identity_and_outcome_only_contract(suite):
     ]
 
 
-def test_job_composes_with_all_96_tasks(job):
-    assert len(job.tasks) == 96
+def test_job_composes_with_all_93_tasks(job):
+    assert len(job.tasks) == 93
     assert job.n_attempts == 1
 
 
 def test_task_tree_matches_the_source_inventory():
     tasks = SUITE / "tasks"
     names = sorted(p.name for p in tasks.iterdir() if (p / "task.toml").is_file())
-    assert len(names) == 96
+    assert len(names) == 93
     # 退役/收窄的任务不得残留（0.2.0 移出钉钉集成/Plan 编排；0.3.0
-    # 收窄 ddl：五张表 + 消息顺序 + 双写检测）。
+    # 收窄 ddl：五张表 + 消息顺序 + 双写检测；0.4.0 移出 error 类
+    # HMAC 三用例）。
     assert not any(
         n.startswith(("dingtalk.", "plan.")) for n in names
     )
@@ -84,6 +86,7 @@ def test_task_tree_matches_the_source_inventory():
             "ddl.messages_data", "ddl.plans_data", "ddl.plan_steps_data",
             "ddl.tasks_data", "ddl.memory_records_data",
             "ddl.message_order", "ddl.double_write",
+            "error.hmac_missing", "error.hmac_wrong", "error.hmac_replay",
         }
         for n in names
     )
@@ -166,10 +169,10 @@ def test_the_library_injects_by_category_into_another_suite(tmp_path):
         [_sys.executable, str(gen), "--suite", str(other)],
         capture_output=True, text=True, check=True,
     )
-    assert "12 tasks injected under tasks/" in result.stdout
+    assert "9 tasks injected under tasks/" in result.stdout
 
     names = sorted(p.name for p in (other / "tasks").iterdir() if p.is_dir())
-    assert len(names) == 12
+    assert len(names) == 9
     assert {n.partition(".")[0] for n in names} == {"health", "error"}
     assert not (other / "tasks" / "chat.basic").exists()  # 反选残留被清理
 
@@ -191,7 +194,7 @@ def test_the_library_injects_by_category_into_another_suite(tmp_path):
     assert suite.id == "sbench-subset"
     assert suite.task_titles == titles  # 加载器合并生成文件后可见
     job = compose_harbor_job(suite)
-    assert len(job.tasks) == 12
+    assert len(job.tasks) == 9
 
 
 def test_outcome_grader_identity_matches_the_declaration(suite):

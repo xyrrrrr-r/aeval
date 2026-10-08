@@ -71,9 +71,10 @@ def hmac_headers(body_text):
     ).hexdigest()
     return {"X-Timestamp": ts, "X-Signature": digest}
 
-# error 类 9 用例：异常处理——401 鉴权、HMAC 签名（缺失/错误/重放）、
-# 超大 body 防 OOM、畸形 JSON 400、未知端点 404、不允许的方法 405。
-
+# error 类 6 用例：异常处理——401 鉴权（无/错 token）、超大 body 防
+# OOM、畸形 JSON 400、未知端点 404、不允许的方法 405。0.4.0 需求收
+# 窄：HMAC 三用例（缺失/错误/重放）不再单独成例（task_center 的
+# HMAC 执行检查仍在）。
 
 def _no_auth():
     status, text = api("GET", "/plans", token="")
@@ -91,58 +92,6 @@ def _bad_auth():
     if status != 401:
         return False, ["garbage token -> %d (want 401)" % status]
     return True, ["invalid token rejected with 401"]
-
-
-def _hmac_missing():
-    status, text = api("POST", "/engine/task_execute", {"task_id": "sbench-hmac-missing"})
-    if status < 0:
-        return False, ["engine unreachable: " + text]
-    if status not in (401, 403):
-        return False, ["task_execute without HMAC -> %d (want 401/403)" % status]
-    return True, ["missing HMAC signature rejected with %d" % status]
-
-
-def _hmac_wrong():
-    body_text = json.dumps({"task_id": "sbench-hmac-wrong"})
-    status, text = api(
-        "POST", "/engine/task_execute", {"task_id": "sbench-hmac-wrong"},
-        headers={"X-Timestamp": str(int(time.time())),
-                 "X-Signature": "deadbeef" * 8})
-    if status < 0:
-        return False, ["engine unreachable: " + text]
-    if status not in (401, 403):
-        return False, ["wrong HMAC signature -> %d (want 401/403)" % status]
-    return True, ["wrong HMAC signature rejected with %d" % status]
-
-
-def _hmac_replay():
-    body_text = json.dumps({"task_id": "sbench-hmac-replay"})
-    headers = hmac_headers(body_text)
-    first_status, first_text = api(
-        "POST", "/engine/task_execute", {"task_id": "sbench-hmac-replay"},
-        headers=headers)
-    if first_status < 0:
-        return False, ["engine unreachable: " + first_text]
-    if first_status in (401, 403):
-        # 部署没有配 ENGINE_HMAC_SECRET 时第一发就被拒——签名机制在，
-        # 但无法验证重放语义，记为失败并留原因。
-        return False, [
-            "first signed request already rejected (%d) — HMAC secret "
-            "mismatch between checker and engine?" % first_status
-        ]
-    replay_status, replay_text = api(
-        "POST", "/engine/task_execute", {"task_id": "sbench-hmac-replay"},
-        headers=headers)  # 同一签名+时间戳原样重放
-    if replay_status in (401, 403):
-        return True, ["replayed signature+timestamp rejected with %d" % replay_status]
-    if replay_status in (200, 202):
-        # 幂等去重也算防重放（第二次不产生副作用）。
-        if jget(replay_text, "duplicate") or jget(replay_text, "deduplicated"):
-            return True, ["replay absorbed as dedup (no side effect)"]
-    return False, [
-        "replayed request accepted with %d — replay protection missing"
-        % replay_status
-    ]
 
 
 def _oversized_body():
@@ -185,12 +134,6 @@ def _method_not_allowed():
 CASES = {
     "error.no_auth": ("无鉴权", "缺 token 的请求被拒为 401", _no_auth),
     "error.bad_auth": ("错误鉴权", "伪造 token 被拒为 401", _bad_auth),
-    "error.hmac_missing": (
-        "HMAC 缺失", "受保护端点缺 HMAC 签名被拒为 401/403", _hmac_missing),
-    "error.hmac_wrong": (
-        "HMAC 错误", "错误签名被拒为 401/403", _hmac_wrong),
-    "error.hmac_replay": (
-        "HMAC 重放", "同一签名+时间戳重放被拒或幂等吸收", _hmac_replay),
     "error.oversized_body": (
         "超大 body", "5MB 请求体被优雅处理，无 5xx/OOM", _oversized_body),
     "error.invalid_json": (

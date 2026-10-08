@@ -40,9 +40,6 @@ engine_lifecycle.status_healthy: 健康状态（重启恢复面）
 engine_lifecycle.task_complete: 任务完成
 engine_lifecycle.task_execute_accept: task_execute 接收
 error.bad_auth: 错误鉴权
-error.hmac_missing: HMAC 缺失
-error.hmac_replay: HMAC 重放
-error.hmac_wrong: HMAC 错误
 error.invalid_json: 畸形 JSON
 error.method_not_allowed: 不允许的方法
 error.no_auth: 无鉴权

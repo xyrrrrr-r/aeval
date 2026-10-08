@@ -1,5 +1,9 @@
 schema_version: 2
 id: sbench-pilot
+# 0.4.0（2026-10-08）：移出 error 类 HMAC 三用例（hmac_missing/
+# hmac_wrong/hmac_replay——HMAC 缺失/错误/重放），保留 401 鉴权、
+# 超大 body 防 OOM、畸形 JSON、未知端点、不允许的方法；任务集
+# 12 类 96 例 → 93 例（task_center 的 HMAC 执行检查不受影响）。
 # 0.3.0（2026-10-08）：收窄 ddl 类——messages/plans/plan_steps/
 # tasks/memory_records 五张表的数据用例与消息顺序（ddl.message_
 # order）、双写检测（ddl.double_write）不再单独成例，保留核心表
@@ -21,7 +25,7 @@ id: sbench-pilot
 # id 即源方案的 <category>.<case> 点分命名）。引擎 API 形态是按源
 # 方案描述约定的合理形态（见库 README），对齐真实引擎时改 checker
 # 重新注入即可。
-version: 0.3.0
+version: 0.4.0
 extends: _base/harbor.base.yaml
 harbor:
   job: jobs/sbench-smoke.yaml
