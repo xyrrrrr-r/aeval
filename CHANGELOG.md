@@ -13,11 +13,16 @@ schema、CLI 参数、存储格式），每次都会在下方 `Changed`/`Removed
 
 ### Changed
 
+- **`README.md` 的链接改为绝对 URL**：原先 13 处相对链接（指南、图示、`CHANGELOG`、
+  `LICENSE`、`pyproject.toml`、`cases/`）在 PyPI 的项目页上全部指向不存在的路径，
+  现统一指向 `gitcode.com/open_kunpeng_agentic_infra/aeval/blob/main/…`，与
+  `dsh-eval-control` 的 README 保持一致。注意这些链接指向 `main` 分支，只有改动合入
+  `main` 之后才会生效。
 - **对外文档清洗（为社区发布）**：新增三份自足的使用者指南
-  [`docs/guides/writing-a-suite.md`](docs/guides/writing-a-suite.md)、
-  [`docs/guides/adding-an-agent.md`](docs/guides/adding-an-agent.md)、
-  [`docs/guides/metric-semantics.md`](docs/guides/metric-semantics.md) 与索引
-  [`docs/guides/README.md`](docs/guides/README.md)。开发过程记录、阶段台账
+  [`docs/guides/writing-a-suite.md`](https://gitcode.com/open_kunpeng_agentic_infra/aeval/blob/main/docs/guides/writing-a-suite.md)、
+  [`docs/guides/adding-an-agent.md`](https://gitcode.com/open_kunpeng_agentic_infra/aeval/blob/main/docs/guides/adding-an-agent.md)、
+  [`docs/guides/metric-semantics.md`](https://gitcode.com/open_kunpeng_agentic_infra/aeval/blob/main/docs/guides/metric-semantics.md) 与索引
+  [`docs/guides/README.md`](https://gitcode.com/open_kunpeng_agentic_infra/aeval/blob/main/docs/guides/README.md)。开发过程记录、阶段台账
   记录、环境验证报告与设计稿移入 `docs/internal/`，并**不再随 sdist 分发**
   （`[tool.hatch.build.targets.sdist] exclude = ["/docs/internal", "/ops/e2b"]`——
   前者是开发过程记录，后者是自托管 e2b 集群的内部运维脚本，两者对使用者都不可读、
@@ -32,6 +37,15 @@ schema、CLI 参数、存储格式），每次都会在下方 `Changed`/`Removed
 
 ### Added
 
+- **对外发布面的"黑话回流"守卫**：新增
+  [`tests/unit/test_public_surface.py`](https://gitcode.com/open_kunpeng_agentic_infra/aeval/blob/main/tests/unit/test_public_surface.py)，
+  扫描发布面并禁止内部词汇回流——内部阶段编号、散落在正文里的裸优先级记号、内部机器名、
+  内部资料归档路径、内部文档标题、设计稿的小节记号、缺陷编号与中文内部术语（确切的
+  禁用清单写在该测试文件里，因此它本身不随包分发）。作用域直接取自 sdist 的 exclude
+  列表加 git 忽略规则，不另立一份清单；低精度模式按文件类型收窄（裸优先级记号只在
+  `.md` 里判定，架构图的 SVG 路径数据里那些 moveto 指令不该被误伤），避免误报把守卫
+  自己关掉。守卫文件随 sdist 排除：禁用词清单必须写出这些词，发布面不能带上它们。
+  当前发布面 768 个文本文件、8 个模式全 0 命中。
 - **六项前置事实（`verdict.requirements`）成为真正的门**。套件声明的位只要有一位没置位，
   该试次就记为 `cannot_judge`（是哪几位写在记录的 `aeval.requirement_shortfall` 里），
   退出有效分母——既不当作通过，也不当作做错；判分层已产出的 grade 仍留在记录里供追溯。

@@ -87,11 +87,15 @@ packages = ["src/aeval"]
 #    实测数据），对使用者不可读，也不应随包分发。
 #  - ops/e2b/ 是内部运维工具（自托管 e2b 集群的加固脚本、部署钩子），面向的是
 #    我们自己的服务器，不含任何面向使用者的接口；其中的默认主机名也不该外泄。
+#  - tests/unit/test_public_surface.py 是维护者用的"黑话回流"守卫。禁用词清单
+#    本身必须写出这些词，所以它不能随包分发——否则发布面反而带上了它要禁止的
+#    字符串。该测试的作用域直接取自这份 exclude 列表，因此它会自动跳过自己。
 # 使用者指南（docs/guides/）与图示（docs/images/、docs/diagrams/）随包分发。
 [tool.hatch.build.targets.sdist]
 exclude = [
     "/docs/internal",
     "/ops/e2b",
+    "/tests/unit/test_public_surface.py",
 ]
 
 [tool.pytest.ini_options]
