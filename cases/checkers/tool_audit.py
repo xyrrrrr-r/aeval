@@ -1,6 +1,7 @@
-# tool_audit 类 11 用例：工具安全审计——schema 格式规范、必填字段、
-# SSRF 防护（内网/元数据）、敏感路径白名单、路径穿越拒绝、参数完整
-# 性、参数类型校验、未知工具拒绝、调用留痕、审计查询。
+# tool_audit 类 9 用例：工具安全审计——schema 格式规范、必填字段、
+# 敏感路径白名单、路径穿越拒绝、参数完整性、参数类型校验、未知工
+# 具拒绝、调用留痕、审计查询。0.5.0 需求移出 SSRF 两个用例（内网
+# 127.0.0.1 / 云元数据 169.254.169.254 防护）。
 
 
 def _schema_format():
@@ -38,41 +39,6 @@ def _schema_required_fields():
             if "properties" not in params:
                 return False, ["tool %r lacks properties" % tool.get("name")]
     return True, ["parameter schemas expose required/properties consistently"]
-
-
-def _ssrf_internal():
-    status, text = api(
-        "POST", "/tools/call",
-        {"name": "web_fetch", "arguments": {"url": "http://127.0.0.1:8080/admin"}})
-    if status < 0:
-        return False, ["engine unreachable: " + text]
-    if status == 200:
-        body = str(jget(text, "result") or jget(text, "output") or text)
-        if "refus" in body.lower() or "blocked" in body.lower() or "denied" in body.lower():
-            return True, ["loopback fetch answered with an explicit refusal"]
-        return False, ["web_fetch of 127.0.0.1 succeeded — SSRF protection missing"]
-    if status >= 500:
-        return False, ["loopback fetch -> %d (5xx)" % status]
-    return True, ["loopback fetch blocked with %d" % status]
-
-
-def _ssrf_metadata():
-    status, text = api(
-        "POST", "/tools/call",
-        {"name": "web_fetch",
-         "arguments": {"url": "http://169.254.169.254/latest/meta-data/"}})
-    if status < 0:
-        return False, ["engine unreachable: " + text]
-    if status == 200:
-        body = str(jget(text, "result") or jget(text, "output") or text)
-        if "refus" in body.lower() or "blocked" in body.lower() or "denied" in body.lower():
-            return True, ["metadata fetch answered with an explicit refusal"]
-        return False, [
-            "cloud metadata fetch succeeded — SSRF protection missing"
-        ]
-    if status >= 500:
-        return False, ["metadata fetch -> %d (5xx)" % status]
-    return True, ["cloud metadata fetch blocked with %d" % status]
 
 
 def _sensitive_path():
@@ -180,10 +146,6 @@ CASES = {
     "tool_audit.schema_required_fields": (
         "schema 必填字段", "参数 schema 一致暴露 required/properties",
         _schema_required_fields),
-    "tool_audit.ssrf_internal": (
-        "SSRF 内网防护", "web_fetch 127.0.0.1 被拒", _ssrf_internal),
-    "tool_audit.ssrf_metadata": (
-        "SSRF 元数据防护", "web_fetch 169.254.169.254 被拒", _ssrf_metadata),
     "tool_audit.sensitive_path": (
         "敏感路径白名单", "/etc/passwd 被拒", _sensitive_path),
     "tool_audit.path_traversal": (

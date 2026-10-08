@@ -71,8 +71,9 @@ def hmac_headers(body_text):
     ).hexdigest()
     return {"X-Timestamp": ts, "X-Signature": digest}
 
-# task_center 类 12 用例：任务中心——定时/一次性/即时创建、HMAC 执行
-# 回调、查询/取消/禁用/启用/删除全生命周期、next_run 排程、漏跑恢复。
+# task_center 类 11 用例：任务中心——定时/一次性/即时创建、查询/
+# 取消/禁用/启用/删除全生命周期、next_run 排程、漏跑恢复。0.5.0
+# 需求移出 HMAC 执行（task_center.hmac_execute）用例。
 
 
 def _create_task(kind, extra=None):
@@ -114,23 +115,6 @@ def _immediate_create():
         if state in ("pending", "waiting", "created"):
             return False, ["immediate task stuck in %r" % state]
     return True, ["immediate task created and left the pending state"]
-
-
-def _hmac_execute():
-    body_text = json.dumps({"task_id": "sbench-hmac-execute", "action": "run"})
-    status, text = api(
-        "POST", "/engine/task_execute",
-        {"task_id": "sbench-hmac-execute", "action": "run"},
-        headers=hmac_headers(body_text))
-    if status < 0:
-        return False, ["engine unreachable: " + text]
-    if status in (401, 403):
-        return False, [
-            "signed execute rejected (%d) — ENGINE_HMAC_SECRET mismatch?" % status
-        ]
-    if status not in (200, 202):
-        return False, ["signed execute -> %d (want 200/202)" % status]
-    return True, ["HMAC-signed execution accepted with %d" % status]
 
 
 def _query():
@@ -247,8 +231,6 @@ CASES = {
         "一次性任务创建", "指定时刻的一次性任务可创建", _oneshot_create),
     "task_center.immediate_create": (
         "即时任务创建", "即时任务创建后立即离开等待态", _immediate_create),
-    "task_center.hmac_execute": (
-        "HMAC 执行", "HMAC 签名的执行回调被接受", _hmac_execute),
     "task_center.query": ("查询", "GET /tasks 返回任务列表", _query),
     "task_center.cancel": ("取消", "任务可取消", _cancel),
     "task_center.disable": ("禁用", "任务可禁用", _disable),

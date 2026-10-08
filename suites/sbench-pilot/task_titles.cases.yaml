@@ -50,7 +50,6 @@ health.sam_memory_diagnosis: 记忆系统连通性诊断
 health.service_alive: 服务存活
 report.auto_generate: 自动生成
 report.download: 下载
-report.hmac_auth: HMAC 鉴权
 report.isolation: 租户隔离
 report.listing: 列表
 report.markdown_render: Markdown 渲染
@@ -69,7 +68,6 @@ task_center.cron_create: 定时任务创建
 task_center.delete: 删除
 task_center.disable: 禁用
 task_center.enable: 启用
-task_center.hmac_execute: HMAC 执行
 task_center.immediate_create: 即时任务创建
 task_center.lifecycle: 全生命周期
 task_center.missed_run: 漏跑恢复
@@ -83,8 +81,6 @@ tool_audit.path_traversal: 路径穿越拒绝
 tool_audit.schema_format: schema 格式规范
 tool_audit.schema_required_fields: schema 必填字段
 tool_audit.sensitive_path: 敏感路径白名单
-tool_audit.ssrf_internal: SSRF 内网防护
-tool_audit.ssrf_metadata: SSRF 元数据防护
 tool_audit.tool_log_recording: 调用留痕
 tool_audit.unknown_tool: 未知工具拒绝
 tools.concurrent_safety: 并发安全

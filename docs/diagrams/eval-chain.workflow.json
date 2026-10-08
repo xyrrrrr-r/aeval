@@ -4,6 +4,7 @@
   "meta": {
     "title": "aeval 端到端判分链路",
     "quality_profile": "showcase",
+    "viewBox": [1400, 780],
     "views": [
       {
         "id": "main-chain",
@@ -38,28 +39,28 @@
   ],
   "mainPath": ["suite", "run", "sandbox", "collect", "gate", "grade", "store", "report"],
   "nodes": [
-    { "id": "suite", "lane": "host", "col": 0, "type": "external", "label": "评测套件 suites/", "sublabel": "datasets · jobs · graders · tasks" },
-    { "id": "run", "lane": "host", "col": 1, "type": "backend", "label": "aeval run", "sublabel": "校验 · 组合 Harbor job", "tag": "只委托不自建循环" },
-    { "id": "control", "lane": "host", "col": 2, "type": "backend", "label": "dsh-eval-control", "sublabel": "变量注入 · 租约预算 · fork 血统", "tag": "宿主控制面" },
-    { "id": "sandbox", "lane": "sandbox", "col": 2, "type": "cloud", "label": "Harbor 沙箱执行", "sublabel": "适配器: DSH · deepagent · ACP" },
-    { "id": "collect", "lane": "sandbox", "col": 3, "type": "backend", "label": "证据采集", "sublabel": "transcript · observables · 会话记录" },
-    { "id": "gate", "lane": "verdict", "col": 3, "type": "security", "label": "证据门", "sublabel": "sha256 · 运行时锁 · 归属校验", "tag": "不过即拒" },
-    { "id": "grade", "lane": "verdict", "col": 4, "type": "backend", "label": "判分流水线", "sublabel": "requirements → grader → 折叠 → veto", "tag": "确定性终裁" },
-    { "id": "rejudge", "lane": "verdict", "col": 5, "type": "backend", "label": "rejudge / recompute", "sublabel": "密封证据上重放" },
-    { "id": "store", "lane": "evidence", "col": 4, "type": "database", "label": "TrialStore + 密封 bundle", "sublabel": "SQLite · attestation" },
-    { "id": "report", "lane": "evidence", "col": 5, "type": "frontend", "label": "报告 · 面板 · 轨迹", "sublabel": "pass^k · 维度达标 · 红线" }
+    { "id": "suite", "lane": "host", "col": 0, "type": "external", "label": "评测套件 suites/", "sublabel": "datasets · jobs · graders", "width": 130 },
+    { "id": "run", "lane": "host", "col": 1, "type": "backend", "label": "aeval run", "sublabel": "校验 · 组合 Harbor job", "tag": "只委托不自建循环", "width": 130 },
+    { "id": "control", "lane": "host", "col": 2, "type": "backend", "label": "dsh-eval-control", "sublabel": "变量注入 · 租约预算 · fork 血统", "tag": "宿主控制面", "width": 138 },
+    { "id": "sandbox", "lane": "sandbox", "col": 2, "type": "cloud", "label": "Harbor 沙箱执行", "sublabel": "适配器: DSH · deepagent · ACP", "width": 130 },
+    { "id": "collect", "lane": "sandbox", "col": 3, "type": "backend", "label": "证据采集", "sublabel": "transcript · observables · 会话记录", "width": 140 },
+    { "id": "gate", "lane": "verdict", "col": 3, "type": "security", "label": "证据门", "sublabel": "sha256 · 运行时锁 · 归属校验", "tag": "不过即拒", "width": 120 },
+    { "id": "grade", "lane": "verdict", "col": 4, "type": "backend", "label": "判分流水线", "sublabel": "requirements → grader → 折叠 → veto", "tag": "确定性终裁", "width": 140 },
+    { "id": "rejudge", "lane": "verdict", "col": 5, "type": "backend", "label": "rejudge / recompute", "sublabel": "密封证据上重放", "width": 145 },
+    { "id": "store", "lane": "evidence", "col": 4, "type": "database", "label": "TrialStore + 密封证据", "sublabel": "SQLite · attestation", "width": 140 },
+    { "id": "report", "lane": "evidence", "col": 5, "type": "frontend", "label": "报告 · 面板 · 轨迹", "sublabel": "pass^k · 维度达标 · 红线", "width": 140 }
   ],
   "edges": [
-    { "id": "suite-run", "from": "suite", "to": "run", "label": "加载 · 校验" },
-    { "id": "run-sandbox", "from": "run", "to": "sandbox", "label": "委托 Harbor job", "variant": "emphasis" },
+    { "id": "suite-run", "from": "suite", "to": "run", "label": "加载 · 校验", "route": "straight" },
+    { "id": "run-sandbox", "from": "run", "to": "sandbox", "label": "委托 Harbor job", "variant": "emphasis", "fromSide": "bottom", "toSide": "left", "labelSegment": 0 },
     { "id": "control-sandbox", "from": "control", "to": "sandbox", "label": "注入实验配置", "variant": "dashed", "role": "branch" },
-    { "id": "sandbox-collect", "from": "sandbox", "to": "collect", "label": "trial 产物" },
+    { "id": "sandbox-collect", "from": "sandbox", "to": "collect", "label": "trial 产物", "route": "straight" },
     { "id": "collect-gate", "from": "collect", "to": "gate", "label": "密封 trial 目录", "variant": "emphasis" },
-    { "id": "gate-grade", "from": "gate", "to": "grade", "label": "证据通过", "variant": "emphasis" },
+    { "id": "gate-grade", "from": "gate", "to": "grade", "label": "证据通过", "variant": "emphasis", "route": "straight" },
     { "id": "grade-store", "from": "grade", "to": "store", "label": "判定记录 + 密封", "variant": "emphasis" },
-    { "id": "store-report", "from": "store", "to": "report", "label": "聚合渲染" },
+    { "id": "store-report", "from": "store", "to": "report", "label": "聚合渲染", "route": "straight" },
     { "id": "store-rejudge", "from": "store", "to": "rejudge", "label": "重判 / 重算", "variant": "dashed", "role": "branch" },
-    { "id": "rejudge-grade", "from": "rejudge", "to": "grade", "label": "重放判分", "variant": "dashed", "role": "branch" }
+    { "id": "rejudge-grade", "from": "rejudge", "to": "grade", "label": "重放判分", "variant": "dashed", "role": "branch", "route": "straight" }
   ],
   "cards": [
     {

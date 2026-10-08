@@ -34,11 +34,12 @@ LIBRARY = Path(__file__).resolve().parent
 CHECKERS = LIBRARY / "checkers"
 
 # 源方案《Benchmark 测评指标设计方案》§2 的服务类别用例数（12 类共
-# 93 例；intelligence 11 例与 memory 14 例是会话契约用例，锚定在
+# 89 例；intelligence 11 例与 memory 14 例是会话契约用例，锚定在
 # 消费套件的判分器里，不属于本库。钉钉集成与 Plan 编排两类已按
 # 0.2.0 需求移出评测范围，checker 一并删除；0.3.0 收窄 ddl 类，
 # 五张表与消息顺序/双写检测不再单独成例；0.4.0 移出 error 类
-# HMAC 三用例）。
+# HMAC 三用例；0.5.0 移出 report.hmac_auth、task_center.hmac_
+# execute 与 tool_audit 两个 SSRF 用例）。
 EXPECTED_COUNTS = {
     "health": 3,
     "chat": 10,
@@ -47,11 +48,11 @@ EXPECTED_COUNTS = {
     "a2a": 8,
     "ddl": 8,
     "error": 6,
-    "task_center": 12,
+    "task_center": 11,
     "artifact": 5,
     "engine_lifecycle": 8,
-    "tool_audit": 11,
-    "report": 8,
+    "tool_audit": 9,
+    "report": 7,
 }
 
 # 默认采集链：与 dsh 会话记录配套的消费形态。评测集不同（agent 家
@@ -226,11 +227,11 @@ _CATEGORY_LINES = {
     "a2a": "A2A 协议：send/get/cancel task、鉴权、错误码、重复 task_id 处理",
     "ddl": "数据持久化：核心表数据正确性、字段类型、时间合理性、用量累加一致性、主键唯一性",
     "error": "异常处理：401 鉴权、超大 body 防 OOM、畸形 JSON 400、未知端点 404、不允许的方法 405",
-    "task_center": "任务中心：定时/一次性/即时任务创建、HMAC 执行、查询/取消/禁用/启用/删除全生命周期",
+    "task_center": "任务中心：定时/一次性/即时任务创建、查询/取消/禁用/启用/删除全生命周期",
     "artifact": "产出物：API 可达、字段完整性、env 正确性",
     "engine_lifecycle": "引擎生命周期：task_execute 接收、去重(202)、心跳精确更新、任务完成、状态机流转、失败重试字段",
-    "tool_audit": "工具安全审计：schema 格式规范、SSRF 防护、敏感路径拒绝、参数完整性",
-    "report": "报告系统：SSR 端点、Markdown 渲染、HMAC 鉴权、任务完成后自动生成报告",
+    "tool_audit": "工具安全审计：schema 格式规范、敏感路径拒绝、参数完整性",
+    "report": "报告系统：SSR 端点、Markdown 渲染、任务完成后自动生成报告",
 }
 
 # 库类别的默认大块（雷达轴）与红线类别。键 = 大块键，值 = 显示名。

@@ -1,9 +1,10 @@
 # sbench-pilot —— 服务基准试点套件
 
 源方案《Benchmark 测评指标设计方案》§2 的 16 类 148 用例中，**12 个
-服务类共 93 例**的**全类别消费套件**（0.2.0 起钉钉集成与 Plan 编排
+服务类共 89 例**的**全类别消费套件**（0.2.0 起钉钉集成与 Plan 编排
 两类移出评测范围；0.3.0 收窄 ddl 类；0.4.0 移出 error 类 HMAC 三
-用例）。判分层只有 outcome 一层
+用例；0.5.0 移出 report/task_center HMAC 与 tool_audit SSRF 用
+例）。判分层只有 outcome 一层
 （② 道：被测对象是引擎服务本身，agent 在这类用例里保持待命，用
 nop agent）；会话质量/安全类用例在 `aeval-intel` 套件（① 道 +
 ④ 道记忆用例）。
@@ -17,7 +18,7 @@ nop agent）；会话质量/安全类用例在 `aeval-intel` 套件（① 道 +
 ```
 suites/sbench-pilot/
 ├── suite.yaml                # 判定契约：outcome-only，pass^1
-├── cases.yaml                # 按类别注入声明（全 12 类 = 93 例（0.3.0 收窄 ddl，0.4.0 移出 error HMAC））
+├── cases.yaml                # 按类别注入声明（全 12 类 = 89 例（0.3.0 收窄 ddl；0.4.0 移出 error HMAC；0.5.0 移出 report/task_center HMAC 与 tool_audit SSRF））
 ├── task_titles.cases.yaml    # 注入产物：库属任务的中文显示名（报告用）
 ├── datasets/local.yaml       # path: tasks —— 任务注册（Harbor 发现约定）
 ├── jobs/sbench-smoke.yaml    # nop agent、n_attempts=1、e2b 后端
@@ -69,6 +70,6 @@ suites/sbench-pilot/
 
 | 落点 | 用例 |
 |---|---|
-| 本套件（② 道，outcome） | 12 个服务类 93 例（0.2.0 起钉钉集成/Plan 编排移出；0.3.0 收窄 ddl；0.4.0 移出 error HMAC 三用例） |
+| 本套件（② 道，outcome） | 12 个服务类 89 例（0.2.0 起钉钉集成/Plan 编排移出；0.3.0 收窄 ddl；0.4.0 移出 error HMAC；0.5.0 移出 report/task_center HMAC 与 tool_audit SSRF） |
 | aeval-intel（① 道，质量+安全） | intelligence 11 例 → 10 个对话任务（multi-step-plan 覆盖 complexity+tool_selection 两维） |
 | aeval-intel（④ 道，fork 记忆） | memory 14 例 → 14 个记忆任务（7 基础召回 + 7 安全） |

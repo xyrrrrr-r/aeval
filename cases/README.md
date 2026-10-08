@@ -1,6 +1,6 @@
 # 共享服务用例库（aeval/cases/）
 
-源方案《Benchmark 测评指标设计方案》§2 的 **12 个服务类共 93 例**
+源方案《Benchmark 测评指标设计方案》§2 的 **12 个服务类共 89 例**
 的用例库（0.2.0 起钉钉集成与 Plan 编排两类退役移出）。它不属于任何单个评测集：terminal-bench、服务基准、会话
 基准……都只是消费方。一个评测集（套件）想用哪些类别，在自己的
 `cases.yaml` 里声明，生成器据此把任务注入该套件的数据集目录。
@@ -40,11 +40,11 @@ aeval/cases/
 | 类别 | 用例数 | 类别 | 用例数 |
 |---|---|---|---|
 | health | 3 | error | 6 |
-| chat | 10 | task_center | 12 |
+| chat | 10 | task_center | 11 |
 | session | 8 | artifact | 5 |
 | tools | 6 | engine_lifecycle | 8 |
-| a2a | 8 | tool_audit | 11 |
-| ddl | 8 | report | 8 |
+| a2a | 8 | tool_audit | 9 |
+| ddl | 8 | report | 7 |
 
 （intelligence 11 例与 memory 14 例是会话契约用例，锚定在消费套件
 的判分器里——见 aeval-intel——不属于本库。）

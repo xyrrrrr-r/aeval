@@ -1,5 +1,6 @@
-# report 类 8 用例：报告系统——SSR 端点、Markdown 渲染、HMAC 鉴权、
-# 任务完成自动生成、报告 schema、列表、下载、租户隔离。
+# report 类 7 用例：报告系统——SSR 端点、Markdown 渲染、任务完成
+# 自动生成、报告 schema、列表、下载、租户隔离。0.5.0 需求移出
+# HMAC 鉴权（report.hmac_auth）用例。
 
 
 def _any_report_id():
@@ -39,22 +40,6 @@ def _markdown_render():
     if "```" in text or "**" in text:
         return False, ["raw markdown leaked into the page (unrendered)"]
     return True, ["report page contains rendered content"]
-
-
-def _hmac_auth():
-    # 无签名访问报告应被拒（受保护资源）。
-    report_id, errors = _any_report_id()
-    if errors:
-        return False, errors
-    status, text = api("GET", "/report/" + str(report_id), token="")
-    if status < 0:
-        return False, ["engine unreachable: " + text]
-    if status in (401, 403):
-        return True, ["report access without credentials rejected (%d)" % status]
-    if status == 200:
-        # 公开只读报告是可接受的部署形态，但记录为免鉴权。
-        return True, ["reports are public-read in this deployment (no auth)"]
-    return False, ["report access without credentials -> %d" % status]
 
 
 def _auto_generate():
@@ -147,8 +132,6 @@ CASES = {
         "SSR 端点", "GET /report/<id> 服务端渲染 HTML", _ssr_endpoint),
     "report.markdown_render": (
         "Markdown 渲染", "报告页是渲染后的 HTML 而非裸 markdown", _markdown_render),
-    "report.hmac_auth": (
-        "HMAC 鉴权", "报告访问有鉴权保护（或显式公开只读）", _hmac_auth),
     "report.auto_generate": (
         "自动生成", "任务完成后报告自动出现", _auto_generate),
     "report.schema": (
