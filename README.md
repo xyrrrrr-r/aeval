@@ -44,7 +44,7 @@ uv run python examples/offline-chain/run_offline_chain.py   # 跑完自动在浏
 > 加 `--no-open` 跳过自动打开浏览器（SSH / CI 环境打不开时也会退回打印路径）。
 
 一次产出 4 个 run 的报告（Markdown）+ 自包含 dashboard（HTML）+ 轨迹面板，
-其中会话套件 run 包含 24 任务 × 3 试次 = 72 条判定记录（pass@3 0.9998、pass^3 0.8032、
+其中会话套件 run 包含 23 任务 × 3 试次 = 69 条判定记录（pass@3 0.9998、pass^3 0.7952、
 红线告警、维度达标表、token/时长/工具调用统计）。演示刻意覆盖了判分标准的每条路径：
 
 | 路径 | 演示用例 |
@@ -68,7 +68,7 @@ token/时长/工具调用统计。与 `aeval report`（Markdown 报告）同 sto
 `aggregate_run` 聚合管线。
 
 ```bash
-aeval dashboard --store examples/offline-chain/out/run-aeval-intel-1/store.sqlite3 \
+aeval dashboard --store examples/offline-chain/out/aeval-intel-1/store.sqlite3 \
     run-aeval-intel-1 > dash.html
 ```
 
@@ -76,7 +76,7 @@ demo 对四个 run 各产出一份（`out/dashboard-*.html`）：
 
 | 面板 | run（套件 · 契约） | 内容 |
 |---|---|---|
-| `dashboard-aeval-intel.html` | aeval-intel 0.3.0 · intel | **旗舰**：24 任务 × 3 试 = 72 判定（pass@3 0.9998 · pass^3 0.8032 · 红线告警）；demo 跑完自动打开的就是它 |
+| `dashboard-aeval-intel.html` | aeval-intel 0.3.0 · intel | **旗舰**：23 任务 × 3 试 = 69 判定（pass@3 0.9998 · pass^3 0.7952 · 红线告警）；demo 跑完自动打开的就是它 |
 | `dashboard-sbench-offline.html` | sbench-pilot 0.2.0 · offline | 服务自查 89 例全量（outcome-only，pass@1 0.7753） |
 | `dashboard-tbench-intel.html` | tbench-intel 0.1.0 · intel | terminal-bench 扩展：outcome 之上叠会话质量 12 维 + 阈值折叠 + veto |
 | `dashboard-tbench-offline.html` | tbench-pilot 0.2.0 · offline | terminal-bench 基线：outcome 层 + 标准轨迹层九项指标 |
@@ -105,11 +105,11 @@ demo 对四个 run 各产出一份（`out/dashboard-*.html`）：
 
 ```bash
 # 单任务 → stdout（重定向保存）
-aeval trajectory --store examples/offline-chain/out/run-aeval-intel-1/store.sqlite3 \
+aeval trajectory --store examples/offline-chain/out/aeval-intel-1/store.sqlite3 \
     run-aeval-intel-1 memory.tenant_isolation > task.html
 
 # 批量：run 下每个 task 各一份自包含面板 → <dir>/<task>.html
-aeval trajectory --store examples/offline-chain/out/run-aeval-intel-1/store.sqlite3 \
+aeval trajectory --store examples/offline-chain/out/aeval-intel-1/store.sqlite3 \
     run-aeval-intel-1 --out /tmp/aeval-trajectory/
 ```
 
@@ -185,7 +185,7 @@ provenance: { source: authored-internally, license: MIT }
 | 套件 | 内容 |
 |---|---|
 | `tbench-pilot` | terminal-bench 试点（含镜像摘要锁定与来源说明） |
-| `aeval-intel` | 会话智能 10 任务 + 跨会话记忆 14 任务（含红线注入：回显、密钥泄露、跨租户越权等） |
+| `aeval-intel` | 会话智能 10 任务 + 跨会话记忆 13 任务（含红线注入：回显、密钥泄露、跨租户越权等） |
 | `sbench-pilot` | 服务自查 12 类 89 例（outcome-only 契约） |
 | `deepagent-hello` / `deepagent-budget` / `e2e-hello` | deepagent 与端到端冒烟 |
 | `_base` | 共享基座（继承源） |
