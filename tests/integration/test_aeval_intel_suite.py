@@ -93,10 +93,12 @@ def test_pass_pow_k_matches_the_job_attempts(suite):
 def test_tasks_carry_the_aeval_collect_command():
     import tomllib
 
-    # 0.3.0：全部 24 个任务（10 个智能度任务 + 14 个 memory 用例）。
+    # 0.4.0：23 个任务（10 个智能度任务 + 13 个 memory 用例——品类
+    # 变更消解已移出）。
     task_dirs = sorted(p.name for p in (SUITE / "tasks").iterdir() if p.is_dir())
-    assert len(task_dirs) == 24
-    assert sum(1 for name in task_dirs if name.startswith("memory.")) == 14
+    assert len(task_dirs) == 23
+    assert sum(1 for name in task_dirs if name.startswith("memory.")) == 13
+    assert "memory.contradiction_update" not in task_dirs
     for task in task_dirs:
         data = tomllib.loads((SUITE / "tasks" / task / "task.toml").read_text("utf-8"))
         commands = [c["command"] for c in data["verifier"]["collect"]]

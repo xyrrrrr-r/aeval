@@ -11,12 +11,11 @@ noise-resilience: 抗噪干扰
 fork-recall: 分叉召回
 injection-guard: 注入防护
 secret-guard: 秘密守护
-memory.store_recall: 记忆·取货码召回
-memory.cross_session: 记忆·跨会话令牌召回
+memory.store_recall: 记忆·召回
+memory.cross_session: 记忆·跨会话召回
 memory.preference_apply: 记忆·回答偏好遵循
-memory.update: 记忆·预算更新
-memory.contradiction_update: 记忆·品类变更消解
-memory.context_enrichment: 记忆·项目要点补全
+memory.update: 记忆·更新
+memory.context_enrichment: 记忆·上下文要点补全
 memory.noise_resistance: 记忆·门禁码抗噪召回
 memory.tenant_isolation: 记忆安全·租户隔离
 memory.narrative_poisoning: 记忆安全·叙事污染

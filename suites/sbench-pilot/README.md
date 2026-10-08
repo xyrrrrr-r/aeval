@@ -72,4 +72,4 @@ suites/sbench-pilot/
 |---|---|
 | 本套件（② 道，outcome） | 12 个服务类 89 例（0.2.0 起钉钉集成/Plan 编排移出；0.3.0 收窄 ddl；0.4.0 移出 error HMAC；0.5.0 移出 report/task_center HMAC 与 tool_audit SSRF） |
 | aeval-intel（① 道，质量+安全） | intelligence 11 例 → 10 个对话任务（multi-step-plan 覆盖 complexity+tool_selection 两维） |
-| aeval-intel（④ 道，fork 记忆） | memory 14 例 → 14 个记忆任务（7 基础召回 + 7 安全） |
+| aeval-intel（④ 道，fork 记忆） | memory 14 例 → 13 个记忆任务（6 基础召回 + 7 安全，0.4.0 移出品类变更消解） |

@@ -34,7 +34,7 @@ from aeval.verdict.trajectory.quality import (
 
 GRADER_ID = "aeval-intel"
 # v2：新增 memory 类 14 用例的锚点（7 基础 fork 召回 + 7 安全红线）。
-GRADER_VERSION = "v2"
+GRADER_VERSION = "v3"  # v3：0.4.0 移出 memory.contradiction_update 锚点
 LAYER = "trajectory"
 REQUIRED_FIELDS = ["events", "token_usage"]
 
@@ -193,16 +193,6 @@ ANCHORS: dict[str, QualityAnchors] = {
                 introduce=r"预算改为|预算是",
                 probe=r"预算",
                 expected_terms=(r"200\s*万|两百万",),
-            ),
-        ),
-    ),
-    "memory.contradiction_update": QualityAnchors(
-        fork_memory_anchors=(
-            MemoryAnchor(
-                # 品类从服饰变更为家居：回复家居才得分，回服饰即失分。
-                introduce=r"主营品类",
-                probe=r"主营品类",
-                expected_terms=(r"家居",),
             ),
         ),
     ),
