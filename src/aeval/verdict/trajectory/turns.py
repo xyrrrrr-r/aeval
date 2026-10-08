@@ -38,6 +38,35 @@ __all__ = [
     "analyze_turns",
 ]
 
+# 系统面来源：system（会话提示词）与 developer（开发者注入）都是会
+# 话基底，不构成对话轮、不参与应答/归因语义。
+_SYSTEM_SOURCES = ("system", "developer")
+
+
+def _system_messages_from_steps(
+    steps: Sequence[Any],
+) -> tuple[TrajectoryMessage, ...]:
+    """系统面消息（system/developer），步序排列，空消息丢弃。
+
+    与 user/agent 面同构：只做提取，不做判读。
+    """
+    out: list[TrajectoryMessage] = []
+    for step in steps:
+        if (step.source or "") not in _SYSTEM_SOURCES:
+            continue
+        text = step.message or ""
+        if not text.strip():
+            continue
+        out.append(
+            TrajectoryMessage(
+                step_id=step.step_id,
+                source=step.source,
+                text=text,
+                turn=_turn_marker_of(step),
+            )
+        )
+    return tuple(out)
+
 
 @dataclass(frozen=True)
 class Turn:
@@ -54,6 +83,9 @@ class Turn:
     replies: tuple[TrajectoryMessage, ...]
     tool_events: tuple[ToolEvent, ...]
     turn_marker: int | None
+    # 轮内系统面消息（system/developer 注入，落在该轮跨度内）；只陈
+    # 述事实，不进 replies（应答/字数语义只算助手面）。
+    system_messages: tuple[TrajectoryMessage, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -76,11 +108,16 @@ class TurnScore:
 
 @dataclass(frozen=True)
 class TurnAnalysis:
-    """一个 trial 的 turn 切面 + 轨迹级维度折叠（同对象 evaluate）。"""
+    """一个 trial 的 turn 切面 + 轨迹级维度折叠（同对象 evaluate）。
+
+    ``prologue``：首条用户消息之前的系统面消息（会话系统提示等）。
+    它们是会话基底，不构成对话轮，单独携带以免丢失。
+    """
 
     turns: tuple[Turn, ...]
     scores: tuple[TurnScore, ...]  # 与 turns 按下标对齐
     metric_outcomes: tuple[MetricOutcome, ...]
+    prologue: tuple[TrajectoryMessage, ...] = ()
 
 
 def segment_turns(evidence: TrajectoryEvidence) -> tuple[Turn, ...]:
@@ -103,6 +140,9 @@ def segment_turns(evidence: TrajectoryEvidence) -> tuple[Turn, ...]:
     for event in evidence.tool_events:
         tools_by_step.setdefault(event.step_id, []).append(event)
     agent_by_step = {m.step_id: m for m in evidence.agent_messages}
+    system_by_step = {
+        m.step_id: m for m in _system_messages_from_steps(steps)
+    }
 
     turns: list[Turn] = []
     for position, start in enumerate(boundaries):
@@ -120,6 +160,11 @@ def segment_turns(evidence: TrajectoryEvidence) -> tuple[Turn, ...]:
             if start < step.step_id <= end
             and step.step_id in agent_by_step
         )
+        system_messages = tuple(
+            system_by_step[step_id]
+            for step_id in range(start + 1, end + 1)
+            if step_id in system_by_step
+        )
         tool_events = tuple(
             event
             for step_id in range(start, end + 1)
@@ -134,6 +179,7 @@ def segment_turns(evidence: TrajectoryEvidence) -> tuple[Turn, ...]:
                 replies=replies,
                 tool_events=tool_events,
                 turn_marker=_turn_marker_of(user_step),
+                system_messages=system_messages,
             )
         )
     return tuple(turns)
@@ -184,8 +230,19 @@ def analyze_turns(
             )
         )
     outcomes = tuple(metric.evaluate(evidence) for metric in metrics)
+    # 会话前系统提示：首条用户消息之前的系统面消息（无用户面时全部
+    # 归前缀），单独携带不丢失。
+    steps = list(evidence.transcript.atif.steps or [])
+    user_starts = [turn.user_step_id for turn in turns]
+    first_user = min(user_starts) if user_starts else None
+    prologue = tuple(
+        message
+        for message in _system_messages_from_steps(steps)
+        if first_user is None or message.step_id < first_user
+    )
     return TurnAnalysis(
         turns=turns,
         scores=tuple(scores),
         metric_outcomes=outcomes,
+        prologue=prologue,
     )

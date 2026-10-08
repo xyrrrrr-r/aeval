@@ -22,7 +22,7 @@ from __future__ import annotations
 
 import html as _html
 from dataclasses import dataclass
-from typing import Sequence
+from typing import Any, Sequence
 
 from aeval.metrics.dashboard import _CSS
 from aeval.verdict.trajectory.metrics import MetricOutcome
@@ -145,6 +145,8 @@ def _timeline_svg(stats: TrajectoryStats) -> str | None:
             cls += " copied"
         if s.observation_missing:
             cls += " failed"
+        if s.source in ("system", "developer"):
+            cls += " system"
         tip = (
             f"step {s.step_id} · {s.source}"
             + ("（记忆基底）" if s.copied else "")
@@ -396,6 +398,12 @@ font-size:13.5px;white-space:pre-wrap;word-break:break-word}
 .bubble .who{font-size:11.5px;color:#5b6470;margin-bottom:2px}
 .bubble.user{background:#f2f5f9}
 .bubble.agent{border:1px solid #dfe5ec}
+.bubble.system{background:#f5f0ff;border:1px dashed #b7a6f0}
+.prologue{border:1px dashed #cbd5e1;border-radius:10px;padding:8px 12px;
+margin-top:8px}
+.prologue summary{font-size:12.5px;color:#5b6470;cursor:pointer}
+.prologue .bubble{margin-top:6px}
+.node.system{fill:#7c3aed}
 .tools{margin-top:8px;font-size:12.5px;color:#5b6470;display:grid;gap:3px}
 .tools .ok::before{content:"✓ ";color:#16a34a}
 .tools .missing::before{content:"✗ ";color:#dc2626}
@@ -536,6 +544,11 @@ def _detail_chips(details: Sequence[ProbeDetail]) -> str:
     return f'<div class="attrib">{"".join(chips)}</div>' if chips else ""
 
 
+def _system_label(source: str) -> str:
+    """系统面角色显示名（原文 id 语义保留在 source 字段里）。"""
+    return "开发者" if source == "developer" else "系统"
+
+
 def _turn_card(turn: Turn, score: TurnScore) -> str:
     kind = (
         '<span class="tbadge base">记忆基底（fork 复制上下文）</span>'
@@ -565,11 +578,25 @@ def _turn_card(turn: Turn, score: TurnScore) -> str:
         f'<div class="bubble user"><div class="who">用户</div>'
         f"{_e(_snippet(turn.user_text))}</div>"
     )
-    for reply in turn.replies:
-        body += (
-            f'<div class="bubble agent"><div class="who">助手</div>'
-            f"{_e(_snippet(reply.text))}</div>"
-        )
+    # 轮内消息按步序渲染：助手回复与系统面注入（system/developer）
+    # 交错出现，保持密封轨迹里的真实顺序。
+    flow: list[tuple[int, str, Any]] = [
+        (m.step_id, "agent", m) for m in turn.replies
+    ] + [
+        (m.step_id, "system", m) for m in turn.system_messages
+    ]
+    for _step_id, kind, message in sorted(flow, key=lambda item: item[0]):
+        if kind == "agent":
+            body += (
+                f'<div class="bubble agent"><div class="who">助手</div>'
+                f"{_e(_snippet(message.text))}</div>"
+            )
+        else:
+            body += (
+                f'<div class="bubble system"><div class="who">'
+                f"{_e(_system_label(message.source))}</div>"
+                f"{_e(_snippet(message.text))}</div>"
+            )
     if turn.tool_events:
         rows = "".join(
             f'<div class="{"ok" if event.observation_present else "missing"}">'
@@ -584,6 +611,21 @@ def _turn_card(turn: Turn, score: TurnScore) -> str:
     return f'<div class="{cls}">{head}{body}</div>'
 
 
+def _prologue_html(prologue: Sequence[Any]) -> str:
+    """会话前系统消息（折叠块，HTML 原生 details，零脚本）。"""
+    bubbles = "".join(
+        f'<div class="bubble system"><div class="who">'
+        f"{_e(_system_label(m.source))}</div>"
+        f"{_e(_snippet(m.text))}</div>"
+        for m in prologue
+    )
+    return (
+        f'<details class="prologue"><summary>会话前系统消息'
+        f"（{len(prologue)} 条，不构成对话轮）</summary>"
+        f"{bubbles}</details>"
+    )
+
+
 def _turn_section_html(analysis: TurnAnalysis) -> str:
     """逐轮打分节：轨迹级 chips + 每轮一张卡。"""
     parts = ["<h3>逐轮打分（turn 切面）</h3>"]
@@ -596,7 +638,11 @@ def _turn_section_html(analysis: TurnAnalysis) -> str:
         )
     if not analysis.turns:
         parts.append(_note("轨迹无用户面消息，切不出轮次"))
+        if analysis.prologue:
+            parts.append(_prologue_html(analysis.prologue))
         return "".join(parts)
+    if analysis.prologue:
+        parts.append(_prologue_html(analysis.prologue))
     parts.append(
         '<div class="turns">'
         + "".join(
@@ -631,7 +677,8 @@ def _trial_html(panel: TrialPanel, window: int | None) -> str:
         parts.append(
             '<p class="legend"><span class="sw" style="background:#2563eb">'
             '</span>用户<span class="sw" style="background:#16a34a"></span>'
-            '智能体<span class="sw" style="background:#dc2626"></span>'
+            '智能体<span class="sw" style="background:#7c3aed"></span>'
+            '系统<span class="sw" style="background:#dc2626"></span>'
             '工具无观测（失败）<span class="sw" style="background:#9ca3af">'
             "</span>记忆基底（fork 复制上下文）</p>"
         )

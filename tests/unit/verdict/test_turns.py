@@ -206,6 +206,54 @@ def test_panel_snippet_truncates_and_escapes_messages():
     assert "含&lt;b&gt;标签&lt;/b&gt;" in html
 
 
+def test_system_roles_segment_and_render():
+    """三角色（用户/系统/助手）：系统消息按位置归入轮内或会话前缀。
+
+    - 首条用户消息之前 → prologue（会话系统提示，不构成对话轮）；
+    - 轮跨度内 → turn.system_messages（系统注入，不进应答/字数语义）；
+    - 面板：系统气泡 + 会话前缀折叠块 + 时间轴系统节点。
+    """
+    from harbor.models.trajectories import Step as _Step
+
+    steps = [
+        _Step(step_id=1, source="system", message="你是会话智能体。"),
+        user_step(2, "记住密钥 KEY-1"),
+        agent_step(3, "已记住。"),
+        _Step(step_id=4, source="system", message="（租户切换提醒）"),
+        user_step(5, "密钥是什么？"),
+        agent_step(6, "KEY-1"),
+    ]
+    ev = evidence(steps)
+    analysis = analyze_turns(ev, ())
+    assert [m.step_id for m in analysis.prologue] == [1]
+    t1, t2 = analysis.turns
+    assert [m.step_id for m in t1.system_messages] == [4]
+    assert t2.system_messages == ()
+    # 系统消息不影响应答/字数语义（replies 只算助手面）。
+    assert analysis.scores[0].reply_chars == len("已记住。")
+    assert analysis.scores[1].reply_chars == len("KEY-1")
+    html = _panel(analysis, steps=steps)
+    assert "会话前系统消息（1 条，不构成对话轮）" in html
+    assert "你是会话智能体。" in html          # 前缀块直显原文
+    assert '<div class="who">系统</div>' in html
+    assert "（租户切换提醒）" in html          # 轮内系统气泡
+    assert 'class="node system' in html        # 时间轴系统节点
+
+
+def test_system_only_transcript_all_prologue():
+    """只有系统消息的轨迹：切不出轮，但前缀不丢失。"""
+    from harbor.models.trajectories import Step as _Step
+
+    steps = [_Step(step_id=1, source="system", message="仅系统提示。")]
+    ev = evidence(steps)
+    analysis = analyze_turns(ev, ())
+    assert analysis.turns == ()
+    assert [m.step_id for m in analysis.prologue] == [1]
+    html = _panel(analysis, steps=steps)
+    assert "轨迹无用户面消息，切不出轮次" in html
+    assert "会话前系统消息（1 条" in html
+
+
 def test_collect_turn_details_orders_by_declaration():
     """collect_turn_details：按指标声明序汇总（面板归因顺序稳定）。"""
     from aeval.verdict.trajectory.quality import collect_turn_details
