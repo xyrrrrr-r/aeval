@@ -1,6 +1,6 @@
 [project]
 name = "aeval-harbor"
-version = "0.1.2"
+version = "0.2.0"
 description = "Agent trajectory evaluation framework built on Harbor"
 readme = "README.md"
 license = "Apache-2.0"

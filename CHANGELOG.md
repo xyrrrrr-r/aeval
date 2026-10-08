@@ -11,7 +11,7 @@ schema、CLI 参数、存储格式），每次都会在下方 `Changed`/`Removed
 
 ## [Unreleased]
 
-## [0.1.2] - 2026-10-08
+## [0.2.0] - 2026-10-08
 
 ### Changed
 
@@ -153,7 +153,7 @@ schema、CLI 参数、存储格式），每次都会在下方 `Changed`/`Removed
 - `e2b` 依赖锁定 `>=2.25.0,<2.51.0`：自托管 e2b 集群仅实现 v1
   sandbox API（详见 `pyproject.toml` 内注释）。
 
-[Unreleased]: https://gitcode.com/open_kunpeng_agentic_infra/aeval/compare/v0.1.2...HEAD
-[0.1.2]: https://gitcode.com/open_kunpeng_agentic_infra/aeval/compare/v0.1.1...v0.1.2
+[Unreleased]: https://gitcode.com/open_kunpeng_agentic_infra/aeval/compare/v0.2.0...HEAD
+[0.2.0]: https://gitcode.com/open_kunpeng_agentic_infra/aeval/compare/v0.1.1...v0.2.0
 [0.1.1]: https://gitcode.com/open_kunpeng_agentic_infra/aeval/compare/v0.1.0...v0.1.1
 [0.1.0]: https://gitcode.com/open_kunpeng_agentic_infra/aeval/releases/tag/v0.1.0
