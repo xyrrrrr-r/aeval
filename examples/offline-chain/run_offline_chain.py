@@ -1,4 +1,8 @@
-"""dsh × tbench 判分链路离线演示（offline chain demo）.
+"""dsh × tbench 判分链路离线演示（offline chain demo）——quickstart 入口.
+
+一条命令（仓库根目录，需要 uv；跑完自动用浏览器打开旗舰 dashboard）：
+
+    uv run python examples/offline-chain/run_offline_chain.py [--no-open]
 
 为什么是"离线"：本机没有 docker / node / e2b，真实沙箱与 DSH 桥跑
 不了。本脚本从真实链路"采集完成"的那一点切入 —— 之后每一环都是
@@ -1181,7 +1185,7 @@ async def run_chain(spec: RunSpec) -> None:
         default_category=suite.default_category,
         dimension_model=suite.dimension_model,
         versions=VersionsBundle(
-            aeval_version=version("aeval"),
+            aeval_version=version("aeval-harbor"),
             converter_version=suite.overlay.provenance.converter_version,
         ),
     )
@@ -1284,7 +1288,7 @@ async def run_chain(spec: RunSpec) -> None:
     print()
 
 
-async def main() -> None:
+async def main(no_open: bool = False) -> None:
     # The agents-declaration root (agents/<id>.yaml) is discovered from the
     # working directory — run from the aeval checkout so "dsh" resolves.
     import os
@@ -1338,6 +1342,26 @@ async def main() -> None:
         out_path.write_text(result.stdout, encoding="utf-8")
         print(f"  out/{out_path.name}")
 
+    # quickstart 契约：一条命令 → 浏览器自动打开结果。无头环境
+    # （SSH / CI）里 webbrowser 打不开就退回打印路径，不算失败。
+    hero = OUT / "dashboard-aeval-intel.html"
+    print()
+    print("=" * 64)
+    print(f"全部输出在: {OUT}")
+    print(f"旗舰面板:   {hero}")
+    if no_open:
+        print("(--no-open：跳过自动打开浏览器)")
+    else:
+        import webbrowser
+
+        try:
+            opened = webbrowser.open(hero.as_uri())
+        except Exception:
+            opened = False
+        if not opened:
+            print("未能自动打开浏览器，请手动打开上面的旗舰面板路径。")
+    print("=" * 64)
+
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    asyncio.run(main(no_open="--no-open" in sys.argv[1:]))

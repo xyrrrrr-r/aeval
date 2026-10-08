@@ -134,7 +134,7 @@ def build_trial_record(
         artifacts=dict(artifacts),
         transcript_extra=transcript_extra,
         versions=VersionsBundle(
-            aeval_version=_dist_version("aeval"),
+            aeval_version=_dist_version("aeval-harbor"),
             grader_versions=dict(grader_versions),
         ),
         adapter=adapter,

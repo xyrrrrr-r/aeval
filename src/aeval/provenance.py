@@ -192,7 +192,7 @@ def fingerprint_python_environment() -> PythonEnvironmentLock:
 def fingerprint_plugin_distribution() -> PluginIdentity:
     from importlib.metadata import distribution
 
-    dist = distribution("aeval")
+    dist = distribution("aeval-harbor")
     wheel_sha256: str | None = None
     direct_url = dist.read_text("direct_url.json")
     if direct_url:
@@ -204,7 +204,7 @@ def fingerprint_plugin_distribution() -> PluginIdentity:
         except json.JSONDecodeError:
             wheel_sha256 = None
     return PluginIdentity(
-        distribution="aeval",
+        distribution="aeval-harbor",
         version=dist.version,
         import_path="aeval.hooks:AevalPlugin",
         wheel_sha256=wheel_sha256,

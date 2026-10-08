@@ -14,17 +14,30 @@ requirements 门先行、再进 grader，阈值折叠、违规 veto 终裁——
 逐一 sha256 校验并绑定运行时锁，密封 bundle 可被 `recompute` 独立复算；可靠性用 pass^k
 度量，而不是"跑一次过了"。
 
+## 安装
+
+```bash
+pip install aeval-harbor    # 发行名 aeval-harbor（PyPI 上 aeval 已被停更包占用）；CLI 与 import 名仍是 aeval
+```
+
+Python ≥ 3.12 · 变更见 [CHANGELOG](CHANGELOG.md) · 语义化版本（0.x 实验期：minor 版本
+可能含破坏性变更，均在 CHANGELOG 显式列出）。想先试试？直接跑下一节的离线演示，
+从源码运行、无需安装。
+
 ## 30 秒体验（离线，零外部依赖）
 
 不需要 docker / e2b / 模型 API key。仓库自带一条完整的离线判分链路演示——
 从"采集完成"那一点切入，之后**每一环都是生产代码，没有一处 mock**：
 
 ```bash
-uv sync    # Python ≥ 3.12（或 python -m venv .venv && .venv/bin/pip install -e .）
-.venv/bin/python examples/offline-chain/run_offline_chain.py
-# 跑完用浏览器打开任意一个面板：
-open examples/offline-chain/out/dashboard-aeval-intel.html   # macOS；其他系统手动打开
+git clone https://gitcode.com/open_kunpeng_agentic_infra/aeval.git && cd aeval
+uv run python examples/offline-chain/run_offline_chain.py   # 跑完自动在浏览器打开 dashboard
 ```
+
+> 没有 [uv](https://docs.astral.sh/uv/)：先 `curl -LsSf https://astral.sh/uv/install.sh | sh`
+> （Python ≥ 3.12 它也能代管）；或传统方式 `python -m venv .venv && .venv/bin/pip install -e .`
+> 再 `.venv/bin/python examples/offline-chain/run_offline_chain.py`。
+> 加 `--no-open` 跳过自动打开浏览器（SSH / CI 环境打不开时也会退回打印路径）。
 
 一次产出 4 个 run 的报告（Markdown）+ 自包含 dashboard（HTML）+ 轨迹面板，
 其中会话套件 run 包含 24 任务 × 3 试次 = 72 条判定记录（pass@3 0.9998、pass^3 0.8032、
@@ -147,7 +160,7 @@ examples/offline-chain/  # 30 秒离线演示
 
 ## 相关项目
 
-- **[dsh-eval-control](../dsh-eval-control)**——DSH 形态的宿主侧控制插件（实验变量注入、
+- **[dsh-eval-control](https://gitcode.com/open_kunpeng_agentic_infra/dsh-eval-control)**——DSH 形态的宿主侧控制插件（实验变量注入、
   网关租约预算、fork 血统、bundle descriptor）。`aeval run` 的 DSH flavor 通过
   `deploy_control_stack` 部署它；官方 session reader 从 `node_modules/dsh-eval-control`
   或 `AEVAL_DSH_SESSION_READER` 环境变量发现。
@@ -161,6 +174,16 @@ uv sync
 .venv/bin/pytest                 # 单元 + 集成（含 hypothesis 性质测试）
 .venv/bin/aeval selftest manifest   # 故障注入自检：必须全部拦截
 .venv/bin/aeval selftest isolation
+```
+
+集成测试里的 DSH bridge 用例需要 PATH 上有 Node（`^22.19 || >=24`，
+dsh-eval-control 的运行时）；缺失时这些用例会以 `node runtime not found` 失败。
+
+## 发布
+
+```bash
+uv build && uvx twine check dist/*   # hatchling 锁 1.27.x——1.28+ 产出 PyPI 尚不识别的 Metadata 2.5，见 pyproject 注释
+uv publish dist/*                    # 需要 PyPI token（如 UV_PUBLISH_TOKEN 环境变量）
 ```
 
 ## License

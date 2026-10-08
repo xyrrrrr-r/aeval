@@ -1,5 +1,5 @@
 [project]
-name = "aeval"
+name = "aeval-harbor"
 version = "0.1.0"
 description = "Agent trajectory evaluation framework built on Harbor"
 readme = "README.md"
@@ -25,6 +25,35 @@ dependencies = [
     "pydantic>=2.12.0",
     "pyyaml>=6.0.2",
 ]
+keywords = [
+    "agent",
+    "evaluation",
+    "eval",
+    "trajectory",
+    "benchmark",
+    "harbor",
+    "llm",
+    "deterministic",
+    "pass-at-k",
+    "evidence",
+]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "Intended Audience :: Science/Research",
+    "License :: OSI Approved :: Apache Software License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+    "Topic :: Software Development :: Testing",
+]
+
+[project.urls]
+Homepage = "https://gitcode.com/open_kunpeng_agentic_infra/aeval"
+Repository = "https://gitcode.com/open_kunpeng_agentic_infra/aeval"
+Issues = "https://gitcode.com/open_kunpeng_agentic_infra/aeval/issues"
+Changelog = "https://gitcode.com/open_kunpeng_agentic_infra/aeval/blob/main/CHANGELOG.md"
 
 [project.scripts]
 aeval = "aeval.cli:app"
@@ -37,8 +66,22 @@ dev = [
 ]
 
 [build-system]
-requires = ["hatchling"]
+# hatchling 1.28+ 会产出 Metadata-Version: 2.5，而当前 twine check /
+# PyPI 校验链尚不识别（InvalidDistribution），上传会被拒。锁在 1.27.x
+# （产出 2.4）直到发布工具链跟上——升级前先跑 `uvx twine check dist/*`。
+requires = ["hatchling>=1.27,<1.28"]
 build-backend = "hatchling.build"
+
+[tool.uv]
+# cryptography 50.x 起不再发布 Intel macOS wheel（仅 macosx_11_0_arm64；
+# Linux/Apple Silicon 不受影响）。不加约束时，`uv run`/`uv sync` 在
+# Intel Mac 上会退化为 Rust 源码构建（几十分钟），quickstart 直接失效。
+# 因此仅在 darwin+x86_64 平台把它压到 44.x——44.0.3 有实测可用的
+# cp39-abi3-macosx_10_9_universal2 wheel。uv 的 universal lock 会按
+# 环境标记 fork：其余平台仍解析到最新的 50.x。
+constraint-dependencies = [
+    "cryptography<45; sys_platform == 'darwin' and platform_machine == 'x86_64'",
+]
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/aeval"]

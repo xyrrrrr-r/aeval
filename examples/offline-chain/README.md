@@ -18,10 +18,17 @@ reward 观测值、会话记录。
 
 ## 运行
 
-在 aeval 仓库根目录：
+在 aeval 仓库根目录，一条命令（跑完自动在浏览器打开旗舰 dashboard；
+`--no-open` 跳过自动打开）：
 
 ```bash
-uv sync                                        # 或: python -m venv .venv && .venv/bin/pip install -e .
+uv run python examples/offline-chain/run_offline_chain.py
+```
+
+没有 [uv](https://docs.astral.sh/uv/) 时的传统方式：
+
+```bash
+python -m venv .venv && .venv/bin/pip install -e .   # Python ≥ 3.12
 .venv/bin/python examples/offline-chain/run_offline_chain.py
 ```
 

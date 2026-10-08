@@ -473,7 +473,7 @@ def run_cmd(
             default_category=resolved.default_category,
             dimension_model=resolved.dimension_model,
             versions=VersionsBundle(
-                aeval_version=version("aeval"),
+                aeval_version=version("aeval-harbor"),
                 converter_version=resolved.overlay.provenance.converter_version,
             ),
         )
@@ -944,17 +944,16 @@ def trajectory_cmd(
                           "缺省时逐轮打分退化为结构切面）"),
     ] = Path("suites"),
 ) -> None:
-    """Render the trajectory analysis panel for one task.
+    """Render the interactive trajectory analysis panel for one task.
 
     Loads every sealed trial of ``task_id`` in the run, verifies each
-    canonical transcript against its recorded sha256, and renders two
-    layers over the SAME sealed evidence: the collection view (execution
-    timeline, tool calls/failures/retries, token pulse, context
-    pressure, durations) and the turn view (每轮一张卡：用户消息 → 回
-    复 → 工具 → 归因判分 → turn 分). Turn attribution reuses the SAME
-    metric objects that judge the trajectory (the suite grader's
-    ``turn_metrics(task_id)``)——面板没有第二套判分逻辑。Output is
-    one self-contained HTML file on stdout — redirect to keep it::
+    canonical transcript against its recorded sha256, and renders one
+    shared timeline plus an offline detail inspector. Selecting a trial
+    or step reveals its messages, tool observations, structural facts,
+    and turn attribution. Turn attribution reuses the SAME metric
+    objects that judge the trajectory (the suite grader's
+    ``turn_metrics(task_id)``)——面板没有第二套判分逻辑。Output is one
+    self-contained HTML file on stdout — redirect to keep it::
 
         aeval trajectory --store out/run/store.sqlite3 run-... task > t.html
     """
