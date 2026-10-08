@@ -399,10 +399,7 @@ font-size:13.5px;white-space:pre-wrap;word-break:break-word}
 .bubble.user{background:#f2f5f9}
 .bubble.agent{border:1px solid #dfe5ec}
 .bubble.system{background:#f5f0ff;border:1px dashed #b7a6f0}
-.prologue{border:1px dashed #cbd5e1;border-radius:10px;padding:8px 12px;
-margin-top:8px}
-.prologue summary{font-size:12.5px;color:#5b6470;cursor:pointer}
-.prologue .bubble{margin-top:6px}
+.turn.sysprologue{background:#faf7ff;border:1px dashed #b7a6f0}
 .node.system{fill:#7c3aed}
 .tools{margin-top:8px;font-size:12.5px;color:#5b6470;display:grid;gap:3px}
 .tools .ok::before{content:"✓ ";color:#16a34a}
@@ -611,23 +608,33 @@ def _turn_card(turn: Turn, score: TurnScore) -> str:
     return f'<div class="{cls}">{head}{body}</div>'
 
 
-def _prologue_html(prologue: Sequence[Any]) -> str:
-    """会话前系统消息（折叠块，HTML 原生 details，零脚本）。"""
-    bubbles = "".join(
-        f'<div class="bubble system"><div class="who">'
-        f"{_e(_system_label(m.source))}</div>"
-        f"{_e(_snippet(m.text))}</div>"
-        for m in prologue
-    )
-    return (
-        f'<details class="prologue"><summary>会话前系统消息'
-        f"（{len(prologue)} 条，不构成对话轮）</summary>"
-        f"{bubbles}</details>"
-    )
+def _prologue_cards(prologue: Sequence[Any]) -> str:
+    """会话前系统消息 → 轮次网格里的可见 S 卡（S1、S2…）。
+
+    与 T 卡同构但明确标注「不构成对话轮」：按步序排在 T1 之前，
+    正文直显密封原文（超长截断、HTML 转义，同气泡纪律）。
+    """
+    cards = []
+    for n, message in enumerate(prologue, start=1):
+        copied = (
+            '<span class="tbadge base">记忆基底（fork 复制上下文）</span>'
+            if message.copied
+            else ""
+        )
+        cards.append(
+            f'<div class="turn sysprologue">'
+            f'<div class="thead"><span class="tno">S{n}</span>'
+            f'<span class="tbadge">系统消息（会话前）</span>{copied}'
+            f'<span class="tscore gray">不构成对话轮</span></div>'
+            f'<div class="bubble system"><div class="who">'
+            f"{_e(_system_label(message.source))}</div>"
+            f"{_e(_snippet(message.text))}</div></div>"
+        )
+    return "".join(cards)
 
 
 def _turn_section_html(analysis: TurnAnalysis) -> str:
-    """逐轮打分节：轨迹级 chips + 每轮一张卡。"""
+    """逐轮打分节：轨迹级 chips + 会话前系统消息（S 卡）+ 每轮一张卡。"""
     parts = ["<h3>逐轮打分（turn 切面）</h3>"]
     if analysis.metric_outcomes:
         parts.append(_metric_chips(analysis.metric_outcomes))
@@ -636,15 +643,15 @@ def _turn_section_html(analysis: TurnAnalysis) -> str:
             '<p class="note">该套件判分器未声明 turn 指标——仅展示结构'
             "切面（应答/工具闭环/回复长度），无归因分。</p>"
         )
+    prologue = _prologue_cards(analysis.prologue)
     if not analysis.turns:
         parts.append(_note("轨迹无用户面消息，切不出轮次"))
-        if analysis.prologue:
-            parts.append(_prologue_html(analysis.prologue))
+        if prologue:
+            parts.append(f'<div class="turns">{prologue}</div>')
         return "".join(parts)
-    if analysis.prologue:
-        parts.append(_prologue_html(analysis.prologue))
     parts.append(
         '<div class="turns">'
+        + prologue
         + "".join(
             _turn_card(turn, score)
             for turn, score in zip(analysis.turns, analysis.scores)

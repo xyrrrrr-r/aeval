@@ -216,7 +216,8 @@ def test_system_roles_segment_and_render():
     from harbor.models.trajectories import Step as _Step
 
     steps = [
-        _Step(step_id=1, source="system", message="你是会话智能体。"),
+        _Step(step_id=1, source="system", message="你是会话智能体。",
+              is_copied_context=True),
         user_step(2, "记住密钥 KEY-1"),
         agent_step(3, "已记住。"),
         _Step(step_id=4, source="system", message="（租户切换提醒）"),
@@ -226,18 +227,26 @@ def test_system_roles_segment_and_render():
     ev = evidence(steps)
     analysis = analyze_turns(ev, ())
     assert [m.step_id for m in analysis.prologue] == [1]
+    assert analysis.prologue[0].copied is True  # 随父会话基底带入
     t1, t2 = analysis.turns
     assert [m.step_id for m in t1.system_messages] == [4]
+    assert t1.system_messages[0].copied is False
     assert t2.system_messages == ()
     # 系统消息不影响应答/字数语义（replies 只算助手面）。
     assert analysis.scores[0].reply_chars == len("已记住。")
     assert analysis.scores[1].reply_chars == len("KEY-1")
     html = _panel(analysis, steps=steps)
-    assert "会话前系统消息（1 条，不构成对话轮）" in html
-    assert "你是会话智能体。" in html          # 前缀块直显原文
+    # 会话前系统消息渲染为轮次网格里的可见 S 卡（排在 T1 之前）。
+    assert '<span class="tno">S1</span>' in html
+    assert "系统消息（会话前）" in html
+    assert "记忆基底（fork 复制上下文）</span>" in html
+    assert "不构成对话轮" in html
+    assert "你是会话智能体。" in html          # S 卡直显原文
     assert '<div class="who">系统</div>' in html
     assert "（租户切换提醒）" in html          # 轮内系统气泡
     assert 'class="node system' in html        # 时间轴系统节点
+    # S 卡在 T1 之前（时间序）。
+    assert html.index('">S1</span>') < html.index('">T1</span>')
 
 
 def test_system_only_transcript_all_prologue():
@@ -251,7 +260,8 @@ def test_system_only_transcript_all_prologue():
     assert [m.step_id for m in analysis.prologue] == [1]
     html = _panel(analysis, steps=steps)
     assert "轨迹无用户面消息，切不出轮次" in html
-    assert "会话前系统消息（1 条" in html
+    assert '<span class="tno">S1</span>' in html
+    assert "仅系统提示。" in html
 
 
 def test_collect_turn_details_orders_by_declaration():

@@ -93,6 +93,10 @@ class TrajectoryMessage:
     source: str          # "agent" | "user" | "system" | "developer"
     text: str
     turn: int | None = None
+    # 该步是否 fork 复制上下文（记忆基底）——系统面消息携带它以
+    # 区分「随父会话带入的提示」与「本会话自己的提示」；user/agent
+    # 面不使用（其 copied 语义挂在 Turn 上）。
+    copied: bool = False
 
 
 @dataclass(frozen=True)

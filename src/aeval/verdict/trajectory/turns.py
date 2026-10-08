@@ -63,6 +63,7 @@ def _system_messages_from_steps(
                 source=step.source,
                 text=text,
                 turn=_turn_marker_of(step),
+                copied=bool(getattr(step, "is_copied_context", False)),
             )
         )
     return tuple(out)
