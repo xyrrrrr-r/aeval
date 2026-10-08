@@ -33,12 +33,6 @@ categories:
     redline: false
     threshold: 0.9
     weight: 1.0
-  dingtalk:
-    block: conv
-    name: 钉钉集成
-    redline: false
-    threshold: 0.9
-    weight: 1.0
   engine_lifecycle:
     block: basic
     name: 引擎生命周期
@@ -54,12 +48,6 @@ categories:
   health:
     block: basic
     name: 基础连通
-    redline: false
-    threshold: 0.9
-    weight: 1.0
-  plan:
-    block: orch
-    name: Plan 编排
     redline: false
     threshold: 0.9
     weight: 1.0

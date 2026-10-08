@@ -1,7 +1,7 @@
 # 共享服务用例库（aeval/cases/）
 
-源方案《Benchmark 测评指标设计方案》§2 的 **14 个服务类共 123 例**
-的用例库。它不属于任何单个评测集：terminal-bench、服务基准、会话
+源方案《Benchmark 测评指标设计方案》§2 的 **12 个服务类共 103 例**
+的用例库（0.2.0 起钉钉集成与 Plan 编排两类退役移出）。它不属于任何单个评测集：terminal-bench、服务基准、会话
 基准……都只是消费方。一个评测集（套件）想用哪些类别，在自己的
 `cases.yaml` 里声明，生成器据此把任务注入该套件的数据集目录。
 
@@ -23,15 +23,13 @@ aeval/cases/
 ├── README.md            # 本文件
 ├── generate.py          # 注入器：读消费套件 cases.yaml，按类别物化任务
 └── checkers/
-    ├── health.py        # 14 个类别主体 —— 用例清单唯一事实源：
+    ├── health.py        # 12 个类别主体 —— 用例清单唯一事实源：
     ├── chat.py          #   CASES 表 {<category>.<case>: (标题, 说明, 检查函数)}
     ├── session.py       # 改用例 = 改这里，然后对消费套件重新注入
     ├── tools.py
-    ├── plan.py
     ├── a2a.py
     ├── ddl.py
     ├── error.py
-    ├── dingtalk.py
     ├── task_center.py
     ├── artifact.py
     ├── engine_lifecycle.py
@@ -42,10 +40,9 @@ aeval/cases/
 | 类别 | 用例数 | 类别 | 用例数 |
 |---|---|---|---|
 | health | 3 | error | 9 |
-| chat | 10 | dingtalk | 5 |
-| session | 8 | task_center | 12 |
-| tools | 6 | artifact | 5 |
-| plan | 15 | engine_lifecycle | 8 |
+| chat | 10 | task_center | 12 |
+| session | 8 | artifact | 5 |
+| tools | 6 | engine_lifecycle | 8 |
 | a2a | 8 | tool_audit | 11 |
 | ddl | 15 | report | 8 |
 

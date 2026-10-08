@@ -1,10 +1,11 @@
 """Offline validation of the sbench-pilot suite (service benchmark).
 
 Everything checkable without a deployed engine: suite/job composition
-with the full 123-task dataset registered via ``datasets/local.yaml``,
+with the full 103-task dataset registered via ``datasets/local.yaml``,
 the outcome-only verdict contract, the per-category generated execution
 scripts (compile + case dispatch + reward semantics), and the inventory
-counts against the source plan (14 service categories, 123 cases).
+counts against the source plan (12 service categories, 103 cases —
+dingtalk/plan retired in 0.2.0).
 """
 
 from __future__ import annotations
@@ -20,17 +21,15 @@ from aeval.suite_loader.loader import load_suite
 SUITE = Path(__file__).parents[2] / "suites" / "sbench-pilot"
 REPO = Path(__file__).parents[2]
 
-# 源方案《Benchmark 测评指标设计方案》§2 的 14 个服务类用例数。
+# 用例库现役服务类（12 类共 103 例；钉钉集成/Plan 编排 0.2.0 退役）。
 EXPECTED_COUNTS = {
     "health": 3,
     "chat": 10,
     "session": 8,
     "tools": 6,
-    "plan": 15,
     "a2a": 8,
     "ddl": 15,
     "error": 9,
-    "dingtalk": 5,
     "task_center": 12,
     "artifact": 5,
     "engine_lifecycle": 8,
@@ -65,15 +64,19 @@ def test_suite_identity_and_outcome_only_contract(suite):
     ]
 
 
-def test_job_composes_with_all_123_tasks(job):
-    assert len(job.tasks) == 123
+def test_job_composes_with_all_103_tasks(job):
+    assert len(job.tasks) == 103
     assert job.n_attempts == 1
 
 
 def test_task_tree_matches_the_source_inventory():
     tasks = SUITE / "tasks"
     names = sorted(p.name for p in tasks.iterdir() if (p / "task.toml").is_file())
-    assert len(names) == 123
+    assert len(names) == 103
+    # 退役类别的任务不得残留（0.2.0 移出钉钉集成/Plan 编排）。
+    assert not any(
+        n.startswith(("dingtalk.", "plan.")) for n in names
+    )
     per_category: dict[str, int] = {}
     for name in names:
         category, _, case = name.partition(".")

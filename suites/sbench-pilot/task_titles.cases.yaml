@@ -38,11 +38,6 @@ ddl.time_sanity: 时间合理性
 ddl.tool_calls_data: tool_calls 表数据
 ddl.usage_accumulation: 用量累加一致性
 ddl.usage_stats_data: usage_stats 表数据
-dingtalk.error_handling: 错误处理
-dingtalk.message_send_dryrun: 消息发送干运行
-dingtalk.tool_registry: 工具注册
-dingtalk.worksheet_read: 工作表读取
-dingtalk.worksheet_write: 工作表写入
 engine_lifecycle.dedup_202: 去重(202)
 engine_lifecycle.failure_retry_fields: 失败重试字段
 engine_lifecycle.heartbeat_timeout: 心跳超时
@@ -63,21 +58,6 @@ error.unknown_endpoint: 未知端点
 health.engine_ready: 引擎就绪
 health.sam_memory_diagnosis: SAM 记忆诊断
 health.service_alive: 服务存活
-plan.approve: 审批
-plan.cancel: 取消
-plan.concurrent_create: 并发创建
-plan.create: 创建 Plan
-plan.get: 查询 Plan
-plan.invalid_transition: 非法流转
-plan.list: 列表
-plan.reject: 拒绝
-plan.status_flow: 状态流转
-plan.step_approval: APPROVAL 步骤
-plan.step_auto: AUTO 步骤
-plan.step_dependencies: 步骤依赖
-plan.step_manual: MANUAL 步骤
-plan.update: 更新
-plan.zombie_recovery: 僵尸恢复
 report.auto_generate: 自动生成
 report.download: 下载
 report.hmac_auth: HMAC 鉴权

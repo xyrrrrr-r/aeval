@@ -1,5 +1,8 @@
 schema_version: 2
 id: sbench-pilot
+# 0.2.0（2026-10-08）：按需求移出钉钉集成（dingtalk）与 Plan 编排
+# （plan）两个模块——用例库删除对应 checker，本套件 cases.yaml 不
+# 再声明，任务集 14 类 123 例 → 12 类 103 例。
 # 0.1.0（2026-10-05）：服务基准试点套件 —— 源方案《Benchmark 测评指
 # 标设计方案》§2 的 16 类 148 用例中，14 个服务类共 123 例的框架迁
 # 移。判分层只有 outcome 一层（② 道）：每个用例的执行脚本（按分类
@@ -13,7 +16,7 @@ id: sbench-pilot
 # id 即源方案的 <category>.<case> 点分命名）。引擎 API 形态是按源
 # 方案描述约定的合理形态（见库 README），对齐真实引擎时改 checker
 # 重新注入即可。
-version: 0.1.0
+version: 0.2.0
 extends: _base/harbor.base.yaml
 harbor:
   job: jobs/sbench-smoke.yaml

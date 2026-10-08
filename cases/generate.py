@@ -33,19 +33,18 @@ import yaml
 LIBRARY = Path(__file__).resolve().parent
 CHECKERS = LIBRARY / "checkers"
 
-# 源方案《Benchmark 测评指标设计方案》§2 的服务类别用例数（14 类共
-# 123 例；intelligence 11 例与 memory 14 例是会话契约用例，锚定在
-# 消费套件的判分器里，不属于本库）。
+# 源方案《Benchmark 测评指标设计方案》§2 的服务类别用例数（12 类共
+# 103 例；intelligence 11 例与 memory 14 例是会话契约用例，锚定在
+# 消费套件的判分器里，不属于本库。钉钉集成与 Plan 编排两类已按
+# 0.2.0 需求移出评测范围，checker 一并删除）。
 EXPECTED_COUNTS = {
     "health": 3,
     "chat": 10,
     "session": 8,
     "tools": 6,
-    "plan": 15,
     "a2a": 8,
     "ddl": 15,
     "error": 9,
-    "dingtalk": 5,
     "task_center": 12,
     "artifact": 5,
     "engine_lifecycle": 8,
@@ -222,11 +221,9 @@ _CATEGORY_LINES = {
     "chat": "核心对话：流式/非流式、空消息、超长输入、特殊字符、SSE 事件格式",
     "session": "会话管理：自动创建、多轮复用、并发隔离、跨租户隔离、10 轮上下文保持",
     "tools": "工具系统：工具注册列表、get_current_time、web_fetch、read_skill、sub_agent、并发安全",
-    "plan": "Plan 编排：创建/状态流转/审批/拒绝/取消/僵尸恢复、Step 三种类型全覆盖",
     "a2a": "A2A 协议：send/get/cancel task、鉴权、错误码、重复 task_id 处理",
     "ddl": "数据持久化：9 张表数据正确性、字段类型、时间合理性、消息顺序、用量累加一致性、双写检测",
     "error": "异常处理：401/400 错误码、HMAC 签名校验、重放攻击拒绝、超大 body 防 OOM",
-    "dingtalk": "钉钉集成：工具注册、工作表读写、消息发送（干运行）、错误处理",
     "task_center": "任务中心：定时/一次性/即时任务创建、HMAC 执行、查询/取消/禁用/启用/删除全生命周期",
     "artifact": "产出物：API 可达、字段完整性、env 正确性",
     "engine_lifecycle": "引擎生命周期：task_execute 接收、去重(202)、心跳精确更新、任务完成、状态机流转、失败重试字段",
@@ -244,8 +241,8 @@ _CATEGORY_BLOCKS = {
 }
 _CATEGORY_BLOCK_OF = {
     "health": "basic", "tools": "basic", "engine_lifecycle": "basic",
-    "chat": "conv", "session": "conv", "dingtalk": "conv",
-    "plan": "orch", "a2a": "orch", "task_center": "orch",
+    "chat": "conv", "session": "conv",
+    "a2a": "orch", "task_center": "orch",
     "ddl": "data", "artifact": "data", "report": "data",
     "error": "redline", "tool_audit": "redline",
 }
@@ -309,11 +306,16 @@ def _load_manifest(suite_dir: Path):
     return categories, overrides
 
 
+_RETIRED_CATEGORIES = {"plan", "dingtalk"}
+
+
 def _is_library_owned(name: str) -> bool:
     """任务目录名是否归本库所有：``<库类别>.<case>`` 形态。反选类别后
     的残留同样归库所有（要清理/报告），套件自有任务（无点前缀或前缀
-    不是库类别，如 hello-world、memory.*）永不触碰。"""
-    return any(name.startswith(category + ".") for category in EXPECTED_COUNTS)
+    不是库类别，如 hello-world、memory.*）永不触碰。退役类别（已从
+    库中删除的 checker）也归库所有——否则其残留目录会逃过清理。"""
+    prefixes = set(EXPECTED_COUNTS) | _RETIRED_CATEGORIES
+    return any(name.startswith(category + ".") for category in prefixes)
 
 
 def _owned_task_dirs(tasks_root: Path):
