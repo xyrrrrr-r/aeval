@@ -3,7 +3,7 @@
 **确定性、证据可密封的 agent 轨迹评测框架。**
 
 Deterministic, evidence-sealed agent trajectory evaluation built on Harbor.
-（experimental · v0.1.1 · Apache-2.0）
+（experimental · v0.1.2 · Apache-2.0）
 
 [![判分链路](docs/images/architecture.png)](https://gitcode.com/open_kunpeng_agentic_infra/aeval/blob/main/docs/diagrams/eval-chain.html)
 
@@ -76,10 +76,10 @@ demo 对四个 run 各产出一份（`out/dashboard-*.html`）：
 
 | 面板 | run（套件 · 契约） | 内容 |
 |---|---|---|
-| `dashboard-aeval-intel.html` | aeval-intel 0.3.0 · intel | **旗舰**：23 任务 × 3 试 = 69 判定（pass@3 0.9998 · pass^3 0.7952 · 红线告警）；demo 跑完自动打开的就是它 |
-| `dashboard-sbench-offline.html` | sbench-pilot 0.2.0 · offline | 服务自查 89 例全量（outcome-only，pass@1 0.7753） |
+| `dashboard-aeval-intel.html` | aeval-intel 0.4.0 · intel | **旗舰**：23 任务 × 3 试 = 69 判定（pass@3 0.9998 · pass^3 0.7952 · 红线告警）；demo 跑完自动打开的就是它 |
+| `dashboard-sbench-offline.html` | sbench-pilot 0.6.0 · offline | 服务自查 89 例全量（outcome-only，pass@1 0.7753） |
 | `dashboard-tbench-intel.html` | tbench-intel 0.1.0 · intel | terminal-bench 扩展：outcome 之上叠会话质量 12 维 + 阈值折叠 + veto |
-| `dashboard-tbench-offline.html` | tbench-pilot 0.2.0 · offline | terminal-bench 基线：outcome 层 + 标准轨迹层九项指标 |
+| `dashboard-tbench-offline.html` | tbench-pilot 0.4.0 · offline | terminal-bench 基线：outcome 层 + 标准轨迹层九项指标 |
 
 两种契约的差别在判分层：**offline** 到 outcome 层为止（± 标准轨迹指标），**intel**
 再叠会话质量 12 维、阈值折叠与安全 veto。同一批 tbench 任务的两个 run（表内后两行）
@@ -224,7 +224,7 @@ aeval check --suite <suite> --agent my-agent
   不依赖上述环境，任何机器可复现。
   ⚠️ 真机验证是在**我们自己的**拓扑上做的（自托管 e2b 集群 + 内网宿主机），
   换环境需要按你自己的网络与凭据重新验证。
-- 版本号 0.1.1，接口可能变化；`harbor`/`e2b` 依赖有精确锁定（原因见 [pyproject.toml](https://gitcode.com/open_kunpeng_agentic_infra/aeval/blob/main/pyproject.toml) 注释）。
+- 版本号 0.1.2，接口可能变化；`harbor`/`e2b` 依赖有精确锁定（原因见 [pyproject.toml](https://gitcode.com/open_kunpeng_agentic_infra/aeval/blob/main/pyproject.toml) 注释）。
 
 ## 仓库结构
 

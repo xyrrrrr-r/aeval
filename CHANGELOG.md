@@ -11,6 +11,8 @@ schema、CLI 参数、存储格式），每次都会在下方 `Changed`/`Removed
 
 ## [Unreleased]
 
+## [0.1.2] - 2026-10-08
+
 ### Changed
 
 - **`README.md` 的链接改为绝对 URL**：原先 13 处相对链接（指南、图示、`CHANGELOG`、
@@ -37,6 +39,19 @@ schema、CLI 参数、存储格式），每次都会在下方 `Changed`/`Removed
 
 ### Added
 
+- **上下文窗口随密封证据自携带**：provider 声明的窗口经官方 `request/context`
+  事件写入会话并密封进证据（控制面 `upstream.contextWindow` 可选正整数，
+  `resolveModel` 回显 `context.contextWindow`）；ATIF mapper 将其抬进 agent 块的
+  中立键 `contextWindow`（不绑 agent 名）。`aeval trajectory` 面板优先采用调用方
+  `--context-window` 声明，否则回退证据自携带窗口，自动换算上下文压力占用率；
+  两者不一致或缺失时如实标注、不臆造。
+- **轨迹面板：五轨联动执行视图 + 批量模式**。面板重构为执行、工具、Token、
+  输入 Token、上下文压力五轨共享横轴（纵向轨道只作对比、不表示并发），试次按
+  各自起点的相对执行时间对齐，虚线轨道为记忆基底（fork base）；点击轨道标记
+  同步高亮同一步，右侧详情检查器展示消息、工具观测与 turn 判分理由；高密度
+  轨迹按密度分桶下钻。改为宽屏自适应（去掉 900px 硬底与横向滚动）。
+  `aeval trajectory --out <dir>` 一次为 run 下每个 task 各写一份自包含面板
+  （`<dir>/<task>.html`）。
 - **对外发布面的"黑话回流"守卫**：新增
   [`tests/unit/test_public_surface.py`](https://gitcode.com/open_kunpeng_agentic_infra/aeval/blob/main/tests/unit/test_public_surface.py)，
   扫描发布面并禁止内部词汇回流——内部阶段编号、散落在正文里的裸优先级记号、内部机器名、
@@ -59,6 +74,12 @@ schema、CLI 参数、存储格式），每次都会在下方 `Changed`/`Removed
 
 ### Fixed
 
+- **README/demo 的套件版本与用例数对齐当前套件**：面板表与演示 docstring 的
+  版本标注更新为 aeval-intel 0.4.0、tbench-pilot 0.4.0、sbench-pilot 0.6.0；
+  memory 类用例数 14 → 13（6 基础 fork 召回 + 7 安全红线，与
+  `task_categories.yaml` 的 `redline_tasks` 一致）；演示命令示例的 store 路径
+  修正为真实产物目录（`out/<run 目录名>/store.sqlite3`，`run-` 前缀属于
+  run id 而非目录名）。
 - **README 版本号与实际不符**：README 写 `v0.1.0`，而发行版为 `0.1.1`。
 - **README 套件表任务数过期**：`sbench-pilot` 标注"123 任务全量"，实际为
   12 类 89 例（0.5.0 起）。README 的 `0.1.0` 版本号与套件数已同步。
@@ -132,6 +153,7 @@ schema、CLI 参数、存储格式），每次都会在下方 `Changed`/`Removed
 - `e2b` 依赖锁定 `>=2.25.0,<2.51.0`：自托管 e2b 集群仅实现 v1
   sandbox API（详见 `pyproject.toml` 内注释）。
 
-[Unreleased]: https://gitcode.com/open_kunpeng_agentic_infra/aeval/compare/v0.1.1...HEAD
+[Unreleased]: https://gitcode.com/open_kunpeng_agentic_infra/aeval/compare/v0.1.2...HEAD
+[0.1.2]: https://gitcode.com/open_kunpeng_agentic_infra/aeval/compare/v0.1.1...v0.1.2
 [0.1.1]: https://gitcode.com/open_kunpeng_agentic_infra/aeval/compare/v0.1.0...v0.1.1
 [0.1.0]: https://gitcode.com/open_kunpeng_agentic_infra/aeval/releases/tag/v0.1.0

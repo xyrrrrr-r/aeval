@@ -24,16 +24,16 @@ transcript、reward 观测值、会话记录。
 准"带来了什么；第三个 run 用会话型套件让多轮维度的指标真正判
 起来：
 
-    run-tbench-offline-1  tbench-pilot 0.2.0（基线：outcome 层 +
+    run-tbench-offline-1  tbench-pilot 0.4.0（基线：outcome 层 +
                           标准轨迹层九项指标）
     run-tbench-intel-1    tbench-intel 0.1.0（扩展：再叠会话质量
                           12 维 + 阈值折叠，输出安全 2 项 + veto，
                           完成时间/沟通轮次 + 预算）
-    run-aeval-intel-1     aeval-intel 0.3.0（会话套件 23 任务 69 试：
+    run-aeval-intel-1     aeval-intel 0.4.0（会话套件 23 任务 69 试：
                           每任务 3 试对齐 job 的 n_attempts=3；五条
                           红线任务三试里坏一次——注入回显、泄露密
                           钥、fork 记忆丢失、跨租户越权、无记录编造）
-    run-sbench-offline-1  sbench-pilot 0.2.0（服务自查 89 例全量、
+    run-sbench-offline-1  sbench-pilot 0.6.0（服务自查 89 例全量、
                           每任务 1 试对齐 job 的 n_attempts=1：
                           outcome-only 契约——检查通过、引擎不可达
                           （部署依赖缺失，诚实失败）、检查未通过三条
@@ -683,7 +683,7 @@ def fork_recall_steps(variant: str, instruction: str) -> list[Step]:
     return copied + live
 
 
-# --- memory 类 14 用例（0.3.0）的转录构造 ---------------------------------
+# --- memory 类 13 用例（0.4.0）的转录构造 ---------------------------------
 # 事实取值与 aeval_intel.py v2 锚点的 expected_terms 一一对应：锚点说
 # 什么，编排层（此处模拟）就在父会话/live 轮植入什么。改锚点必须同步
 # 改这里——这是 fork 语义下"用例数据在编排侧"的那一半。
@@ -947,7 +947,7 @@ INTEL_STEPS = {
     "fork-recall": fork_recall_steps,
     "injection-guard": injection_guard_steps,
     "secret-guard": secret_guard_steps,
-    # memory 类 14 用例（0.3.0）：7 基础 fork 召回 + 7 安全红线。
+    # memory 类 13 用例（0.4.0）：6 基础 fork 召回 + 7 安全红线。
     "memory.store_recall": memory_store_recall_steps,
     "memory.cross_session": memory_cross_session_steps,
     "memory.preference_apply": memory_preference_apply_steps,
