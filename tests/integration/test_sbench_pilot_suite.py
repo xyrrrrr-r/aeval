@@ -1,11 +1,11 @@
 """Offline validation of the sbench-pilot suite (service benchmark).
 
 Everything checkable without a deployed engine: suite/job composition
-with the full 103-task dataset registered via ``datasets/local.yaml``,
+with the full 96-task dataset registered via ``datasets/local.yaml``,
 the outcome-only verdict contract, the per-category generated execution
 scripts (compile + case dispatch + reward semantics), and the inventory
-counts against the source plan (12 service categories, 103 cases —
-dingtalk/plan retired in 0.2.0).
+counts against the source plan (12 service categories, 96 cases —
+dingtalk/plan retired in 0.2.0; ddl narrowed in 0.3.0).
 """
 
 from __future__ import annotations
@@ -21,14 +21,15 @@ from aeval.suite_loader.loader import load_suite
 SUITE = Path(__file__).parents[2] / "suites" / "sbench-pilot"
 REPO = Path(__file__).parents[2]
 
-# 用例库现役服务类（12 类共 103 例；钉钉集成/Plan 编排 0.2.0 退役）。
+# 用例库现役服务类（12 类共 96 例；钉钉集成/Plan 编排 0.2.0 退役，
+# ddl 类 0.3.0 收窄为 8 例）。
 EXPECTED_COUNTS = {
     "health": 3,
     "chat": 10,
     "session": 8,
     "tools": 6,
     "a2a": 8,
-    "ddl": 15,
+    "ddl": 8,
     "error": 9,
     "task_center": 12,
     "artifact": 5,
@@ -64,18 +65,27 @@ def test_suite_identity_and_outcome_only_contract(suite):
     ]
 
 
-def test_job_composes_with_all_103_tasks(job):
-    assert len(job.tasks) == 103
+def test_job_composes_with_all_96_tasks(job):
+    assert len(job.tasks) == 96
     assert job.n_attempts == 1
 
 
 def test_task_tree_matches_the_source_inventory():
     tasks = SUITE / "tasks"
     names = sorted(p.name for p in tasks.iterdir() if (p / "task.toml").is_file())
-    assert len(names) == 103
-    # 退役类别的任务不得残留（0.2.0 移出钉钉集成/Plan 编排）。
+    assert len(names) == 96
+    # 退役/收窄的任务不得残留（0.2.0 移出钉钉集成/Plan 编排；0.3.0
+    # 收窄 ddl：五张表 + 消息顺序 + 双写检测）。
     assert not any(
         n.startswith(("dingtalk.", "plan.")) for n in names
+    )
+    assert not any(
+        n in {
+            "ddl.messages_data", "ddl.plans_data", "ddl.plan_steps_data",
+            "ddl.tasks_data", "ddl.memory_records_data",
+            "ddl.message_order", "ddl.double_write",
+        }
+        for n in names
     )
     per_category: dict[str, int] = {}
     for name in names:

@@ -1,0 +1,15 @@
+# 维度模型（评测平台设计 §4.2）：阈值 / 权重 / 大块 / 红线。
+# terminal-bench 任务链路长（agent 会话 → 命令 → 断言），错误随步数
+# 累积，阈值放 0.6；单类别单大块，雷达退化为得分条形列表。
+
+categories:
+  tbench:
+    name: terminal-bench 任务
+    block: core
+    weight: 1.0
+    threshold: 0.6
+
+blocks:
+  core: 任务执行
+
+default: tbench

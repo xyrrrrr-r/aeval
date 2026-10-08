@@ -24,16 +24,9 @@ chat.sse_event_format: SSE 事件格式
 chat.streaming: 流式对话
 chat.unicode_content: Unicode 内容
 ddl.artifacts_data: artifacts 表数据
-ddl.double_write: 双写检测
 ddl.field_types: 字段类型
 ddl.id_uniqueness: 主键唯一性
-ddl.memory_records_data: memory_records 表数据
-ddl.message_order: 消息顺序
-ddl.messages_data: messages 表数据
-ddl.plan_steps_data: plan_steps 表数据
-ddl.plans_data: plans 表数据
 ddl.sessions_data: sessions 表数据
-ddl.tasks_data: tasks 表数据
 ddl.time_sanity: 时间合理性
 ddl.tool_calls_data: tool_calls 表数据
 ddl.usage_accumulation: 用量累加一致性

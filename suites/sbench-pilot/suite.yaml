@@ -1,5 +1,10 @@
 schema_version: 2
 id: sbench-pilot
+# 0.3.0（2026-10-08）：收窄 ddl 类——messages/plans/plan_steps/
+# tasks/memory_records 五张表的数据用例与消息顺序（ddl.message_
+# order）、双写检测（ddl.double_write）不再单独成例，保留核心表
+# （sessions/artifacts/tool_calls/usage_stats）与字段类型/时间合理
+# 性/用量累加/主键唯一性；任务集 12 类 103 例 → 96 例。
 # 0.2.0（2026-10-08）：按需求移出钉钉集成（dingtalk）与 Plan 编排
 # （plan）两个模块——用例库删除对应 checker，本套件 cases.yaml 不
 # 再声明，任务集 14 类 123 例 → 12 类 103 例。
@@ -16,7 +21,7 @@ id: sbench-pilot
 # id 即源方案的 <category>.<case> 点分命名）。引擎 API 形态是按源
 # 方案描述约定的合理形态（见库 README），对齐真实引擎时改 checker
 # 重新注入即可。
-version: 0.2.0
+version: 0.3.0
 extends: _base/harbor.base.yaml
 harbor:
   job: jobs/sbench-smoke.yaml

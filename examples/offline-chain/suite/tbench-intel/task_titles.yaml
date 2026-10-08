@@ -1,0 +1,6 @@
+# terminal-bench 会话判分套件任务的中文显示名（报告渲染用）。
+# 任务与 tbench-pilot 相同（terminal-bench 原始任务集，英文指令），
+# 标题是描述性译名；坐标、判分、存储仍用原 task_id。
+hello-world: 你好世界·创建 hello.txt
+sqlite-db-truncate: SQLite·损坏库恢复
+openssl-selfsigned-cert: OpenSSL·自签证书

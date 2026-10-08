@@ -71,15 +71,20 @@ def hmac_headers(body_text):
     ).hexdigest()
     return {"X-Timestamp": ts, "X-Signature": digest}
 
-# ddl 类 15 用例：数据持久化——9 张表数据正确性、字段类型、时间合理
-# 性、消息顺序、用量累加一致性、双写检测。
+# ddl 类 8 用例：数据持久化——核心表数据正确性（sessions/artifacts/
+# tool_calls/usage_stats）、字段类型、时间合理性、用量累加一致性、
+# 主键唯一性。0.3.0 需求收窄：messages/plans/plan_steps/tasks/
+# memory_records 五张表与消息顺序、双写检测不再单独成例。
 
-# 源方案说"9 张表"未点名；按被描述的系统域取合理清单，对齐真实引擎
-# 时改此表并重新生成即可。
+# 引擎持久化的 9 张表（源方案"9 张表"未点名，按被描述的系统域取合
+# 理清单）：schema/时间/主键等横切检查按引擎实际形态覆盖全表；只有
+# CASE_TABLES 里的表单独成例。对齐真实引擎时改此表并重新生成即可。
 TABLES = (
     "sessions", "messages", "plans", "plan_steps", "tasks",
     "artifacts", "tool_calls", "usage_stats", "memory_records",
 )
+# 单独成例（ddl.<table>_data）的表。
+CASE_TABLES = ("sessions", "artifacts", "tool_calls", "usage_stats")
 
 
 def _table_rows(table):
@@ -126,7 +131,7 @@ def _time_sanity():
     for table in ("sessions", "messages"):
         rows, errors = _table_rows(table)
         if errors:
-            continue  # 表不可读由 9 张表的用例负责报
+            continue  # 表不可读由 ddl.<table>_data 用例负责报
         for row in rows[:20]:
             if not isinstance(row, dict):
                 continue
@@ -142,33 +147,6 @@ def _time_sanity():
             if not (floor <= moment <= ceiling):
                 return False, ["%s timestamp out of sane range: %r" % (table, stamp)]
     return True, ["sampled timestamps parse as ISO and sit in a sane window"]
-
-
-def _message_order():
-    rows, errors = _table_rows("messages")
-    if errors:
-        return False, errors
-    by_session = {}
-    for row in rows[:100]:
-        if not isinstance(row, dict):
-            continue
-        key = str(row.get("session_id"))
-        by_session.setdefault(key, []).append(row)
-    checked = 0
-    for key, bucket in by_session.items():
-        seqs = [r.get("seq") or r.get("id") for r in bucket]
-        if any(s is None for s in seqs):
-            continue
-        try:
-            numbers = [int(s) for s in seqs]
-        except (TypeError, ValueError):
-            continue
-        if numbers != sorted(numbers):
-            return False, ["session %s message order broken: %r" % (key, numbers)]
-        checked += 1
-    if not checked and rows:
-        return False, ["messages carry no usable ordering key to verify"]
-    return True, ["message order monotonic in %d sampled sessions" % checked]
 
 
 def _usage_accumulation():
@@ -217,25 +195,8 @@ def _id_uniqueness():
     return True, ["sampled table ids are unique (primary-key integrity)"]
 
 
-def _double_write():
-    first, errors = _table_rows("sessions")
-    if errors:
-        return False, errors
-    import hashlib
-    digest_a = hashlib.sha256(
-        json.dumps(first, sort_keys=True, default=str).encode()).hexdigest()
-    second, errors = _table_rows("sessions")
-    if errors:
-        return False, errors
-    digest_b = hashlib.sha256(
-        json.dumps(second, sort_keys=True, default=str).encode()).hexdigest()
-    if digest_a != digest_b and first != second:
-        return False, ["two reads of sessions disagree — double-write divergence"]
-    return True, ["two consecutive reads agree (no double-write divergence)"]
-
-
 CASES = {}
-for _table in TABLES:
+for _table in CASE_TABLES:
     CASES["ddl.%s_data" % _table] = (
         "%s 表数据" % _table,
         "GET /ddl/%s 返回可解析的行数据" % _table,
@@ -244,14 +205,10 @@ CASES["ddl.field_types"] = (
     "字段类型", "schema 端点暴露各表列类型", _field_types)
 CASES["ddl.time_sanity"] = (
     "时间合理性", "时间戳可解析且落在合理窗口", _time_sanity)
-CASES["ddl.message_order"] = (
-    "消息顺序", "会话内消息按序号单调排列", _message_order)
 CASES["ddl.usage_accumulation"] = (
     "用量累加一致性", "用量累计与逐条消息之和一致", _usage_accumulation)
 CASES["ddl.id_uniqueness"] = (
     "主键唯一性", "抽样表行的 id 无重复", _id_uniqueness)
-CASES["ddl.double_write"] = (
-    "双写检测", "两次读取一致，无双写分歧", _double_write)
 
 
 def check(case_id):

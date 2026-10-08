@@ -8,8 +8,10 @@
 #
 # 任务树 tasks/<category>.<case>/ 是注入产物：改用例改库里的
 # checkers/<category>.py 后重新注入；反选类别后残留的任务会被清掉。
-# 本套件是全类别消费者（12 类 = 103 例；钉钉集成与 Plan 编排两类
-# 已按 0.2.0 需求移出评测范围，见 suite.yaml 变更记录）。
+# 本套件是全类别消费者（12 类 = 96 例；钉钉集成与 Plan 编排两类
+# 已按 0.2.0 需求移出评测范围，0.3.0 又收窄 ddl 类——messages/
+# plans/plan_steps/tasks/memory_records 五张表与消息顺序、双写检测
+# 不再单独成例，见 suite.yaml 变更记录）。
 categories:
   - health
   - chat
