@@ -57,10 +57,10 @@ classifiers = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/xxxxxyr/aeval"
-Repository = "https://github.com/xxxxxyr/aeval"
-Issues = "https://github.com/xxxxxyr/aeval/issues"
-Changelog = "https://github.com/xxxxxyr/aeval/blob/main/CHANGELOG.md"
+Homepage = "https://github.com/xyrrrrr-r/aeval"
+Repository = "https://github.com/xyrrrrr-r/aeval"
+Issues = "https://github.com/xyrrrrr-r/aeval/issues"
+Changelog = "https://github.com/xyrrrrr-r/aeval/blob/main/CHANGELOG.md"
 
 [project.scripts]
 aeval = "aeval.cli:app"

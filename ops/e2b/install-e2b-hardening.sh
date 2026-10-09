@@ -51,7 +51,7 @@ UNITS=(e2b-hardening-boot.service e2b-hardening-sync.service e2b-hardening-sync.
 GIT_MIRROR=${GIT_MIRROR:-/srv/git/aeval.git}
 GIT_BRANCH=${GIT_BRANCH:-eval0923}       # 只影响 B 路径（服务器自主 fetch）的分支名
 SYNC_CONF=${SYNC_CONF:-/etc/e2b-hardening/sync.conf}
-GIT_REMOTE_URL=${GIT_REMOTE_URL:-https://github.com/xxxxxyr/aeval.git}
+GIT_REMOTE_URL=${GIT_REMOTE_URL:-https://github.com/xyrrrrr-r/aeval.git}
 
 drift=()
 say(){ [ "$QUIET" = 1 ] || echo "[e2b-hardening] $*"; }

@@ -5,9 +5,9 @@
 Deterministic, evidence-sealed agent trajectory evaluation built on Harbor.
 （experimental · v0.2.0 · Apache-2.0）
 
-[![判分链路](docs/images/architecture.png)](https://github.com/xxxxxyr/aeval/blob/main/docs/diagrams/eval-chain.html)
+[![判分链路](docs/images/architecture.png)](https://github.com/xyrrrrr-r/aeval/blob/main/docs/diagrams/eval-chain.html)
 
-> 交互版架构图（含引导视图 / 明暗主题 / 导出）：[在 GitHub 打开架构图](https://github.com/xxxxxyr/aeval/blob/main/docs/diagrams/eval-chain.html)
+> 交互版架构图（含引导视图 / 明暗主题 / 导出）：[在 GitHub 打开架构图](https://github.com/xyrrrrr-r/aeval/blob/main/docs/diagrams/eval-chain.html)
 
 aeval 把执行委托给 Harbor（PyPI `harbor[e2b]==0.23.0`），自己专注一件事：**让"分数"可信**。
 每份采集产物逐一 sha256 校验并绑定运行时锁，证据门不通过就整条拒绝（fail loud），密封
@@ -24,7 +24,7 @@ judge_finished / artifact_schema_ok），套件在 `verdict.requirements` 里声
 pip install aeval-harbor    # 发行名 aeval-harbor（PyPI 上 aeval 已被停更包占用）；CLI 与 import 名仍是 aeval
 ```
 
-Python ≥ 3.12 · 变更见 [CHANGELOG](https://github.com/xxxxxyr/aeval/blob/main/CHANGELOG.md) · 语义化版本（0.x 实验期：minor 版本
+Python ≥ 3.12 · 变更见 [CHANGELOG](https://github.com/xyrrrrr-r/aeval/blob/main/CHANGELOG.md) · 语义化版本（0.x 实验期：minor 版本
 可能含破坏性变更，均在 CHANGELOG 显式列出）。想先试试？直接跑下一节的离线演示，
 从源码运行、无需安装。
 
@@ -34,7 +34,7 @@ Python ≥ 3.12 · 变更见 [CHANGELOG](https://github.com/xxxxxyr/aeval/blob/m
 从"采集完成"那一点切入，之后**每一环都是生产代码，没有一处 mock**：
 
 ```bash
-git clone https://github.com/xxxxxyr/aeval.git && cd aeval
+git clone https://github.com/xyrrrrr-r/aeval.git && cd aeval
 uv run python examples/offline-chain/run_offline_chain.py   # 跑完自动在浏览器打开 dashboard
 ```
 
@@ -85,11 +85,11 @@ demo 对四个 run 各产出一份（`out/dashboard-*.html`）：
 再叠会话质量 12 维、阈值折叠与安全 veto。同一批 tbench 任务的两个 run（表内后两行）
 就是一组天然对照。
 
-[![intel 运行面板](docs/images/dashboard-aeval-intel.png)](https://github.com/xxxxxyr/aeval/blob/main/docs/images/dashboard-aeval-intel.png)
+[![intel 运行面板](docs/images/dashboard-aeval-intel.png)](https://github.com/xyrrrrr-r/aeval/blob/main/docs/images/dashboard-aeval-intel.png)
 
 *intel 运行面板（旗舰；demo 自动打开）*
 
-[![offline 运行面板](docs/images/dashboard-sbench-offline.png)](https://github.com/xxxxxyr/aeval/blob/main/docs/images/dashboard-sbench-offline.png)
+[![offline 运行面板](docs/images/dashboard-sbench-offline.png)](https://github.com/xyrrrrr-r/aeval/blob/main/docs/images/dashboard-sbench-offline.png)
 
 *offline 运行面板（sbench 服务自查 89 例，outcome-only）*
 
@@ -121,7 +121,7 @@ aeval trajectory --store examples/offline-chain/out/aeval-intel-1/store.sqlite3 
 demo 用一个代表性任务（fork 记忆基底 + 一个坏试次 + 工具调用）走真实 CLI 产出
 `out/trajectory-memory.tenant_isolation.html`。
 
-[![轨迹面板](docs/images/trajectory-panel.png)](https://github.com/xxxxxyr/aeval/blob/main/docs/images/trajectory-panel.png)
+[![轨迹面板](docs/images/trajectory-panel.png)](https://github.com/xyrrrrr-r/aeval/blob/main/docs/images/trajectory-panel.png)
 
 *任务轨迹面板（五轨联动执行视图 + 详情检查器）*
 
@@ -191,7 +191,7 @@ provenance: { source: authored-internally, license: MIT }
 | `deepagent-hello` / `deepagent-budget` / `e2e-hello` | deepagent 与端到端冒烟 |
 | `_base` | 共享基座（继承源） |
 
-服务类用例来自共享用例库 [`cases/`](https://github.com/xxxxxyr/aeval/blob/main/cases/README.md)：12 个服务类别，套件在自己的
+服务类用例来自共享用例库 [`cases/`](https://github.com/xyrrrrr-r/aeval/blob/main/cases/README.md)：12 个服务类别，套件在自己的
 `cases.yaml` 里声明要注入哪些——用例事实与判分契约解耦。
 
 ## 接入新 agent
@@ -209,9 +209,9 @@ aeval check --suite <suite> --agent my-agent
 
 | 指南 | 回答什么 |
 |---|---|
-| [写一个评测套件](https://github.com/xxxxxyr/aeval/blob/main/docs/guides/writing-a-suite.md) | 套件目录结构、最小 `suite.yaml`、全字段参考、继承与合并规则、哪些事实不许写进套件、校验与运行命令、常见错误 |
-| [接入一个新的 agent](https://github.com/xxxxxyr/aeval/blob/main/docs/guides/adding-an-agent.md) | 两条接入路径（零代码 / 写适配器类）、五步走、声明与实现必须一致、预算声明、模型协议、运行时镜像、三条红线、排错表 |
-| [指标语义与判分规则](https://github.com/xxxxxyr/aeval/blob/main/docs/guides/metric-semantics.md) | 报告里每个状态词和每个数字的确切含义：判分分层、六项前置事实门（未成立即 `cannot_judge`）、全部轨迹指标的公式与阈值、折叠与 veto、pass@k 与 pass^k、怎么读报告 |
+| [写一个评测套件](https://github.com/xyrrrrr-r/aeval/blob/main/docs/guides/writing-a-suite.md) | 套件目录结构、最小 `suite.yaml`、全字段参考、继承与合并规则、哪些事实不许写进套件、校验与运行命令、常见错误 |
+| [接入一个新的 agent](https://github.com/xyrrrrr-r/aeval/blob/main/docs/guides/adding-an-agent.md) | 两条接入路径（零代码 / 写适配器类）、五步走、声明与实现必须一致、预算声明、模型协议、运行时镜像、三条红线、排错表 |
+| [指标语义与判分规则](https://github.com/xyrrrrr-r/aeval/blob/main/docs/guides/metric-semantics.md) | 报告里每个状态词和每个数字的确切含义：判分分层、六项前置事实门（未成立即 `cannot_judge`）、全部轨迹指标的公式与阈值、折叠与 veto、pass@k 与 pass^k、怎么读报告 |
 
 ## 成熟度（诚实说明）
 
@@ -224,7 +224,7 @@ aeval check --suite <suite> --agent my-agent
   不依赖上述环境，任何机器可复现。
   ⚠️ 真机验证是在**我们自己的**拓扑上做的（自托管 e2b 集群 + 内网宿主机），
   换环境需要按你自己的网络与凭据重新验证。
-- 版本号 0.2.0，接口可能变化；`harbor`/`e2b` 依赖有精确锁定（原因见 [pyproject.toml](https://github.com/xxxxxyr/aeval/blob/main/pyproject.toml) 注释）。
+- 版本号 0.2.0，接口可能变化；`harbor`/`e2b` 依赖有精确锁定（原因见 [pyproject.toml](https://github.com/xyrrrrr-r/aeval/blob/main/pyproject.toml) 注释）。
 
 ## 仓库结构
 
@@ -275,4 +275,4 @@ uv publish dist/*                    # 需要 PyPI token（如 UV_PUBLISH_TOKEN 
 
 ## License
 
-Apache-2.0，见 [LICENSE](https://github.com/xxxxxyr/aeval/blob/main/LICENSE)。
+Apache-2.0，见 [LICENSE](https://github.com/xyrrrrr-r/aeval/blob/main/LICENSE)。
