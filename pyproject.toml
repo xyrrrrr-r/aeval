@@ -57,10 +57,10 @@ classifiers = [
 ]
 
 [project.urls]
-Homepage = "https://gitcode.com/open_kunpeng_agentic_infra/aeval"
-Repository = "https://gitcode.com/open_kunpeng_agentic_infra/aeval"
-Issues = "https://gitcode.com/open_kunpeng_agentic_infra/aeval/issues"
-Changelog = "https://gitcode.com/open_kunpeng_agentic_infra/aeval/blob/main/CHANGELOG.md"
+Homepage = "https://github.com/xxxxxyr/aeval"
+Repository = "https://github.com/xxxxxyr/aeval"
+Issues = "https://github.com/xxxxxyr/aeval/issues"
+Changelog = "https://github.com/xxxxxyr/aeval/blob/main/CHANGELOG.md"
 
 [project.scripts]
 aeval = "aeval.cli:app"

@@ -11,20 +11,33 @@ schema、CLI 参数、存储格式），每次都会在下方 `Changed`/`Removed
 
 ## [Unreleased]
 
+### Changed
+
+- **仓库迁移至 GitHub**：托管地址由 GitCode 的 `open_kunpeng_agentic_infra/aeval`
+  改为 `github.com/xxxxxyr/aeval`。README、本文件与 `pyproject.toml` 的
+  `Homepage`/`Repository`/`Issues`/`Changelog` 共 29 处 URL 一并改写，
+  `ops/e2b/install-e2b-hardening.sh` 的默认 `GIT_REMOTE_URL` 同步指向新仓库。
+- **公开历史不含内部资料**：迁移时对全部提交做了清洗——开发过程记录（含其归档前
+  使用的旧目录路径）、两份环境验证报告曾放在根目录的副本，以及一次误提交进版本库
+  的浏览器临时配置目录，都从所有提交中移除；内部实验机主机名与绝对本机路径改写为
+  中性占位。因此本仓库的提交 SHA 与 GitCode 上的历史不再对应，从旧历史
+  cherry-pick 会冲突。另需注意：`tests/unit/test_public_surface.py` 的主机名禁词
+  如今拦的是占位词，真名要防得靠你自己的本地钩子或私有 CI 配置。
+
 ## [0.2.0] - 2026-10-08
 
 ### Changed
 
 - **`README.md` 的链接改为绝对 URL**：原先 13 处相对链接（指南、图示、`CHANGELOG`、
   `LICENSE`、`pyproject.toml`、`cases/`）在 PyPI 的项目页上全部指向不存在的路径，
-  现统一指向 `gitcode.com/open_kunpeng_agentic_infra/aeval/blob/main/…`，与
+  现统一指向 `github.com/xxxxxyr/aeval/blob/main/…`，与
   `dsh-eval-control` 的 README 保持一致。注意这些链接指向 `main` 分支，只有改动合入
   `main` 之后才会生效。
 - **对外文档清洗（为社区发布）**：新增三份自足的使用者指南
-  [`docs/guides/writing-a-suite.md`](https://gitcode.com/open_kunpeng_agentic_infra/aeval/blob/main/docs/guides/writing-a-suite.md)、
-  [`docs/guides/adding-an-agent.md`](https://gitcode.com/open_kunpeng_agentic_infra/aeval/blob/main/docs/guides/adding-an-agent.md)、
-  [`docs/guides/metric-semantics.md`](https://gitcode.com/open_kunpeng_agentic_infra/aeval/blob/main/docs/guides/metric-semantics.md) 与索引
-  [`docs/guides/README.md`](https://gitcode.com/open_kunpeng_agentic_infra/aeval/blob/main/docs/guides/README.md)。开发过程记录、阶段台账
+  [`docs/guides/writing-a-suite.md`](https://github.com/xxxxxyr/aeval/blob/main/docs/guides/writing-a-suite.md)、
+  [`docs/guides/adding-an-agent.md`](https://github.com/xxxxxyr/aeval/blob/main/docs/guides/adding-an-agent.md)、
+  [`docs/guides/metric-semantics.md`](https://github.com/xxxxxyr/aeval/blob/main/docs/guides/metric-semantics.md) 与索引
+  [`docs/guides/README.md`](https://github.com/xxxxxyr/aeval/blob/main/docs/guides/README.md)。开发过程记录、阶段台账
   记录、环境验证报告与设计稿移入 `docs/internal/`，并**不再随 sdist 分发**
   （`[tool.hatch.build.targets.sdist] exclude = ["/docs/internal", "/ops/e2b"]`——
   前者是开发过程记录，后者是自托管 e2b 集群的内部运维脚本，两者对使用者都不可读、
@@ -53,7 +66,7 @@ schema、CLI 参数、存储格式），每次都会在下方 `Changed`/`Removed
   `aeval trajectory --out <dir>` 一次为 run 下每个 task 各写一份自包含面板
   （`<dir>/<task>.html`）。
 - **对外发布面的"黑话回流"守卫**：新增
-  [`tests/unit/test_public_surface.py`](https://gitcode.com/open_kunpeng_agentic_infra/aeval/blob/main/tests/unit/test_public_surface.py)，
+  [`tests/unit/test_public_surface.py`](https://github.com/xxxxxyr/aeval/blob/main/tests/unit/test_public_surface.py)，
   扫描发布面并禁止内部词汇回流——内部阶段编号、散落在正文里的裸优先级记号、内部机器名、
   内部资料归档路径、内部文档标题、设计稿的小节记号、缺陷编号与中文内部术语（确切的
   禁用清单写在该测试文件里，因此它本身不随包分发）。作用域直接取自 sdist 的 exclude
@@ -153,7 +166,7 @@ schema、CLI 参数、存储格式），每次都会在下方 `Changed`/`Removed
 - `e2b` 依赖锁定 `>=2.25.0,<2.51.0`：自托管 e2b 集群仅实现 v1
   sandbox API（详见 `pyproject.toml` 内注释）。
 
-[Unreleased]: https://gitcode.com/open_kunpeng_agentic_infra/aeval/compare/v0.2.0...HEAD
-[0.2.0]: https://gitcode.com/open_kunpeng_agentic_infra/aeval/compare/v0.1.1...v0.2.0
-[0.1.1]: https://gitcode.com/open_kunpeng_agentic_infra/aeval/compare/v0.1.0...v0.1.1
-[0.1.0]: https://gitcode.com/open_kunpeng_agentic_infra/aeval/releases/tag/v0.1.0
+[Unreleased]: https://github.com/xxxxxyr/aeval/compare/v0.2.0...HEAD
+[0.2.0]: https://github.com/xxxxxyr/aeval/compare/v0.1.1...v0.2.0
+[0.1.1]: https://github.com/xxxxxyr/aeval/compare/v0.1.0...v0.1.1
+[0.1.0]: https://github.com/xxxxxyr/aeval/releases/tag/v0.1.0
