@@ -247,7 +247,7 @@ examples/offline-chain/  # 30 秒离线演示
 
 ## 相关项目
 
-- **[dsh-eval-control](https://github.com/xxxxxyr/dsh-eval-control)**——DSH 形态的宿主侧控制插件（实验变量注入、
+- **[dsh-eval-control](https://github.com/xyrrrrr-r/dsh-eval-control)**——DSH 形态的宿主侧控制插件（实验变量注入、
   网关租约预算、fork 血统、bundle descriptor）。`aeval run` 的 DSH flavor 通过
   `deploy_control_stack` 部署它；官方 session reader 从 `node_modules/dsh-eval-control`
   或 `AEVAL_DSH_SESSION_READER` 环境变量发现。
