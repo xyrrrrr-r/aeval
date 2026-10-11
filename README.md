@@ -8,7 +8,7 @@
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue)](https://github.com/xyrrrrr-r/aeval/blob/main/LICENSE)
 [![Status](https://img.shields.io/badge/status-experimental-orange)](https://github.com/xyrrrrr-r/aeval/blob/main/CHANGELOG.md)
 
-*v0.2.0 · Apache-2.0 · Python ≥ 3.12 · `pip install aeval-harbor`*
+*v0.3.0 · Apache-2.0 · Python ≥ 3.12 · `pip install aeval-harbor`*
 
 ---
 
