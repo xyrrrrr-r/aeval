@@ -1,4 +1,4 @@
-"""Map the pinned DSH 0.1.7-alpha.1 Session V4 log, not CLI output.
+"""Map the pinned DSH 0.2.0-rc.2 Session V4 log, not CLI output.
 
 ATIF is an append-origin transcript grouped by explicit (turn, step). Surface
 replacement copies are model context, not new executions. The full immutable
@@ -40,8 +40,8 @@ __all__ = [
     "build_canonical_transcript", "validate_canonical_transcript", "derive_stop_reason",
 ]
 
-MAPPER_VERSION = "dsh-official-session-persistence@0.1.7-alpha.1"
-DSH_VERSION = "0.1.7-alpha.1"
+MAPPER_VERSION = "dsh-official-session-persistence@0.2.0-rc.2"
+DSH_VERSION = "0.2.0-rc.2"
 SURFACE_EVENT_TYPES = frozenset({
     "system/message", "developer/message", "user/message", "assistant/message", "tool/result",
 })
@@ -51,9 +51,12 @@ MAPPED_EVENT_TYPES = SURFACE_EVENT_TYPES | frozenset({
     "turn/start", "turn/end", "step/start", "step/end", "tool/call",
     "request/header", "request/context", "session/end-seed", "assistant/attempt",
 })
-# ``KNOWN_SESSION_EVENT_TYPES`` of the pinned 0.1.7-alpha.1 build, dumped from
+# ``KNOWN_SESSION_EVENT_TYPES`` of the pinned 0.2.0-rc.2 build, dumped from
 # @deepseek-ai/dsh-session/lib/types/known-event-types.js. Official readers accept
 # these without an `ignorable` marker; the mapper only preserves them verbatim.
+# Re-dumped when the pin moved 0.1.7-alpha.1 -> 0.2.0-rc.2: the 59-member set is
+# byte-identical across the two releases (no type added, none removed), so the
+# vocabulary freeze needed no edit — only this provenance note.
 OFFICIAL_EVENT_TYPES = frozenset({
     "agent-preset/selected", "agent/inbox/spliced", "approval/asked", "approval/decided",
     "approval/policy", "assistant/attempt", "assistant/message", "command/done", "command/run",

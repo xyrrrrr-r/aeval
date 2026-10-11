@@ -25,7 +25,7 @@ from aeval.hooks.broker_lifecycle import (
     stop_trial_broker,
     trial_control_paths,
 )
-from aeval.hooks.context import TrialState
+from aeval.hooks.context import LifecycleError, TrialState
 from aeval.hooks.plugin import AevalPlugin, HookRegistrationError
 from aeval.contracts import control_config_digest
 
@@ -183,6 +183,35 @@ def test_parse_spec_resolves_control_root(tmp_path, monkeypatch):
     monkeypatch.setenv(BROKER_SPEC_ENV, str(path))
     spec = parse_broker_spec()
     assert spec.broker_js.name == "broker_main.js"
+    # One input for one package: the root already says where the built control
+    # tree lives, so controlDist is derived rather than demanded a second time.
+    assert spec.control_dist == CONTROL_ROOT / "dist"
+
+
+def test_an_explicit_control_dist_still_wins(tmp_path, monkeypatch):
+    """The derived default must not shadow an operator's explicit choice."""
+    other = tmp_path / "elsewhere" / "dist"
+    other.mkdir(parents=True)
+    data = json.loads(_spec_json(tmp_path, port=4713).read_text(encoding="utf-8"))
+    data["controlRoot"] = str(CONTROL_ROOT)
+    data["controlDist"] = str(other)
+    path = tmp_path / "spec.json"
+    path.write_text(json.dumps(data), encoding="utf-8")
+    monkeypatch.setenv(BROKER_SPEC_ENV, str(path))
+    assert parse_broker_spec().control_dist == other
+
+
+def test_a_control_root_without_a_built_dist_derives_nothing(tmp_path, monkeypatch):
+    """An unbuilt root stays None instead of inventing a directory: the
+    flavor's refusal (which can say what to do) is the error the operator
+    should see, not a path that does not exist."""
+    data = json.loads(_spec_json(tmp_path, port=4714).read_text(encoding="utf-8"))
+    data["brokerJs"] = str(_broker_js())
+    data["controlRoot"] = str(tmp_path / "unbuilt")
+    path = tmp_path / "spec.json"
+    path.write_text(json.dumps(data), encoding="utf-8")
+    monkeypatch.setenv(BROKER_SPEC_ENV, str(path))
+    assert parse_broker_spec().control_dist is None
 
 
 # --- lifecycle against the real bin ----------------------------------
@@ -388,6 +417,14 @@ async def test_plugin_broker_startup_failure_taints_the_trial(
         assert any(
             "model broker startup failed" in r for r in state.infra_invalid_reasons
         ), state.infra_invalid_reasons
+        # ...and the operator sees THAT, not the missing binding it produced.
+        # The symptom lands in the sandbox (DSH runs unmetered, dies on a
+        # missing credential) and names nothing an operator could act on.
+        with pytest.raises(LifecycleError) as caught:
+            # the descriptor is never read: the binding check comes first
+            context.verify_descriptor(str(start.trial_id), descriptor=None)
+        assert "no trusted control binding" in str(caught.value)
+        assert "model broker startup failed" in str(caught.value)
     finally:
         occupied.close()
 

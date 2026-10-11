@@ -213,7 +213,13 @@ class EvaluationContext:
     def verify_descriptor(self, trial_id: str, descriptor: BundleDescriptor) -> None:
         state = self.trials[trial_id]
         if state.binding is None:
-            raise LifecycleError("trial has no trusted control binding")
+            # The binding is created at AGENT_START, and exactly one thing
+            # skips that: an infra failure recorded at trial start — in
+            # practice the model broker failing to come up. Reporting only
+            # "no binding" sends the operator looking at the sandbox (where
+            # the symptom lands: DSH runs unmetered and dies on a missing
+            # credential) instead of at the cause, so the cause is carried here.
+            raise LifecycleError(self.no_binding_reason(state))
         try:
             state.binding.verify_descriptor(descriptor)
         except ValueError as exc:
@@ -230,6 +236,15 @@ class EvaluationContext:
                 ).verify_descriptor(descriptor)
             except ValueError as strict:
                 raise LifecycleError(str(strict)) from strict
+
+    def no_binding_reason(self, state: TrialState) -> str:
+        """Why this trial never got a binding — with the cause, not the symptom."""
+        base = "trial has no trusted control binding"
+        reasons = list(state.infra_invalid_reasons)
+        if reasons:
+            return base + " — the trial was marked infra-invalid before the " \
+                "control stack was deployed: " + "; ".join(reasons)
+        return base
 
     def exclusion_lines(self) -> list[str]:
         return [

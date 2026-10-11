@@ -7,6 +7,7 @@ a model.
 
 from __future__ import annotations
 
+import json
 from pathlib import Path, PurePosixPath
 from typing import Any
 
@@ -15,6 +16,7 @@ from harbor.environments.base import ExecResult
 from harbor.models.agent.context import AgentContext
 from harbor.models.trajectories import Agent as AtifAgent, FinalMetrics, Step, Trajectory
 
+import aeval.agents.dsh.agent as dsh_agent
 from aeval.agents.dsh.agent import (
     DshAgent,
     DshRunError,
@@ -301,6 +303,116 @@ def test_missing_reader_names_the_environment_hint(
     )
     with pytest.raises(DshRunError, match="AEVAL_DSH_SESSION_READER"):
         resolve_session_reader()
+
+
+def test_the_reader_follows_the_package_the_spec_already_names(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Naming the control package once (the broker spec) must be enough.
+
+    The reader is that package's ``dist/session_reader.js``; demanding the
+    operator name the same directory again is the friction this removes.
+    """
+    monkeypatch.delenv("AEVAL_DSH_SESSION_READER", raising=False)
+    monkeypatch.delenv("AEVAL_DSH_CONTROL_ROOT", raising=False)
+    root = tmp_path / "pkg"
+    (root / "dist").mkdir(parents=True)
+    spec = tmp_path / "spec.json"
+    spec.write_text(json.dumps({"controlRoot": str(root)}), encoding="utf-8")
+    monkeypatch.setenv("AEVAL_BROKER_JSON", str(spec))
+    candidates = session_reader_candidates()
+    assert root / "dist" / "session_reader.js" in candidates
+    # A fallback, not a replacement: the development-layout probes stay ahead,
+    # so nothing that used to resolve from a checkout can start resolving from
+    # a spec instead.
+    assert candidates.index(root / "dist" / "session_reader.js") >= 2
+
+
+def test_an_explicit_control_dist_also_yields_the_reader(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """controlDist IS the built dist/, so the reader is directly inside it."""
+    monkeypatch.delenv("AEVAL_DSH_SESSION_READER", raising=False)
+    monkeypatch.delenv("AEVAL_DSH_CONTROL_ROOT", raising=False)
+    dist = tmp_path / "pkg" / "dist"
+    dist.mkdir(parents=True)
+    spec = tmp_path / "spec.json"
+    spec.write_text(json.dumps({"controlDist": str(dist)}), encoding="utf-8")
+    monkeypatch.setenv("AEVAL_BROKER_JSON", str(spec))
+    assert dist / "session_reader.js" in session_reader_candidates()
+
+
+def test_a_broken_spec_adds_no_reader_candidates(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A spec we cannot read is the broker's error to raise, loudly and once."""
+    monkeypatch.delenv("AEVAL_DSH_CONTROL_ROOT", raising=False)
+    monkeypatch.delenv("AEVAL_BROKER_JSON", raising=False)
+    without_spec = session_reader_candidates()
+    broken = tmp_path / "spec.json"
+    broken.write_text("{not json", encoding="utf-8")
+    monkeypatch.setenv("AEVAL_BROKER_JSON", str(broken))
+    assert session_reader_candidates() == without_spec
+
+
+def test_a_marketplace_install_is_probed_where_it_really_lands(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """cwd, the DSH profile the plugin was added to, and npm global — in that
+    order — are the places an installed (not checked-out) plugin lives."""
+    monkeypatch.delenv("AEVAL_DSH_SESSION_READER", raising=False)
+    monkeypatch.delenv("AEVAL_DSH_CONTROL_ROOT", raising=False)
+    monkeypatch.delenv("AEVAL_BROKER_JSON", raising=False)
+    project = tmp_path / "project"
+    (project / "node_modules" / "dsh-eval-control" / "dist").mkdir(parents=True)
+    monkeypatch.chdir(project)
+    home = tmp_path / "home"
+    (
+        home / ".dsh-beta" / "profiles" / "web" / "node_modules"
+        / "dsh-eval-control" / "dist"
+    ).mkdir(parents=True)
+    monkeypatch.setenv("HOME", str(home))
+    candidates = session_reader_candidates()
+    # spell the expectations the way the implementation does (cwd and HOME are
+    # read live), so the assertion cannot drift on a symlinked temp dir
+    project_reader = (
+        Path.cwd() / "node_modules" / "dsh-eval-control" / "dist" / "session_reader.js"
+    )
+    profile_reader = (
+        Path.home() / ".dsh-beta" / "profiles" / "web" / "node_modules"
+        / "dsh-eval-control" / "dist" / "session_reader.js"
+    )
+    assert project_reader in candidates
+    assert profile_reader in candidates
+    assert candidates.index(project_reader) < candidates.index(profile_reader)
+
+
+def test_a_pip_install_finds_a_plugin_the_operator_installed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The measured pip layout: aeval inside site-packages, the plugin in a DSH
+    profile. Nothing in the historical candidates exists, so resolution has to
+    come from the marketplace probes — this is the shape that used to end in
+    ``DshRunError`` on a real installed aeval."""
+    monkeypatch.delenv("AEVAL_DSH_SESSION_READER", raising=False)
+    monkeypatch.delenv("AEVAL_DSH_CONTROL_ROOT", raising=False)
+    monkeypatch.delenv("AEVAL_BROKER_JSON", raising=False)
+    # site-packages/.../aeval/agents/dsh/agent.py — parents[4] is the version
+    # dir, exactly as in a real install (see session_reader_candidates).
+    installed = (
+        tmp_path / "venv" / "lib" / "python3.12" / "site-packages"
+        / "aeval" / "agents" / "dsh" / "agent.py"
+    )
+    monkeypatch.setattr(dsh_agent, "__file__", str(installed))
+    home = tmp_path / "home"
+    monkeypatch.setenv("HOME", str(home))
+    reader = (
+        home / ".dsh-beta" / "profiles" / "web" / "node_modules"
+        / "dsh-eval-control" / "dist" / "session_reader.js"
+    )
+    reader.parent.mkdir(parents=True)
+    reader.write_text("// reader\n", encoding="utf-8")
+    assert resolve_session_reader() == reader
 
 
 def _trajectory(**metrics: Any) -> Trajectory:

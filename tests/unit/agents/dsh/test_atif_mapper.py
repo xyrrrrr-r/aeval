@@ -1,6 +1,6 @@
 """ATIF mapper unit tests: map the official log, invent nothing.
 
-The mapper speaks the pinned DSH 0.1.7-alpha.1 Session V4 vocabulary, so every
+The mapper speaks the pinned DSH 0.2.0-rc.2 Session V4 vocabulary, so every
 fixture here is built by ``dsh_log`` (the same envelope the real
 ``JsonlSessionPersistence`` returns). Pinned behaviours:
 

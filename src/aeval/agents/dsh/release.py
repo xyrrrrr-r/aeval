@@ -30,34 +30,40 @@ __all__ = [
 ]
 
 
-OFFICIAL_DSH_TAG = "dsh-v0.1.7-alpha.1"
-OFFICIAL_DSH_COMMIT = "c36a83ff6bb95e3f82cf79f9be7c724270a8aa61"
+OFFICIAL_DSH_TAG = "dsh-v0.2.0-rc.2"
+OFFICIAL_DSH_COMMIT = "639ed015397290b3745d163aafe02ffee4aa3f84"
 
-# Exact npm compatibility slice for DSH 0.1.7-alpha.1. Beyond the
+# Exact npm compatibility slice for DSH 0.2.0-rc.2. Beyond the
 # packages the CLI itself ships, this pins every package the control plugin
 # imports DIRECTLY inside the DSH process (defense 1 of the control-stack
 # split): the plugin resolves these from DSH's own nested node_modules, so a
 # DSH release that changes any of them silently changes what the plugin runs
 # against — the lock must name them, never trust them transitively.
+#
+# The 0.2.0 metapackage stopped depending on @deepseek-ai/dsh-sdk-client and
+# switched its sibling pins from caret ranges to exact versions, so this slice
+# is now the resolved tree rather than a range-resolved guess. The one package
+# the metapackage no longer ships at all is sdk-client: it is absent from a
+# real 0.2.0-rc.2 install and nothing in the control plugin imports it, so it
+# is dropped rather than pinned to something that is not there.
 DSH_NPM_SLICE: tuple[tuple[str, str, str | None], ...] = (
-    ("@deepseek-ai/dsh", "0.1.7-alpha.1",
-     "sha512-fim76775kLyal0lLNmpktZfOiOwU0P9qdluknL5Sm3F6ax9I5PcLD0W0WzqH9tMOOY8yHya5VShuEzSSh223sw=="),
-    ("@deepseek-ai/dsh-sdk-client", "0.1.7-alpha.1", None),
-    ("@deepseek-ai/dsh-sdk-protocol", "0.1.7-alpha.1", None),
-    ("@deepseek-ai/dsh-acp", "0.1.7-alpha.1", None),
+    ("@deepseek-ai/dsh", "0.2.0-rc.2",
+     "sha512-EAJ3gPNcVt/uv8X19PMm9NkVhWgT7xXNMk0UKCVm+IQ5rpSQOcsMUa0HWlnYYVybKMsccjcRB21vVVsaXQ6IdA=="),
+    ("@deepseek-ai/dsh-sdk-protocol", "0.2.0-rc.2", None),
+    ("@deepseek-ai/dsh-acp", "0.2.0-rc.2", None),
     ("@agentclientprotocol/sdk", "1.4.0", None),
-    ("@deepseek-ai/cordis", "4.0.3", None),
+    ("@deepseek-ai/cordis", "4.0.4", None),
     # Direct imports of the control plugin (dsh-eval-control/src), all pinned
     # to the same release slice the plugin was compiled against:
-    ("@deepseek-ai/dsh-agent", "0.1.7-alpha.1", None),
-    ("@deepseek-ai/dsh-llm", "0.1.7-alpha.1", None),
-    ("@deepseek-ai/dsh-scope", "0.1.7-alpha.1", None),
-    ("@deepseek-ai/dsh-session", "0.1.7-alpha.1", None),
-    ("@deepseek-ai/dsh-session-persistence", "0.1.7-alpha.1", None),
-    ("@deepseek-ai/dsh-session-persistence-jsonl", "0.1.7-alpha.1", None),
-    ("@deepseek-ai/dsh-system-prompt", "0.1.7-alpha.1", None),
-    ("@deepseek-ai/dsh-tools", "0.1.7-alpha.1", None),
-    ("@deepseek-ai/schemastery", "3.18.3", None),
+    ("@deepseek-ai/dsh-agent", "0.2.0-rc.2", None),
+    ("@deepseek-ai/dsh-llm", "0.2.0-rc.2", None),
+    ("@deepseek-ai/dsh-scope", "0.2.0-rc.2", None),
+    ("@deepseek-ai/dsh-session", "0.2.0-rc.2", None),
+    ("@deepseek-ai/dsh-session-persistence", "0.2.0-rc.2", None),
+    ("@deepseek-ai/dsh-session-persistence-jsonl", "0.2.0-rc.2", None),
+    ("@deepseek-ai/dsh-system-prompt", "0.2.0-rc.2", None),
+    ("@deepseek-ai/dsh-tools", "0.2.0-rc.2", None),
+    ("@deepseek-ai/schemastery", "3.18.4", None),
 )
 
 # The control stack's complete direct import surface: the union of the DSH
@@ -92,7 +98,7 @@ def build_official_dsh_lock() -> DshReleaseLock:
             for n, v, i in DSH_NPM_SLICE
         ],
         node_versions=list(DSH_NODE_VERSIONS),
-        cordis_version="4.0.3",
+        cordis_version="4.0.4",
         acp_sdk_version="1.4.0",
         experimental=True,
     )

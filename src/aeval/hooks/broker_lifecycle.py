@@ -108,6 +108,20 @@ class BrokerSpec:
         return f"{scheme}://{self.listen_host}:{self.listen_port}"
 
 
+def _control_dist_from_root(root: object) -> str | None:
+    """``<controlRoot>/dist`` when that is a real directory, else ``None``.
+
+    ``controlRoot`` carries a built ``dist/`` — that is where ``brokerJs`` is
+    found (``control/broker.broker_bin_candidates``) and where the flavor's
+    in-sandbox stack is grafted from. Same directory, so the spec need name it
+    only through the root.
+    """
+    if not isinstance(root, str) or not root:
+        return None
+    candidate = Path(root) / "dist"
+    return str(candidate) if candidate.is_dir() else None
+
+
 def parse_broker_spec(path_env: str | None = None) -> BrokerSpec | None:
     """Read the operator's broker spec; ``None`` when none is configured.
 
@@ -193,7 +207,16 @@ def parse_broker_spec(path_env: str | None = None) -> BrokerSpec | None:
                 "broker spec listenTls needs {key, cert} file paths (PEM paths, not PEM text)"
             )
     control_dist = data.get("controlDist")
-    if control_dist is not None and not Path(str(control_dist)).is_dir():
+    if control_dist is None:
+        # One operator input for one package. ``controlRoot`` already names the
+        # compiled control checkout — ``brokerJs`` is derived from
+        # ``<root>/dist`` — and the in-sandbox stack the flavor grafts is that
+        # same ``dist``. Deriving it here means the operator names the package
+        # once instead of twice; an explicit ``controlDist`` still wins, and a
+        # root without a built ``dist`` stays None so the flavor's own refusal
+        # (which can say what to do) is the one the operator sees.
+        control_dist = _control_dist_from_root(data.get("controlRoot"))
+    elif not Path(str(control_dist)).is_dir():
         raise BrokerSpecError(f"broker spec controlDist is not a directory: {control_dist}")
     control_ca = data.get("controlCa")
     if control_ca is not None and not Path(str(control_ca)).is_file():

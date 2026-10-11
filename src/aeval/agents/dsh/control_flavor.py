@@ -303,7 +303,10 @@ async def _deploy_dsh_stack(
     if control_dist is None:
         raise BootstrapError(
             "the agent declares the dsh control stack but the broker spec "
-            "carries no controlDist — the trial would run unmetered"
+            "carries no controlDist and no controlRoot with a built dist/ — "
+            "the trial would run unmetered. Point the spec's controlRoot at the "
+            "compiled control package (the one holding dist/broker_main.js); "
+            "controlDist then defaults to <controlRoot>/dist."
         )
     await deploy_control_stack(
         environment=environment, agent=agent, paths=paths, config=config,

@@ -178,7 +178,7 @@ test('manifest and lockfile pin direct imports to the frozen DSH slice', () => {
   assert.deepEqual(lock.packages['']?.devDependencies, manifest.devDependencies);
   for (const [name, version] of Object.entries({ ...manifest.dependencies, ...manifest.devDependencies })) {
     assert.equal(lock.packages[`node_modules/${name}`]?.version, version);
-    if (name.startsWith('@deepseek-ai/dsh')) assert.equal(version, '0.1.7-alpha.1');
+    if (name.startsWith('@deepseek-ai/dsh')) assert.equal(version, '0.2.0-rc.2');
   }
   // This package does NOT depend on @deepseek-ai/dsh itself — that is the
   // boundary of the neutral control plane. Its own direct imports are frozen
@@ -186,9 +186,9 @@ test('manifest and lockfile pin direct imports to the frozen DSH slice', () => {
   // dsh-eval-control's lockfile at 4bc6931, the move provenance), so a
   // registry drift resolves to a red test, not a silent rebuild.
   const frozen = {
-    '@deepseek-ai/dsh-llm': 'sha512-DajyYU+BZqTEpfQCb21ymCqA7DBlbfcm9nguoFjY14nZ6GLdLh+ae4Nl42Nz189kVS2siu7TcDZKVy47Nub9Ag==',
-    '@deepseek-ai/dsh-session': 'sha512-dUd/fUj8wign5ZuniGfr5VqMWZqFPwhc0IImapToE2NDZB/Hl0JVXtg/lS5aYoFfgxwEeIWEDjVO3UJBClQa9A==',
-    '@deepseek-ai/schemastery': 'sha512-plZIZADuGLT/3PoYmUaEDZd0vG1rVahU89MevnxXsyQhFEi2D6DUuTJel7FUb3cUM9aCzqGMN99sHJe1RIushA==',
+    '@deepseek-ai/dsh-llm': 'sha512-6QFrQn/h0iNqCfPpgQidnHtLSpA99A7ZND/uYKaGSd/4BGP8KBhuRd0w63e9s4u+hfW8jc3j29WKcNLIOeUfcA==',
+    '@deepseek-ai/dsh-session': 'sha512-wj+6MeqCYbDcbEvKH3puHyEGdjyu51JwBoN6Ua2tz6griLufDgLM5HpSU40L5xgpbOfrYVhXZs4vRgOrMlFY2g==',
+    '@deepseek-ai/schemastery': 'sha512-SSXO6tYuyrIqKVbmOnIq0s+riUywYzouFMcnBluHF9n4KMo2G8HvEzhCYj6pj2617/glOjbJuVInJ9hfONsjkg==',
   } as const;
   for (const [name, integrity] of Object.entries(frozen)) {
     assert.equal(lock.packages[`node_modules/${name}`]?.integrity, integrity, name);

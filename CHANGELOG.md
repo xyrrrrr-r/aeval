@@ -23,6 +23,39 @@ schema、CLI 参数、存储格式），每次都会在下方 `Changed`/`Removed
   中性占位。因此本仓库的提交 SHA 与 GitCode 上的历史不再对应，从旧历史
   cherry-pick 会冲突。另需注意：`tests/unit/test_public_surface.py` 的主机名禁词
   如今拦的是占位词，真名要防得靠你自己的本地钩子或私有 CI 配置。
+- **同一个控制包只需命名一处（`controlRoot`）**：broker spec 过去要分别写
+  `brokerJs`、`controlDist`，再另外用环境变量/声明 kwargs 指一次会话读取器——
+  同一个目录写三遍。现在 spec 给 `controlRoot`（含 `dist/broker_main.js` 的包）
+  即可：`brokerJs` 照旧推导，`controlDist` 默认取 `<controlRoot>/dist`（显式给出
+  仍然优先），会话读取器也按它推导。
+- **会话读取器的发现补齐"装了插件"的落点**：原先只探开发布局（同级 checkout、
+  仓库的 `node_modules`），而按 DSH 插件装出来的包在
+  `<dsh home>/profiles/<profile>/node_modules/` 里，于是安装式 aeval 上必然
+  报 `DshRunError`。现在依次补探：broker spec 已命名的控制包 → 当前目录的
+  `node_modules` → DSH profile → npm 全局前缀。历史候选的相对顺序不变，因此
+  既有解析结果不会移动。`DshRunError` 也补上了这几条可选指法。
+- **`controlDist` 的文档写反了**：`control/README.md` 原称"launcher 解析
+  `<controlDist>/dist/broker_main.js`"，与实际相反（`controlDist` 就是编译后的
+  `dist/`，flavor 直接在其中 glob `*.js`）。
+
+### Added
+
+- **`aeval agents --init` 与随包分发的声明起点**：wheel 里此前**不含**任何 agent
+  声明（`dsh.yaml`、`_base/agent.base.yaml`、`_runtime/images.yaml`），装出来的
+  aeval 第一条命令就会报 `no agent declarations under agents`，使用者只能自己去
+  仓库里抠文件。现在构建把仓库根的 `agents/` 打进包内
+  （`force-include = { "agents" = "aeval/_templates/agents" }`，仍是唯一真源、
+  不存在第二份副本），`aeval agents --init` 从包内写出起点；已有文件默认不覆盖，
+  加 `--force` 才覆盖。
+- **被排除的试次会在 `aeval run` 结束时打印出来**：封存只说明证据链完整，不说明
+  这一次跑出了可比数字——被排除的试次不参与计分，而"全部试次都被排除"的运行过去
+  照样打印 `sealed … recompute passed` 并以 0 退出。现在会打印每个排除类别的试次数
+  与"有效/总数（排除率）"，并指出逐试次原因在 `aeval_run_summary.json` 的
+  `trials[*].infra_invalid_reasons`（退出码不变）。
+- **`no trusted control binding` 会带上真正的原因**：该错误只在试次启动阶段就记下
+  infra 失败时出现（实践中就是 broker 起不来），过去只报"没有绑定"，于是操作者被
+  引向沙箱里的次要症状（DSH 裸跑 → `MISSING_CREDENTIAL`）而不是宿主上的原因。现在
+  错误里带上已记录的 infra 失败原文。
 
 ## [0.2.0] - 2026-10-08
 

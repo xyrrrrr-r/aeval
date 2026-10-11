@@ -274,7 +274,15 @@ def stack_serves_any_openai(stack: str | None) -> bool:
 #: the generic shape, the legacy ``DshReleaseLock``. The runtime lock's agent
 #: sections are built from whatever the SELECTED adapters declare here, so
 #: the core never names an agent when assembling supply-chain identity.
-OFFICIAL_RELEASE_LOCK_ATTR = "official_release_lock"
+#:
+#: The name is UPPERCASE because the declaration is a class constant on the
+#: adapter (``DshAgent.OFFICIAL_RELEASE_LOCK``) — the hook the adapters and
+#: every document name. It read ``"official_release_lock"`` from the refactor
+#: that introduced it, which silently matched nothing: ``getattr`` returned
+#: None for every adapter, so no run ever recorded an agent release lock and
+#: the runtime lock's ``dsh`` section stayed null (found by bumping the pin
+#: 0.1.7-alpha.1 -> 0.2.0-rc.2 and watching the lock digest not move).
+OFFICIAL_RELEASE_LOCK_ATTR = "OFFICIAL_RELEASE_LOCK"
 
 
 def official_release_lock_of(adapter: type) -> Any:

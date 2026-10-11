@@ -30,5 +30,8 @@ npm run build   # tsc -> dist/
 npm test        # node --test
 ```
 
-The operator's broker spec (`AEVAL_BROKER_JSON`) may point `controlDist` at this
-directory: the launcher resolves `<controlDist>/dist/broker_main.js`.
+The operator's broker spec (`AEVAL_BROKER_JSON`) names this package once, as
+`controlRoot`: `brokerJs` resolves to `<controlRoot>/dist/broker_main.js`, the
+in-sandbox stack is grafted from that same `dist/`, and `controlDist` therefore
+defaults to `<controlRoot>/dist`. An explicit `controlDist` still wins — for a
+build tree kept outside the package.

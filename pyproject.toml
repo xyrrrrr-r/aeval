@@ -81,6 +81,11 @@ build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/aeval"]
+# 仓库根的 agents/ 是声明的唯一真源，但装出来的 aeval 旁边没有它：使用者必须自己
+# 造一份才能跑评测（实测：`aeval agents` 报 "no agent declarations under
+# agents"）。这里把同一份字节打进包里，`aeval agents --init` 从包内写出起点——
+# 不复制第二份源码，因此不存在漂移。
+force-include = { "agents" = "aeval/_templates/agents" }
 
 # 内部资料不进 sdist：
 #  - docs/internal/ 是开发过程的历史记录（内部阶段编号、缺陷编号、机器名、

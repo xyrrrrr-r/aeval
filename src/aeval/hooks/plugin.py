@@ -240,7 +240,11 @@ def register_trial_hooks(job: Any, context: EvaluationContext) -> None:
             if state.terminal:
                 raise LifecycleError("verification started after trial termination")
             if state.binding is None:
-                raise LifecycleError("trial has no trusted control binding")
+                # Same message as the owner's verify_descriptor, and for the
+                # same reason: the cause (an infra failure at trial start) is
+                # what the operator needs to see, not the missing binding it
+                # produced.
+                raise LifecycleError(context.no_binding_reason(state))
             # Real producer: trust first, then collect the fixed
             # evidence outputs from the live trial. Collection still runs
             # for trials that will fail later checks, so failures and

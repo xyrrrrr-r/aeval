@@ -24,9 +24,9 @@
     "test": "npm run build && tsc -p tsconfig.test.json && node --test \".test-dist/test/*.test.js\""
   },
   "dependencies": {
-    "@deepseek-ai/dsh-llm": "0.1.7-alpha.1",
-    "@deepseek-ai/dsh-session": "0.1.7-alpha.1",
-    "@deepseek-ai/schemastery": "3.18.3"
+    "@deepseek-ai/dsh-llm": "0.2.0-rc.2",
+    "@deepseek-ai/dsh-session": "0.2.0-rc.2",
+    "@deepseek-ai/schemastery": "3.18.4"
   },
   "devDependencies": {
     "@types/node": "24.13.6",

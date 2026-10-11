@@ -1,4 +1,4 @@
-"""Builders for the pinned DSH 0.1.7-alpha.1 Session V4 log shape.
+"""Builders for the pinned DSH 0.2.0-rc.2 Session V4 log shape.
 
 These emit the *official* event envelope (``{type, seq, time, data}`` plus
 surface metadata) read from ``@deepseek-ai/dsh-session`` types — not the

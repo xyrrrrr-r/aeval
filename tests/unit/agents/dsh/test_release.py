@@ -17,28 +17,56 @@ from pathlib import Path
 
 import pytest
 
+from aeval.agents.contract import official_release_lock_of
+from aeval.agents.dsh.agent import DshAgent
 from aeval.agents.dsh.release import (
     DSH_CONTROL_DIRECT_IMPORTS,
     DSH_NPM_SLICE,
     DSH_NODE_VERSIONS,
+    OFFICIAL_DSH_TAG,
     build_official_dsh_lock,
 )
+from aeval.provenance import build_runtime_lock
 
 _CONTROL_ROOT = Path(__file__).resolve().parents[4] / "control"
 _REPO_ROOT = _CONTROL_ROOT.parent.parent
+
+
+def test_the_declared_hook_reaches_the_runtime_lock():
+    """The pin must actually land in the runtime lock — the whole point.
+
+    Regression guard: the generic resolver read ``official_release_lock``
+    while every adapter declares ``OFFICIAL_RELEASE_LOCK``, so it returned
+    None for all of them, no run recorded an agent release lock, and the
+    runtime lock's ``dsh`` section stayed null. Nothing failed — a version
+    bump simply did not move the lock digest. This test fails loudly on any
+    such drift, so the supply-chain identity cannot go missing in silence.
+    """
+    pinned = official_release_lock_of(DshAgent)
+    assert pinned is not None, (
+        "DshAgent declares no release lock the generic resolver can find — "
+        "the declaration name and OFFICIAL_RELEASE_LOCK_ATTR have drifted "
+        "apart again, and no run would record the DSH release"
+    )
+    assert pinned.official_tag == OFFICIAL_DSH_TAG
+    lock = build_runtime_lock(release_locks={"dsh": pinned})
+    assert lock.dsh is not None, "the built runtime lock dropped the DSH section"
+    assert lock.dsh.official_tag == OFFICIAL_DSH_TAG
+    assert lock.dsh.commit
+    assert any(p.name == "@deepseek-ai/dsh" for p in lock.dsh.packages)
 
 
 def test_official_dsh_slice_is_fully_pinned():
     dsh = build_official_dsh_lock()
     by_name = {p.name: p for p in dsh.packages}
     assert by_name["@deepseek-ai/dsh"].integrity is not None
-    assert by_name["@deepseek-ai/cordis"].version == "4.0.3"
+    assert by_name["@deepseek-ai/cordis"].version == "4.0.4"
     assert by_name["@agentclientprotocol/sdk"].version == "1.4.0"
     # schemastery is a standalone library (like cordis), not part of the
     # DSH release train; it carries its own version line.
-    assert by_name["@deepseek-ai/schemastery"].version == "3.18.3"
+    assert by_name["@deepseek-ai/schemastery"].version == "3.18.4"
     assert all(
-        p.version == "0.1.7-alpha.1"
+        p.version == "0.2.0-rc.2"
         for n, p in by_name.items()
         if n.startswith("@deepseek-ai/")
         and n not in ("@deepseek-ai/cordis", "@deepseek-ai/schemastery")

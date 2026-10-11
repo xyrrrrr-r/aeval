@@ -255,6 +255,90 @@ def build_headless_command(
     )
 
 
+def _spec_declared_reader_candidates() -> list[Path]:
+    """The reader sitting beside the control package the broker spec names.
+
+    An operator who already told us where the control package is (spec's
+    ``controlRoot``, or an explicit ``controlDist``) has told us where the
+    reader is too: it is that package's ``dist/session_reader.js``. Deriving
+    it here means the package is named once rather than three times.
+
+    A spec we cannot read adds nothing: a broken spec is the broker's error to
+    raise, loudly and once, not this function's to duplicate.
+    """
+    from aeval.hooks.broker_lifecycle import BROKER_SPEC_ENV
+
+    raw = os.environ.get(BROKER_SPEC_ENV, "").strip()
+    if not raw:
+        return []
+    try:
+        data = json.loads(Path(raw).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return []
+    if not isinstance(data, dict):
+        return []
+    candidates: list[Path] = []
+    # controlDist IS the built dist/ (the flavor globs *.js in it); controlRoot
+    # is the package whose dist/ that is.
+    for key, inner in (("controlDist", "session_reader.js"),
+                       ("controlRoot", "dist/session_reader.js")):
+        value = data.get(key)
+        if isinstance(value, str) and value:
+            candidates.append(Path(value) / inner)
+    return candidates
+
+
+def _marketplace_reader_candidates() -> list[Path]:
+    """Where a plugin installed from the marketplace actually lands.
+
+    The historical candidates only ever knew the development layout (a sibling
+    checkout, or the repo's own ``node_modules``). An operator who installed
+    the plugin gets it somewhere none of that reaches: the project they run
+    from, the DSH profile the plugin was added to (``dsh plugin add`` installs
+    into ``<dsh home>/profiles/<profile>/node_modules``), or an npm global
+    root. Probed after the historical candidates, so no existing resolution
+    moves.
+    """
+    inner = Path("dsh-eval-control") / "dist" / "session_reader.js"
+    candidates = [Path.cwd() / "node_modules" / inner]
+    for root in _dsh_home_dirs():
+        profiles = root / "profiles"
+        if not profiles.is_dir():
+            continue
+        for profile in sorted(p for p in profiles.iterdir() if p.is_dir()):
+            candidates.append(profile / "node_modules" / inner)
+    for prefix in _npm_global_prefixes():
+        candidates.append(prefix / "lib" / "node_modules" / inner)
+    return candidates
+
+
+def _dsh_home_dirs() -> list[Path]:
+    """DSH homes whose ``profiles/`` hold plugin installs."""
+    roots: list[Path] = []
+    for name in ("DSH_HOME", "DSH_DIR"):
+        value = os.environ.get(name, "").strip()
+        if value:
+            roots.append(Path(value))
+    try:
+        home = Path.home()
+    except (RuntimeError, OSError):
+        return roots              # no home directory to glob
+    roots.extend(sorted(p for p in home.glob(".dsh*") if p.is_dir()))
+    return roots
+
+
+def _npm_global_prefixes() -> list[Path]:
+    """npm global prefixes, most explicit first."""
+    prefixes = [
+        Path(value) for value in
+        (os.environ.get("NPM_CONFIG_PREFIX", "").strip(),
+         os.environ.get("npm_config_prefix", "").strip())
+        if value
+    ]
+    prefixes.extend((Path("/usr/local"), Path("/usr")))
+    return prefixes
+
+
 def session_reader_candidates() -> list[Path]:
     """Built readers to try when the operator has not named one.
 
@@ -263,6 +347,11 @@ def session_reader_candidates() -> list[Path]:
     one; both are probed, in that order. The search discipline itself lives in
     ``aeval.control.artifacts``, shared with every other control artifact —
     only the package name and the wanted file are DSH's to know.
+
+    Everything after those historical candidates answers "the operator
+    installed the plugin instead of checking it out": the package the broker
+    spec already names, then the places a marketplace install really lands
+    (cwd, DSH profiles, npm global). See ``resolve_session_reader``.
     """
     repo_dir = Path(__file__).parents[4]
     return control_artifact_candidates(
@@ -275,6 +364,8 @@ def session_reader_candidates() -> list[Path]:
         walk_from=(repo_dir.parent,),
         extra=(
             repo_dir / "node_modules" / "dsh-eval-control" / "dist" / "session_reader.js",
+            *_spec_declared_reader_candidates(),
+            *_marketplace_reader_candidates(),
         ),
     )
 
@@ -305,8 +396,10 @@ def resolve_session_reader(explicit: Path | None = None) -> Path:
     raise DshRunError(
         "official DSH session reader not found; tried "
         + ", ".join(str(c) for c in candidates)
-        + f". Build dsh-eval-control and point {SESSION_READER_ENV} at "
-        "dist/session_reader.js."
+        + f". Build dsh-eval-control, then either point {SESSION_READER_ENV} at "
+        "its dist/session_reader.js, set the agent's launch kwarg "
+        "session_reader to it, or name the package in the broker spec "
+        f"(controlRoot) — {SESSION_READER_ROOT_ENV} names the package root."
     )
 
 
@@ -655,8 +748,8 @@ class DshAgent(BaseInstalledAgent):
         """A pinned trial session must already exist in the sandbox store.
 
         ``--session-id`` resumes an existing Session and errors on an
-        unknown id (verified against dsh 0.1.7-alpha.1 in the real
-        sandbox). An evaluation trial pins the OWNER-assigned session id,
+        unknown id (verified against the pinned DSH in the real sandbox;
+        re-verified on 0.2.0-rc.2). An evaluation trial pins the OWNER-assigned session id,
         so something must have created that session before the run — the
         sandbox-side control plugin. Failing here gives that diagnosis
         instead of a mid-run "session does not exist".

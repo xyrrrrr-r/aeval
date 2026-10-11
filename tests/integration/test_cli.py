@@ -124,6 +124,30 @@ def test_agents_rejects_a_missing_directory(tmp_path):
     assert "no agent declarations" in result.output
 
 
+def test_agents_init_gives_an_installed_aeval_a_starting_point(tmp_path):
+    """A pip install ships no declarations; without this the first command a
+    new user runs fails with 'no agent declarations'."""
+    agents_dir = tmp_path / "agents"
+    result = runner.invoke(app, ["agents", "--init", "--agents-dir", str(agents_dir)])
+    assert result.exit_code == 0, result.output
+    assert "wrote" in result.output
+    listed = runner.invoke(app, ["agents", "--agents-dir", str(agents_dir)])
+    assert listed.exit_code == 0, listed.output
+    assert "agree with their adapter classes" in listed.output
+
+
+def test_agents_init_refuses_to_overwrite_without_force(tmp_path):
+    agents_dir = tmp_path / "agents"
+    runner.invoke(app, ["agents", "--init", "--agents-dir", str(agents_dir)])
+    again = runner.invoke(app, ["agents", "--init", "--agents-dir", str(agents_dir)])
+    assert again.exit_code != 0
+    assert "pass --force" in again.output
+    forced = runner.invoke(
+        app, ["agents", "--init", "--force", "--agents-dir", str(agents_dir)]
+    )
+    assert forced.exit_code == 0, forced.output
+
+
 def test_list_rejects_missing_root(tmp_path):
     result = runner.invoke(app, ["list", "--suites-dir", str(tmp_path / "nowhere")])
     assert result.exit_code == 3
@@ -367,7 +391,72 @@ def test_report_renders_from_store(tmp_path, runtime_lock):
     assert "pass^2" in result.output
 
 
-def _fake_harbor(returncode=0):
+def _store_with_run(tmp_path, runtime_lock, suite_id, run_id, *, verdict="pass"):
+    """One-run SQLite store: enough for aggregation/scope CLI checks."""
+    from aeval.store.sqlite import TrialStore
+
+    store_path = tmp_path / f"{run_id}.sqlite3"
+    store = TrialStore(store_path)
+    store.create_run(RunManifest(
+        run_id=run_id,
+        runtime_lock=runtime_lock,
+        overlay=OverlayIdentity(
+            suite_id=suite_id, suite_version="1", overlay_digest="d" * 64,
+            source_commit="9" * 40,
+        ),
+        versions=VersionsBundle(aeval_version="0.1.0"),
+    ))
+    record = TrialRecord(
+        trial_id=f"{run_id}-t0",
+        coordinates={"run_id": run_id, "suite_id": suite_id,
+                     "suite_version": "1", "task_id": "task",
+                     "trial_index": 0},
+        stop_reason="agent_exit_0",
+        verdict=verdict,
+    )
+    store.persist_trial(record)
+    store.persist_grades(record.trial_id, [GradeResult(
+        grader_id="g", grader_version="v1", layer="outcome",
+        score=Score(value=1.0 if verdict == "pass" else 0.0),
+        status=verdict,
+    )])
+    store.close()
+    return store_path
+
+
+def test_report_aggregates_reruns_of_one_suite(tmp_path, runtime_lock):
+    """同一套件的重复 run = 合法聚合：报头明说同套件。"""
+    first = _store_with_run(tmp_path, runtime_lock, "s", "run-1")
+    second = _store_with_run(tmp_path, runtime_lock, "s", "run-2")
+    result = runner.invoke(app, [
+        "report", "--store", str(first), "--store", str(second),
+        "run-1", "run-2", "--k", "1",
+    ])
+    assert result.exit_code == 0, result.output
+    assert "2 run 同套件" in result.output
+
+
+def test_report_refuses_cross_suite_aggregation(tmp_path, runtime_lock):
+    """不同套件 = 不同实验：拒绝合成一份报告（不制造跨套件综合评分）。"""
+    tbench = _store_with_run(tmp_path, runtime_lock, "tbench-intel", "run-tb")
+    aeval = _store_with_run(tmp_path, runtime_lock, "aeval-intel", "run-ae")
+    result = runner.invoke(app, [
+        "report", "--store", str(tbench), "--store", str(aeval),
+        "run-tb", "run-ae", "--k", "1",
+    ])
+    assert result.exit_code == 3
+    assert "cross-suite aggregation is not supported" in result.output
+    assert "tbench-intel@1" in result.output and "aeval-intel@1" in result.output
+    # 同样的拒绝也适用于面板（同一聚合入口）。
+    panel = runner.invoke(app, [
+        "dashboard", "--store", str(tbench), "--store", str(aeval),
+        "run-tb", "run-ae", "--k", "1",
+    ])
+    assert panel.exit_code == 3
+    assert "cross-suite aggregation is not supported" in panel.output
+
+
+def _fake_harbor(returncode=0, stop_reason="agent_exit_0"):
     """Harabor stand-in that simulates the plugin contract.
 
     With returncode 0 it writes a complete run summary and persists a
@@ -390,7 +479,7 @@ def _fake_harbor(returncode=0):
                 trial_id="t0",
                 coordinates={"run_id": env["AEVAL_RUN_ID"], "suite_id": "s",
                              "suite_version": "1", "task_id": "task", "trial_index": 0},
-                stop_reason="agent_exit_0",
+                stop_reason=stop_reason,
                 verdict="pass",
             )
             store.persist_trial(record)
@@ -402,7 +491,7 @@ def _fake_harbor(returncode=0):
             (run_dir / "aeval_run_summary.json").write_text(json.dumps({
                 "run_id": env["AEVAL_RUN_ID"],
                 "unobserved_trials": 0,
-                "trials": {"t0": {"phase": "ended", "stop_reason": "agent_exit_0"}},
+                "trials": {"t0": {"phase": "ended", "stop_reason": stop_reason}},
             }), encoding="utf-8")
         return SimpleNamespace(returncode=returncode)
     return run
@@ -471,6 +560,34 @@ def test_run_seals_when_chain_is_whole(tmp_path, native_suite_dir, monkeypatch, 
     manifest = json.loads((run_dir / "run_manifest.json").read_text(encoding="utf-8"))
     assert manifest["sealed"] is True
     assert (run_dir / "attestation.json").is_file()
+
+
+def test_run_says_out_loud_when_trials_were_excluded(
+    tmp_path, native_suite_dir, monkeypatch, runtime_lock
+):
+    """Sealing is not the same as measuring. An excluded trial is never scored,
+    so a run whose every trial was excluded sealed successfully having measured
+    nothing — and used to say only "sealed"."""
+    import subprocess
+
+    monkeypatch.setattr(
+        subprocess, "run", _fake_harbor(returncode=0, stop_reason="infra_error")
+    )
+    monkeypatch.setattr("aeval.provenance.build_runtime_lock", lambda **kwargs: runtime_lock)
+    monkeypatch.setattr(
+        "aeval.suite_loader.composition.suite_source_commit", lambda path, extra=(): "a" * 40
+    )
+
+    run_dir = tmp_path / "excluded"
+    result = runner.invoke(app, [
+        "run", "--suite", str(native_suite_dir), "--run-dir", str(run_dir),
+        "--store", str(tmp_path / "store.sqlite3"), "--harbor-cli", "test-harbor",
+    ])
+    assert result.exit_code == 0, result.output
+    assert "sealed" in result.output
+    assert "excluded 1 trial(s): infra_invalid" in result.output
+    assert "0/1 trial(s) scored" in result.output
+    assert "aeval_run_summary.json" in result.output
 
 
 def test_run_records_intent_in_store_before_harbor(tmp_path, native_suite_dir, harbor_calls):
@@ -556,7 +673,7 @@ def test_report_refuses_unrecorded_run(tmp_path, runtime_lock):
         "report", "--store", str(store_path), "run-1", "run-ghost",
     ])
     assert result.exit_code == 3
-    assert "not in the store" in result.output
+    assert "is not recorded in any of the given stores" in result.output
 
 
 # --- E2E: the runtime lock must pin the sandbox image -------------
