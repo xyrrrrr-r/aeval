@@ -711,6 +711,12 @@ class TrialRecord(BaseModel):
     # store (its column list never sees it) because an absolute host
     # path is not part of the record's identity.
     artifact_base: str | None = None
+    # Runtime-only: grader_id → gradeCategory key (family binding). The
+    # assembly pipeline injects the family each engine was loaded FOR,
+    # so a family engine can read its own anchors from the sealed copy
+    # (``{task_id: {family: anchors}}``, v4 design). Same discipline as
+    # ``artifact_base``: never persisted, never part of identity.
+    grade_bindings: dict[str, str] | None = None
     grades: list[GradeResult] = Field(default_factory=list)
     verdict: Verdict | None = None
     fork: ForkLineage | None = None
@@ -974,25 +980,14 @@ class RunManifest(BaseModel):
     # 存进清单后报告不依赖套件目录即可渲染。空时不参与摘要：清单是密
     # 封证据，加字段不能让旧清单的重算值漂移。
     task_titles: dict[str, str] = Field(default_factory=dict)
-    # 类别聚合（报告的「按类别结果」）：类别键 → 中文显示名，以及无点
-    # 分前缀任务的默认类别。任务归组规则是确定性的（task_id 首个点前
-    # 的前缀，无点归 default），所以只需封存名字与默认值。同 task_titles
-    # 的摘要纪律：空值不进摘要。
-    category_names: dict[str, str] = Field(default_factory=dict)
-    default_category: str | None = None
-    # 维度模型（评分参数）：categories 详式
-    # （name/block/weight/threshold/redline）+ blocks + redline_tasks +
-    # default。空时不参与摘要（同 task_titles 的纪律）。
+    # 维度模型（v5）：每族一份的密封声明（families）+ 大块表。空时不
+    # 参与摘要（同 task_titles 的纪律）。
     dimension_model: dict[str, object] = Field(default_factory=dict)
 
     def digest(self) -> str:
         exclude = {"created_at"}
         if not self.task_titles:
             exclude.add("task_titles")
-        if not self.category_names:
-            exclude.add("category_names")
-        if self.default_category is None:
-            exclude.add("default_category")
         if not self.dimension_model:
             exclude.add("dimension_model")
         return _digest(self.model_dump(mode="json", exclude=exclude))

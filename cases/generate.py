@@ -374,48 +374,195 @@ def _materialize(suite_dir: Path, categories, overrides) -> int:
             titles[case_id] = title
             total += 1
         print(f"{suite_dir.name}: {category:16s} {len(cases):3d} cases")
-    # 库属任务的中文显示名（报告用）。独立文件、整文件重写：注入器只
-    # 拥有这个名字，套件自有任务的显示名放 task_titles.yaml，加载器
-    # 合并两者（套件侧优先）——混合套件互不干扰。
-    (suite_dir / "task_titles.cases.yaml").write_text(
-        "# 由 aeval/cases/generate.py 生成 —— 库属任务的中文显示名。\n"
-        "# 套件自有任务的显示名放 task_titles.yaml（加载时合并，套件侧优先）。\n"
-        + yaml.safe_dump(titles, allow_unicode=True, sort_keys=True),
-        encoding="utf-8",
-    )
-    # 维度模型（评分参数）：选中类别的显示名 +
-    # 大块 + 权重 + 阈值 + 红线标记。任务归组由报告侧按 task_id 首
-    # 个点前的前缀确定性推导；这里封存的是评分参数，消费套件可在
-    # task_categories.yaml 覆盖任何字段（套件侧优先）。
-    # 红线 = 安全语义探测（异常处理的鉴权/重放/OOM、工具安全审计的
-    # SSRF/敏感路径）：阈值 1.0、权重翻倍——红线没有「部分达标」。
-    used_blocks = {_CATEGORY_BLOCK_OF[category] for category in categories}
-    model = {
-        "blocks": {
-            key: _CATEGORY_BLOCKS[key]
-            for key in _CATEGORY_BLOCKS
-            if key in used_blocks
-        },
-        "categories": {
-            category: {
-                "name": _CATEGORY_LINES[category].split("：", 1)[0],
-                "block": _CATEGORY_BLOCK_OF[category],
-                "weight": 2.0 if category in _REDLINE_CATEGORIES else 1.0,
-                "threshold": 1.0 if category in _REDLINE_CATEGORIES else 0.9,
-                "redline": category in _REDLINE_CATEGORIES,
-            }
-            for category in categories
-        },
-    }
-    (suite_dir / "task_categories.cases.yaml").write_text(
-        "# 由 aeval/cases/generate.py 生成 —— 库属类别的维度模型\n"
-        "# （显示名/大块/权重/阈值/红线；评分参数，不是判定语义）。\n"
-        "# 套件自有类别或覆盖项放 task_categories.yaml（合并时套件侧\n"
-        "# 优先）。\n"
-        + yaml.safe_dump(model, allow_unicode=True, sort_keys=True),
-        encoding="utf-8",
-    )
+    # 类别声明 = 分组式指标族（v5）：每类一个 families/<key>.yaml，
+    # 族只分组（metrics 为空），判定由官方基线给出（engine.impl == 基线的
+    # impl）；显示名/大块/权重/阈值/红线与逐任务标题都在族声明里，不再有
+    # task_categories/task_titles 侧车文件。
+    _write_families(suite_dir, categories, titles)
     return total
+
+
+_LIBRARY_BASELINE_FALLBACK = "graders/sbench_outcome.py@v1"
+
+
+def _baseline_impl(suite_dir: Path) -> str:
+    """消费套件的官方基线 impl（分组族的 engine 必须与它相同）。
+
+    注入进一个还没有 suite.yaml 的新套件时用库的默认基线。
+    """
+    suite_yaml = suite_dir / "suite.yaml"
+    if suite_yaml.is_file():
+        try:
+            data = yaml.safe_load(suite_yaml.read_text(encoding="utf-8")) or {}
+        except yaml.YAMLError:
+            data = {}
+        impl = (
+            ((data.get("verdict") or {}).get("graders") or {})
+            .get("default", {})
+            .get("impl")
+        )
+        if isinstance(impl, str) and impl:
+            return impl
+    return _LIBRARY_BASELINE_FALLBACK
+
+
+def _family_body(category: str, titles: dict[str, str], baseline_impl: str) -> str:
+    model = _category_model(category)
+    members = {
+        task_id: {"title": title, "role": "home"}
+        for task_id, title in sorted(titles.items())
+        if task_id.split(".")[0] == category
+    }
+    body = {
+        "name": model["name"],
+        "block": model["block"],
+        "weight": model["weight"],
+        "threshold": model["threshold"],
+        "redline": model["redline"],
+        "engine": {"impl": baseline_impl, "layer": "outcome", "veto": False},
+        "metrics": [],
+        "scope": members,
+    }
+    return (
+        "# 由 aeval/cases/generate.py 生成 —— 分组式指标族（v5）：族只分组，\n"
+        "# 判定由官方基线给出（engine.impl == verdict.graders.default.impl）；\n"
+        "# 评分参数（显示名/大块/权重/阈值/红线）与逐任务标题都在这里声明。\n"
+        + yaml.safe_dump(body, allow_unicode=True, sort_keys=False)
+    )
+
+
+def _category_model(category: str) -> dict:
+    """库属类别的评分参数（红线 = 阈值 1.0、权重翻倍）。"""
+    return {
+        "name": _CATEGORY_LINES[category].split("：", 1)[0],
+        "block": _CATEGORY_BLOCK_OF[category],
+        "weight": 2.0 if category in _REDLINE_CATEGORIES else 1.0,
+        "threshold": 1.0 if category in _REDLINE_CATEGORIES else 0.9,
+        "redline": category in _REDLINE_CATEGORIES,
+    }
+
+
+def _write_families(suite_dir: Path, categories, titles: dict[str, str]) -> None:
+    """写选中类别的族声明；清掉反选/退役类别的族文件；同步激活清单。"""
+    baseline_impl = _baseline_impl(suite_dir)
+    families_dir = suite_dir / "families"
+    families_dir.mkdir(exist_ok=True)
+    owned = set(EXPECTED_COUNTS) | _RETIRED_CATEGORIES
+    for stale in sorted(families_dir.glob("*.yaml")):
+        if stale.stem in owned and stale.stem not in categories:
+            stale.unlink()
+    for category in categories:
+        (families_dir / f"{category}.yaml").write_text(
+            _family_body(category, titles, baseline_impl), encoding="utf-8"
+        )
+    _sync_activation(suite_dir, categories)
+    _sync_blocks(suite_dir, categories)
+
+
+_ACTIVATION_HEADER = "families:"
+_BLOCKS_HEADER = "blocks:"
+
+
+def _activation_lines(categories) -> list[str]:
+    return [f"{_ACTIVATION_HEADER}\n"] + [
+        f"  - families/{category}.yaml\n" for category in categories
+    ]
+
+
+def _block_lines(categories) -> list[str]:
+    """选中类别用到的大块显示名（v5：块名随族声明回到套件里）。
+
+    大块是雷达轴/维度表的显示维度，它的显示名本来住在被 v5 退役的
+    ``task_categories*.yaml`` 里；族声明只带大块**键**，显示名必须有
+    个家——就在 ``suite.yaml`` 的 ``blocks:``。少了它，报告和面板会
+    退回原始键（``basic``/``core``）。
+    """
+    keys = sorted({_CATEGORY_BLOCK_OF[category] for category in categories})
+    return [f"{_BLOCKS_HEADER}\n"] + [
+        f"  {key}: {_CATEGORY_BLOCKS[key]}\n" for key in keys
+    ]
+
+
+def _sync_activation(suite_dir: Path, categories) -> None:
+    """把套件的 families 激活清单同步到选中类别（行级编辑，
+    保留套件自写的注释与格式）。"""
+    suite_yaml = suite_dir / "suite.yaml"
+    if not suite_yaml.is_file():
+        return
+    lines = suite_yaml.read_text(encoding="utf-8").splitlines(keepends=True)
+    start = next(
+        (i for i, line in enumerate(lines) if line.strip() == _ACTIVATION_HEADER),
+        None,
+    )
+    desired = _activation_lines(categories)
+    if start is None:
+        insert = next(
+            (i for i, line in enumerate(lines) if line.startswith("verdict:")),
+            len(lines),
+        )
+        suite_yaml.write_text(
+            "".join(lines[:insert] + desired + lines[insert:]), encoding="utf-8"
+        )
+        return
+    end = start + 1
+    while end < len(lines) and lines[end].lstrip().startswith("- "):
+        end += 1
+    suite_yaml.write_text(
+        "".join(lines[:start] + desired + lines[end:]), encoding="utf-8"
+    )
+
+
+def _indented_block_end(lines, start: int) -> int:
+    """``start`` 是一个顶层键行：吃掉它下面所有缩进行。"""
+    end = start + 1
+    while end < len(lines) and lines[end][:1] in (" ", "\t", "\n"):
+        end += 1
+    return end
+
+
+def _sync_blocks(suite_dir: Path, categories) -> None:
+    """把大块显示名同步进 suite.yaml（行级编辑，保留注释与其余格式）。
+
+    位置紧跟在 ``families:`` 激活清单之后（与手写套件一致）；没有该
+    段时插在 ``verdict:`` 之前。
+    """
+    suite_yaml = suite_dir / "suite.yaml"
+    if not suite_yaml.is_file():
+        return
+    text = suite_yaml.read_text(encoding="utf-8")
+    lines = text.splitlines(keepends=True)
+    desired = _block_lines(categories)
+    start = next(
+        (i for i, line in enumerate(lines) if line.strip() == _BLOCKS_HEADER),
+        None,
+    )
+    if start is not None:
+        end = _indented_block_end(lines, start)
+    else:
+        anchor = next(
+            (i for i, line in enumerate(lines) if line.strip() == _ACTIVATION_HEADER),
+            None,
+        )
+        if anchor is None:
+            end = start = next(
+                (i for i, line in enumerate(lines) if line.startswith("verdict:")),
+                len(lines),
+            )
+        else:
+            end = start = _indented_block_end(lines, anchor)
+    fresh = "".join(lines[:start] + desired + lines[end:])
+    if fresh != text:
+        suite_yaml.write_text(fresh, encoding="utf-8")
+
+
+def _section_lines(text: str, header: str) -> list[str]:
+    """取顶层键段（键行 + 其缩进条目），去掉空行与换行符后比较。"""
+    lines = text.splitlines(keepends=True)
+    start = next((i for i, line in enumerate(lines) if line.strip() == header), None)
+    if start is None:
+        return []
+    end = _indented_block_end(lines, start)
+    return [line.strip() for line in lines[start:end] if line.strip()]
 
 
 def _check(suite_dir: Path, categories, overrides) -> int:
@@ -446,15 +593,43 @@ def _check(suite_dir: Path, categories, overrides) -> int:
                 # 选中类别的缺失/漂移已在上一循环报过；这里抓的是反选
                 # 类别的残留——Harbor 仍会发现它们，必须显式清理。
                 drift.append(f"stale injected task: {rel}")
-        # 显示名/类别声明文件同样纳入漂移检测：整文件比对（反选类别
-        # 后残留的条目会以文件 diff 的形式暴露）。
-        for generated in ("task_titles.cases.yaml", "task_categories.cases.yaml"):
-            live_side = suite_dir / generated
-            if not live_side.is_file():
-                drift.append(f"missing from suite root: {generated}")
-            elif live_side.read_text(encoding="utf-8") != \
-                    (fresh / generated).read_text(encoding="utf-8"):
-                drift.append(f"differs from injected: {generated}")
+        # 族声明与激活清单同样纳入漂移检测：整文件比对（反选类别的残留
+        # 条目会以文件 diff / 缺行 / 多行的形式暴露）。
+        for category in categories:
+            rel = f"families/{category}.yaml"
+            live_family = suite_dir / rel
+            # 与"新鲜注入"的字节比对（等价于重新生成，且不依赖外部状态）
+            want = (fresh / rel).read_text(encoding="utf-8")
+            if not live_family.is_file():
+                drift.append(f"missing from suite root: {rel}")
+            elif live_family.read_text(encoding="utf-8") != want:
+                drift.append(f"differs from injected: {rel}")
+        owned = set(EXPECTED_COUNTS) | _RETIRED_CATEGORIES
+        for stale in sorted((suite_dir / "families").glob("*.yaml")):
+            if stale.stem in owned and stale.stem not in categories:
+                drift.append(f"stale family declaration: {stale.name}")
+        live_yaml = suite_dir / "suite.yaml"
+        activation = [
+            line.strip() for line in live_yaml.read_text(encoding="utf-8").splitlines()
+            if line.strip().startswith("- families/")
+        ]
+        want_activation = [
+            line.strip() for line in _activation_lines(categories)[1:]
+        ]
+        if activation != want_activation:
+            drift.append(
+                "suite.yaml families list differs from injected: "
+                f"{activation} != {want_activation}"
+            )
+        live_blocks = _section_lines(
+            live_yaml.read_text(encoding="utf-8"), _BLOCKS_HEADER
+        )
+        want_blocks = [line.strip() for line in _block_lines(categories) if line.strip()]
+        if live_blocks != want_blocks:
+            drift.append(
+                "suite.yaml blocks differ from injected: "
+                f"{live_blocks} != {want_blocks}"
+            )
         if drift:
             for line in drift[:20]:
                 print("drift: " + line)

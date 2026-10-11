@@ -1,0 +1,23 @@
+# 由 aeval/cases/generate.py 生成 —— 分组式指标族（v5）：族只分组，
+# 判定由官方基线给出（engine.impl == verdict.graders.default.impl）；
+# 评分参数（显示名/大块/权重/阈值/红线）与逐任务标题都在这里声明。
+name: 基础连通
+block: basic
+weight: 1.0
+threshold: 0.9
+redline: false
+engine:
+  impl: graders/sbench_outcome.py@v1
+  layer: outcome
+  veto: false
+metrics: []
+scope:
+  health.engine_ready:
+    title: 引擎就绪
+    role: home
+  health.sam_memory_diagnosis:
+    title: 记忆系统连通性诊断
+    role: home
+  health.service_alive:
+    title: 服务存活
+    role: home

@@ -3,15 +3,25 @@
 A suite is a directory containing ``suite.yaml`` under a suites root.
 Loading is fail-loud: duplicates, overlaps with Harbor-owned facts,
 missing mandatory sections and bad provenance all raise SuiteError.
+
+New format (``families:`` listed): the family declarations in
+``families/<key>.yaml`` are loaded here too — strict parsing
+(unknown fields are errors, P9), one-way locking (a listed file must
+exist and parse, D6), key-conflict detection, (case, engine) join
+uniqueness (P4) and guard/family no-double-run. The activated files'
+bytes join ``overlay_chain_digest`` (v4 design) — editing a family changes
+run identity; unactivated library files are inert.
 """
 
 from __future__ import annotations
 
+from hashlib import sha256
 from pathlib import Path, PurePosixPath, PureWindowsPath
-from typing import Sequence
+from typing import Any, Sequence
 
 import yaml
 
+from aeval.suite_loader.catalog import bind_metric_catalog
 from aeval.suite_loader.inheritance import (
     chain_digest_of,
     check_no_harbor_overlap,
@@ -19,10 +29,13 @@ from aeval.suite_loader.inheritance import (
     resolve_inheritance,
 )
 from aeval.suite_models import (
+    FamilySpec,
+    GraderDeclaration,
     HarborInputs,
     ResolvedSuite,
     SuiteError,
     SuiteOverlay,
+    SuiteSource,
     overlay_digest_of,
 )
 from aeval.contracts import (
@@ -67,144 +80,146 @@ def discover_suites(suites_dirs: Sequence[Path]) -> list[Path]:
     return found
 
 
-def _read_titles_file(path: Path) -> dict[str, str]:
-    """读一个 task 标题文件：缺失返回空；内容必须是纯 str→str 映射。
+def _load_families(
+    suite_dir: Path, declared: Sequence[str], baseline_impl: str | None
+) -> tuple[dict[str, FamilySpec], dict[str, str], list[SuiteSource]]:
+    """加载激活的族声明（单向锁定，D6；严格解析，P9）。
 
-    坏文件立刻报错而不是静默忽略——显示名错了和判分锚错了一样误
-    导人。
+    返回 ``(族键 → 规格, 族键 → 相对路径, 激活文件的 chain 来源)``。
+    逐条 fail-closed（v4 加载期表）：
+
+    - 列出的文件缺失 / 非 YAML 映射 / 解析失败 → 报错；
+    - 未知字段（pydantic ``extra="forbid"``）→ 报错；
+    - 同套件内类别键冲突（两路径同文件名主干）→ 报错；
+    - outcome 层引擎但 impl ≠ 官方基线 → 报错（分组式类别是 D7
+      特例的唯一豁免：引擎 = default 槽 impl）；
+    - 同一 (用例, 引擎 impl) 被两个类别声明 → 报错（join 唯一，P4）；
+    - 同一 impl 同时出现在守卫与族 → 在 load_suite 汇总处报错。
     """
-    if not path.is_file():
-        return {}
-    try:
-        data = yaml.safe_load(path.read_text("utf-8")) or {}
-    except yaml.YAMLError as exc:
-        raise SuiteError(f"{path}: invalid YAML: {exc}") from exc
-    if not isinstance(data, dict) or not all(
-        isinstance(key, str) and isinstance(value, str) for key, value in data.items()
-    ):
-        raise SuiteError(
-            f"{path}: expected a flat task_id -> title string mapping"
-        )
-    return data
-
-
-def _load_task_titles(suite_dir: Path) -> dict[str, str]:
-    """套件的中文任务显示名（task_id → 标题），报告渲染用。
-
-    两个来源、互不干扰：``task_titles.yaml`` 是套件自写的（它自有任
-    务的显示名），``task_titles.cases.yaml`` 是共享用例库注入器生成
-    的（库属任务，标题来自各类别 checker 的 CASES）。合并时套件侧
-    优先——混合套件里同名任务的命名权在套件。
-    """
-    titles: dict[str, str] = {}
-    titles.update(_read_titles_file(suite_dir / "task_titles.cases.yaml"))
-    titles.update(_read_titles_file(suite_dir / "task_titles.yaml"))
-    return titles
-
-
-_DEFAULT_THRESHOLD = 0.9
-_DEFAULT_WEIGHT = 1.0
-
-
-def _parse_dimension_spec(raw: object) -> dict:
-    """一个类别声明的规范形：str（只有显示名）或映射（name/block/
-    weight/threshold/redline），未声明的字段取默认。坏类型报错。"""
-    if isinstance(raw, str):
-        return {
-            "name": raw, "block": "other", "weight": _DEFAULT_WEIGHT,
-            "threshold": _DEFAULT_THRESHOLD, "redline": False,
-        }
-    if not isinstance(raw, dict):
-        raise SuiteError("category value must be a display name or a mapping")
-    spec = {
-        "name": raw.get("name"),
-        "block": raw.get("block", "other"),
-        "weight": raw.get("weight", _DEFAULT_WEIGHT),
-        "threshold": raw.get("threshold", _DEFAULT_THRESHOLD),
-        "redline": bool(raw.get("redline", False)),
-    }
-    if not isinstance(spec["name"], str) or not spec["name"]:
-        raise SuiteError("category.name must be a non-empty string")
-    if not isinstance(spec["block"], str):
-        raise SuiteError("category.block must be a block key string")
-    if not isinstance(spec["weight"], (int, float)) or spec["weight"] <= 0:
-        raise SuiteError("category.weight must be a positive number")
-    if not isinstance(spec["threshold"], (int, float)) or not (
-        0 < spec["threshold"] <= 1
-    ):
-        raise SuiteError("category.threshold must be in (0, 1]")
-    return spec
-
-
-def _load_task_categories(suite_dir: Path) -> dict[str, object]:
-    """维度模型声明：task_categories.yaml（套件自写）与注入器生成的
-    task_categories.cases.yaml 合并（套件侧优先）。
-
-    结构（维度模型——阈值/权重/大块/红线）::
-
-        categories:
-          a2a: A2A 协议            # 简式：只有显示名
-          error:                    # 详式：
-            name: 异常处理
-            block: redline          # 所属大块键
-            weight: 2.0             # 权重（四象限纵轴）
-            threshold: 1.0          # 阈值（达标度 = 通过率 / 阈值）
-            redline: true           # 红线维度：低于阈值即告警
-        blocks: {basic: 基础连通, ...}
-        redline_tasks: [secret-guard, ...]   # 任务级红线（跨类别）
-        default: intelligence       # 无点分前缀任务归到的类别
-
-    报告/面板按 task_id 首个点前的前缀归组；维度模型只是评分参数，
-    不改变任何判定/分母语义。
-    """
-    merged: dict[str, dict] = {}
-    blocks: dict[str, str] = {}
-    redline_tasks: list[str] = []
-    default: str | None = None
-    for name in ("task_categories.cases.yaml", "task_categories.yaml"):
-        path = suite_dir / name
-        if not path.is_file():
-            continue
-        try:
-            data = yaml.safe_load(path.read_text("utf-8")) or {}
-        except yaml.YAMLError as exc:
-            raise SuiteError(f"{path}: invalid YAML: {exc}") from exc
-        if not isinstance(data, dict):
-            raise SuiteError(f"{path}: expected a mapping with 'categories'")
-        categories = data.get("categories")
-        if not isinstance(categories, dict) or not categories:
+    families: dict[str, FamilySpec] = {}
+    paths: dict[str, str] = {}
+    sources: list[SuiteSource] = []
+    seen_cases: dict[tuple[str, str], str] = {}  # (task_id, impl) -> family key
+    for reference in declared:
+        if not isinstance(reference, str) or not reference.strip():
             raise SuiteError(
-                f"{path}: categories must be a non-empty key -> spec mapping"
+                "families entries must be non-empty relative paths"
             )
-        # 合并顺序（cases 先、套件后）已保证套件侧覆盖同名类别。
-        for key, raw in categories.items():
-            merged[key] = _parse_dimension_spec(raw)
-        raw_blocks = data.get("blocks") or {}
-        if not isinstance(raw_blocks, dict) or not all(
-            isinstance(k, str) and isinstance(v, str)
-            for k, v in raw_blocks.items()
+        rel = PurePosixPath(reference)
+        if (
+            ".." in rel.parts
+            or rel.is_absolute()
+            or PureWindowsPath(reference).is_absolute()
+            or len(rel.parts) != 2
+            or rel.parts[0] != "families"
+            or rel.suffix not in (".yaml", ".yml")
         ):
-            raise SuiteError(f"{path}: blocks must be a key -> name mapping")
-        blocks.update(raw_blocks)
-        raw_redline = data.get("redline_tasks") or []
-        if not isinstance(raw_redline, list) or not all(
-            isinstance(t, str) for t in raw_redline
-        ):
-            raise SuiteError(f"{path}: redline_tasks must be a list of task ids")
-        for task in raw_redline:
-            if task not in redline_tasks:
-                redline_tasks.append(task)
-        raw_default = data.get("default")
-        if raw_default is not None:
-            if not isinstance(raw_default, str):
-                raise SuiteError(f"{path}: default must be a category key")
-            default = raw_default
-    return {
-        "categories": merged,
-        "blocks": blocks,
-        "redline_tasks": redline_tasks,
-        "default": default,
-    }
+            raise SuiteError(
+                f"families entry must be families/<key>.yaml "
+                f"(portable relative path): {reference!r}"
+            )
+        key = rel.stem
+        path = suite_dir / rel
+        if not path.is_file():
+            raise SuiteError(
+                f"families lists {reference!r} but the file is missing "
+                "(one-way locking: listing is activation, activation requires "
+                "the declaration)"
+            )
+        if key in families:
+            raise SuiteError(
+                f"duplicate grade category key {key!r} — two activated "
+                "declarations share a file stem"
+            )
+        try:
+            raw = yaml.safe_load(path.read_text("utf-8")) or {}
+        except (OSError, UnicodeError, yaml.YAMLError) as exc:
+            raise SuiteError(f"{path}: cannot read grade category: {exc}") from exc
+        if not isinstance(raw, dict):
+            raise SuiteError(f"{path}: grade category must be a mapping")
+        try:
+            spec = FamilySpec.model_validate(raw)
+        except SuiteError:
+            raise
+        except Exception as exc:
+            raise SuiteError(f"{path}: invalid grade category {key!r}: {exc}") from exc
+        # 分组式类别豁免：outcome 层族引擎必须与官方基线同 impl（D7）。
+        if spec.engine.layer in ("outcome", "both"):
+            if baseline_impl is None or spec.engine.impl != baseline_impl:
+                raise SuiteError(
+                    f"grade category {key!r} declares an outcome-layer engine "
+                    f"{spec.engine.impl!r} — only the grouping-category special "
+                    "case allows that, and only with the baseline's own impl"
+                )
+        # v5：指标清单是判分真源，空清单只允许分组式类别（引擎 = 官方
+        # 基线、族自带零指标）。其余族漏写 metrics 是声明错误，不是
+        # "用引擎里的清单兜底"。
+        if not spec.metrics and spec.engine.impl != baseline_impl:
+            raise SuiteError(
+                f"grade category {key!r} declares no metrics — a family's "
+                "metric list is the judging truth; only the grouping-style "
+                "category (engine = the official baseline) may declare none"
+            )
+        for task_id in spec.task_ids():
+            owner = seen_cases.get((task_id, spec.engine.impl))
+            if owner is not None:
+                raise SuiteError(
+                    f"case {task_id!r} with engine {spec.engine.impl!r} is declared "
+                    f"by both {owner!r} and {key!r} — (case, engine) ownership must "
+                    "stay unique so report joins are unambiguous"
+                )
+            seen_cases[(task_id, spec.engine.impl)] = key
+        families[key] = spec
+        paths[key] = reference
+        sources.append(
+            SuiteSource(
+                path=reference,
+                digest=sha256(path.read_bytes()).hexdigest(),
+                role="family",
+            )
+        )
+    return families, paths, sources
+
+
+def _check_family_compatibility(
+    suite_dir: Path, overlay: SuiteOverlay, families: dict[str, FamilySpec]
+) -> None:
+    """族声明的互斥、防双跑与按需通道约束（加载期）。"""
+    if not families:
+        return
+    # 锚点密封通道按需强制：族里有指标吃输入 ⇒ 必须有密封通道（判分只
+    # 从密封副本读输入，重判分不依赖套件仓当前状态）。结构判定族（没有
+    # 指标吃输入）不需要这条通道，也不因缺它报错。
+    needs_anchors = any(
+        any(bool(metric.inputs) for metric in spec.metrics)
+        for spec in families.values()
+    )
+    if needs_anchors and overlay.verdict.anchors != "task_anchors":
+        raise SuiteError(
+            "verdict.anchors: task_anchors is required when a family's metrics "
+            "carry per-task inputs — judging reads inputs from the sealed copy "
+            "(a structural family that consumes no inputs does not need it)"
+        )
+    for legacy_name in ("task_categories.yaml", "task_categories.cases.yaml",
+                        "task_titles.yaml", "task_titles.cases.yaml"):
+        if (suite_dir / legacy_name).is_file():
+            raise SuiteError(
+                f"new-format suites keep grading declarations in one place: "
+                f"{legacy_name} coexists with families/ — move its "
+                "values into the family declarations"
+            )
+    guard_impls = {guard.impl for guard in overlay.verdict.guards}
+    for key, spec in families.items():
+        if spec.engine.impl in guard_impls:
+            raise SuiteError(
+                f"grader impl {spec.engine.impl!r} appears both as a guard and "
+                f"as family {key!r}'s engine — a grader runs once per trial"
+            )
+        if spec.engine.veto and spec.engine.layer == "outcome":
+            raise SuiteError(
+                f"family {key!r} engine is outcome-layer with veto — veto is a "
+                "trajectory-guard/family concern; the baseline never vetoes"
+            )
 
 
 def load_suite(path: Path, suites_root: Path | None = None) -> ResolvedSuite:
@@ -213,7 +228,9 @@ def load_suite(path: Path, suites_root: Path | None = None) -> ResolvedSuite:
     Every file in the chain goes through the Harbor-overlap check (a base
     may not restate a Harbor-owned fact either), and the chain's digests
     feed ``overlay_chain_digest`` so inherited content is part of run
-    identity — see ``aeval.suite_loader.inheritance``.
+    identity — see ``aeval.suite_loader.inheritance``. Activated family
+    declarations (new format) load the same way: their bytes join the
+    chain, so a family edit is a run-identity change (v4 design).
     """
     path = Path(path)
     suite_yaml = path / "suite.yaml"
@@ -226,10 +243,49 @@ def load_suite(path: Path, suites_root: Path | None = None) -> ResolvedSuite:
         raise
     except Exception as exc:
         raise SuiteError(f"{suite_yaml}: invalid suite overlay: {exc}") from exc
-    dimension_model = _load_task_categories(path)
-    category_names = {
-        key: spec["name"]
-        for key, spec in dimension_model["categories"].items()
+    # 族声明（新格式）：单向锁定加载 + 结构校验 + 字节进 chain digest。
+    baseline_impl = None
+    graders = overlay.verdict.graders
+    if isinstance(graders.get("default"), GraderDeclaration):
+        baseline_impl = graders["default"].impl
+    families, family_paths, family_sources = _load_families(
+        path, overlay.families, baseline_impl
+    )
+    # v5 Step 6：指标目录绑定（一处定义、两处引用）。族文件与守卫只写
+    # id 引用，定义来自 verdict.metric_catalog；绑定发生在密封模型与锚点
+    # 投影之前，所以下游读到的仍是完整定义。
+    overlay, families = bind_metric_catalog(
+        overlay, families, suite_label=str(suite_yaml)
+    )
+    _check_family_compatibility(path, overlay, families)
+    sources = [*resolution.sources, *family_sources]
+
+    # v5：判分声明以族为家，维度模型是密封映射
+    # （families/baseline/guards）——没有第二条来源，也没有
+    # 套件级 task_categories/task_titles 侧车文件。显示名与标题从族声明
+    # 的 scope 投影。grader_id 由运行入口解析模块后补
+    # （resolve_grader_identities）：报告 join 只读密封映射，不 import
+    # 判分器（P4）。families 为空（baseline-only）时也走同一条路。
+    task_titles: dict[str, str] = {}
+    for spec in families.values():
+        for task_id, binding in spec.scope.items():
+            if binding.title:
+                task_titles.setdefault(task_id, binding.title)
+    dimension_model: dict[str, object] = {
+        "families": {
+            key: spec.model_dump(mode="json", exclude_none=True)
+            for key, spec in families.items()
+        },
+        "blocks": dict(overlay.blocks),
+        "baseline": (
+            {"impl": baseline_impl}
+            if baseline_impl is not None
+            else None
+        ),
+        "guards": [
+            guard.model_dump(mode="json", exclude_none=True)
+            for guard in overlay.verdict.guards
+        ],
     }
     return ResolvedSuite(
         overlay=overlay,
@@ -237,12 +293,12 @@ def load_suite(path: Path, suites_root: Path | None = None) -> ResolvedSuite:
         # Raw child bytes: unchanged meaning, so pre-inheritance evidence
         # still recomputes.
         suite_yaml_digest=overlay_digest_of(suite_yaml),
-        overlay_chain_digest=chain_digest_of(resolution.sources, resolution.data),
-        sources=list(resolution.sources),
-        task_titles=_load_task_titles(path),
-        category_names=category_names,
-        default_category=dimension_model["default"],
+        overlay_chain_digest=chain_digest_of(sources, resolution.data),
+        sources=sources,
+        task_titles=task_titles,
         dimension_model=dimension_model,
+        families=families,
+        family_paths=family_paths,
     )
 
 
@@ -425,10 +481,46 @@ def render_suite_explanation(suite: ResolvedSuite) -> str:
     lines.append("")
     lines.append("## Verdict (from the resolved overlay)")
     lines.append(f"- requirements: {', '.join(o.verdict.requirements)}")
-    for g in o.verdict.resolved_graders():
+    graders = o.verdict.graders
+    lines.append(
+        f"- baseline (official): {graders['default'].impl}"
+        if "default" in graders
+        else "- baseline (official): ?"
+    )
+    for guard in o.verdict.guards:
         lines.append(
-            f"- grader {g.impl} layer={g.layer} veto={g.veto}"
+            f"- guard {guard.impl} layer={guard.layer} veto={guard.veto}"
+            " (suite-wide validity gate, no category row)"
         )
+    if not o.verdict.guards:
+        lines.append("- guards: (none)")
+    lines.append(f"- anchors channel: {o.verdict.anchors}")
+    if suite.has_families:
+        lines.append("")
+        lines.append("## Grade categories (families, activation order)")
+        for key, spec in suite.families.items():
+            engine = spec.engine
+            veto_mark = " veto" if engine.veto else ""
+            lines.append(
+                f"- {key} ({spec.name}, block={spec.block}, weight={spec.weight:g}, "
+                f"threshold={spec.threshold:g}"
+                + (", redline" if spec.redline else "")
+                + f") — engine {engine.impl} layer={engine.layer}{veto_mark}"
+            )
+            for task_id in spec.task_ids():
+                binding = spec.scope.get(task_id)
+                title = f"「{binding.title}」" if binding and binding.title else ""
+                inputs = spec.inputs_for(task_id)
+                inputs_mark = (
+                    " · 输入 " + "/".join(sorted(inputs)) if inputs else ""
+                )
+                lines.append(f"    · {task_id} [{case.role}] {title}{inputs_mark}")
+        lines.append("")
+        lines.append("## Blocks (radar axes)")
+        for block, name in o.blocks.items():
+            lines.append(f"- {block}: {name}")
+        if not o.blocks:
+            lines.append("- (none)")
     lines.append("")
     lines.append("## Image narrowing (overlay, replaces Harbor values)")
     for name, action in o.image.items():

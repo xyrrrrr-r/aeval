@@ -1,0 +1,44 @@
+# 由 aeval/cases/generate.py 生成 —— 分组式指标族（v5）：族只分组，
+# 判定由官方基线给出（engine.impl == verdict.graders.default.impl）；
+# 评分参数（显示名/大块/权重/阈值/红线）与逐任务标题都在这里声明。
+name: 核心对话
+block: conv
+weight: 1.0
+threshold: 0.9
+redline: false
+engine:
+  impl: graders/sbench_outcome.py@v1
+  layer: outcome
+  veto: false
+metrics: []
+scope:
+  chat.basic:
+    title: 基础对话
+    role: home
+  chat.concurrent_requests:
+    title: 并发请求
+    role: home
+  chat.empty_message:
+    title: 空消息
+    role: home
+  chat.multi_turn_context:
+    title: 多轮上下文
+    role: home
+  chat.non_streaming:
+    title: 非流式对话
+    role: home
+  chat.oversized_input:
+    title: 超长输入
+    role: home
+  chat.special_chars:
+    title: 特殊字符
+    role: home
+  chat.sse_event_format:
+    title: SSE 事件格式
+    role: home
+  chat.streaming:
+    title: 流式对话
+    role: home
+  chat.unicode_content:
+    title: Unicode 内容
+    role: home

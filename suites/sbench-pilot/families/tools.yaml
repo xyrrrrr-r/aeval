@@ -1,0 +1,32 @@
+# 由 aeval/cases/generate.py 生成 —— 分组式指标族（v5）：族只分组，
+# 判定由官方基线给出（engine.impl == verdict.graders.default.impl）；
+# 评分参数（显示名/大块/权重/阈值/红线）与逐任务标题都在这里声明。
+name: 工具系统
+block: basic
+weight: 1.0
+threshold: 0.9
+redline: false
+engine:
+  impl: graders/sbench_outcome.py@v1
+  layer: outcome
+  veto: false
+metrics: []
+scope:
+  tools.concurrent_safety:
+    title: 并发安全
+    role: home
+  tools.get_current_time:
+    title: get_current_time
+    role: home
+  tools.read_skill:
+    title: read_skill
+    role: home
+  tools.registry_list:
+    title: 工具注册列表
+    role: home
+  tools.sub_agent:
+    title: sub_agent
+    role: home
+  tools.web_fetch:
+    title: web_fetch
+    role: home

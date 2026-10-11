@@ -1,0 +1,38 @@
+# 由 aeval/cases/generate.py 生成 —— 分组式指标族（v5）：族只分组，
+# 判定由官方基线给出（engine.impl == verdict.graders.default.impl）；
+# 评分参数（显示名/大块/权重/阈值/红线）与逐任务标题都在这里声明。
+name: A2A 协议
+block: orch
+weight: 1.0
+threshold: 0.9
+redline: false
+engine:
+  impl: graders/sbench_outcome.py@v1
+  layer: outcome
+  veto: false
+metrics: []
+scope:
+  a2a.agent_card:
+    title: Agent Card
+    role: home
+  a2a.cancel_task:
+    title: 取消任务
+    role: home
+  a2a.duplicate_task_id:
+    title: 重复 task_id
+    role: home
+  a2a.error_codes:
+    title: 错误码
+    role: home
+  a2a.get_task:
+    title: 查询任务
+    role: home
+  a2a.no_auth:
+    title: 鉴权
+    role: home
+  a2a.send_task:
+    title: 发送任务
+    role: home
+  a2a.task_status_history:
+    title: 状态历史
+    role: home

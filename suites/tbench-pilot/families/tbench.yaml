@@ -1,0 +1,22 @@
+# 分组式指标族（v5）：族只分组，判定由官方基线（terminal-bench 自带
+# verifier 的 reward）给出；反作弊是套件级守卫，不是这一族的指标。
+name: terminal-bench 任务
+block: core
+weight: 1.0
+threshold: 0.6
+redline: false
+engine:
+  impl: graders/tbench_outcome.py@v1
+  layer: outcome
+  veto: false
+metrics: []
+scope:
+  hello-world:
+    title: 你好世界·创建 hello.txt
+    role: home
+  openssl-selfsigned-cert:
+    title: OpenSSL·自签证书
+    role: home
+  sqlite-db-truncate:
+    title: SQLite·损坏库恢复
+    role: home

@@ -1,7 +1,7 @@
 """静态可视化面板（markdown 报告之外的第二种渲染面）。
 
 面板与 markdown 报告消费同一份 ``aggregate_run`` 的 ``RunSummary``
-（类别聚合也走同一个 ``rollup_categories``）——面板不另算任何数字，
+（族聚合走同一个 ``rollup_families``）——面板不另算任何数字，
 只换呈现；报告里的每个数都能在面板上找到同一个值。
 
 产物是自包含单文件 HTML：内联 CSS/SVG、零外部依赖、零脚本，离线
@@ -15,11 +15,15 @@ from html import escape
 
 from aeval.bundle.attestation import ComparabilityReport
 from aeval.metrics.report import (
-    CategoryRollup,
     RunSummary,
     _VERDICT_ZH,
-    category_pass_pow_k,
-    rollup_categories,
+    baseline_rows_to_render,
+    family_pass_pow_k,
+    guard_metric_rows,
+    guard_role,
+    metric_detail_absence_note,
+    metric_display,
+    task_metric_split,
 )
 from aeval.metrics.watermark import Watermark, score_watermark
 
@@ -104,6 +108,13 @@ th { color: var(--muted); font-weight: 500; font-size: 12.5px;
      border-top: 1px solid var(--line); }
 td:first-child, th:first-child { text-align: left; }
 tr:last-child td { border-bottom: none; }
+table.guard-metrics { margin-top: 6px; }
+table.guard-metrics td.mid, table.guard-metrics th.mid,
+table.guard-metrics td.mnote, table.guard-metrics th.mnote { text-align: left; }
+table.guard-metrics td.gname { vertical-align: top; white-space: nowrap; }
+table.guard-metrics td.mnote { color: var(--muted); font-size: 12.5px; }
+table.guard-metrics small { display: block; color: var(--muted);
+                            font-weight: 400; }
 td { border-bottom: 1px solid var(--line); }
 td.tbar { min-width: 120px; }
 .mbar { height: 8px; border-radius: 4px; background: var(--chipbg);
@@ -272,22 +283,338 @@ def _exclusion_panel(summary: RunSummary) -> str:
     )
 
 
-def _category_section(summary: RunSummary, rollup: list[CategoryRollup]) -> str:
+def _family_section(summary: RunSummary, families) -> str:
+    """族行（D7）：族自身 GradeResult 判定聚合；排除列带原因。"""
     rows = []
-    for cat in rollup:
-        pk = category_pass_pow_k(cat, summary.k)
+    for family in families:
+        pk = family_pass_pow_k(family, summary.k)
+        excluded = ""
+        if family.cannot_judge:
+            reasons = "；".join(
+                reason for reason, _count in (
+                    r.split(" ×", 1) for r in family.cannot_judge_reasons
+                )
+            ) if family.cannot_judge_reasons else "无法判定"
+            excluded = (
+                f'<div class="pk" style="color:var(--warn, #b8860b)">'
+                f"排除 {family.cannot_judge}（{_e(reasons)}）</div>"
+            )
+        engines = "、".join(family.engines)
+        division = ""
+        if family.deciding_fails or family.foreign_fails:
+            division = (
+                f'<div class="pk">判定分工：本族 {family.deciding_fails} · '
+                f"他层 {family.foreign_fails}</div>"
+            )
         rows.append(
             f'<div class="catrow"><div class="name">'
-            f"{_e(cat.display)}<small>({_e(cat.key)}) · "
-            f"{cat.tasks} 任务</small></div>"
-            f"{_bar(cat.passes, cat.fails, cat.valid)}"
+            f"{_e(family.display)}<small>({_e(family.key)}) · "
+            f"{family.tasks} 任务 · 引擎 {_e(engines)}</small></div>"
+            f"{_bar(family.passes, family.fails, family.valid)}"
             f'<div class="pk">pass^k {_fmt(pk)} · '
-            f"{cat.passes}/{cat.valid}</div></div>"
+            f"{family.passes}/{family.valid}</div>{division}{excluded}</div>"
         )
     return (
-        "<h2>按类别结果</h2>"
+        "<h2>按类别结果（指标族）</h2>"
         f'<div class="catrows">{"".join(rows)}</div>'
+        f"{_verdict_source_html(summary)}"
     )
+
+
+def _verdict_source_html(summary: RunSummary) -> str:
+    """终判来源分解：每个失败试次由哪一层判失败（基线/族阈值/守卫 veto）。
+
+    没有这一节，"族行数字与基线相近"就只能被读成"族是基线的复述"。
+    """
+    sources = summary.verdict_sources
+    if not sources:
+        return ""
+    rows = []
+    for source in sources:
+        task = f"{source.task_id} #{source.trial_index}"
+        title = summary.task_titles.get(source.task_id)
+        if title:
+            task = f"{title}({source.task_id}) #{source.trial_index}"
+        rows.append(
+            "<tr>"
+            f"<td><code>{_e(source.trial_id)}</code></td>"
+            f"<td>{_e(task)}</td>"
+            f"<td>{_e('、'.join(source.deciders))}</td>"
+            f"<td>{_e('、'.join(source.roles))}</td>"
+            f"<td>{_e(source.mechanism)}</td>"
+            f"<td>{_e(source.note or '—')}</td>"
+            "</tr>"
+        )
+    baseline_n = sum(1 for s in sources if "官方基线" in s.roles)
+    veto_n = sum(1 for s in sources if s.mechanism == "veto")
+    family_n = sum(
+        1
+        for s in sources
+        if s.mechanism != "veto" and any(r.startswith("族 ") for r in s.roles)
+    )
+    guard_n = sum(
+        1 for s in sources if s.mechanism != "veto" and "守卫" in s.roles
+    )
+    parts = [f"官方基线 {baseline_n}"]
+    if family_n:
+        parts.append(f"族 {family_n}")
+    if guard_n:
+        parts.append(f"守卫 {guard_n}")
+    if veto_n:
+        parts.append(f"veto {veto_n}")
+    return (
+        "<h2>终判来源分解</h2>"
+        '<p class="meta">折叠序：任一 veto fail → fail；否则任一 fail → fail；'
+        "否则任一 cannot_judge → cannot_judge；否则 pass。</p>"
+        '<table><thead><tr><th>失败试次</th><th>任务</th>'
+        "<th>决定性判分器</th><th>角色</th><th>机制</th><th>对照</th>"
+        f"</tr></thead><tbody>{''.join(rows)}</tbody></table>"
+        f'<p class="meta">失败 {len(sources)} = {" · ".join(parts)}'
+        "（层计数：一个试次可被多层判 fail，veto 层优先）</p>"
+    )
+
+
+def _metric_detail_html(detail) -> str:
+    """逐项指标：族 → 任务 → 指标（v5 Step 3：用例退场）；基线与守卫明细单列。"""
+    if detail is None:
+        return ""
+    blocks = []
+    for block in detail.families:
+        if not block.declared:
+            # 归组族（metrics: []）没有自己的指标——规则由基线/守卫给。
+            # 空表不提（12 个归组族各来一张空表，只会把同一批基线明细
+            # 重复十二遍）。
+            continue
+        engines = "、".join(block.engine_labels) or "—"
+        metric_rows = []
+        totals: dict[str, list[int]] = {}
+        for case in block.tasks:
+            for item in case.metrics:
+                bucket = totals.setdefault(item.metric_id, [0, 0, 0, 0])
+                bucket[0] += item.counts.ok
+                bucket[1] += item.counts.degraded
+                bucket[2] += item.counts.violated
+                bucket[3] += item.counts.skipped
+        declared_order = list(block.declared)
+        extra = [m for m in sorted(totals) if m not in set(declared_order)]
+        for metric_id in declared_order + extra:
+            ok, degraded, violated, skipped = totals.get(metric_id, [0, 0, 0, 0])
+            skipped_cell = str(skipped) if skipped else "0"
+            if skipped:
+                skipped_cell += " ⚠"
+            if metric_id not in totals:
+                # 声明了却没有判定落点：如实显示 0，不静默消失
+                row = (
+                    f'<tr><td>{_e(metric_display(metric_id))} '
+                    f'<small>声明项·本 run 未产出'
+                    f"</small></td><td>0</td><td>0</td><td>0</td>"
+                    f"<td>0</td></tr>"
+                )
+            elif metric_id in extra:
+                row = (
+                    f'<tr><td>{_e(metric_display(metric_id))} '
+                    f'<small>未在声明里</small></td>'
+                    f"<td>{ok}</td><td>{degraded}</td><td>{violated}</td>"
+                    f"<td>{skipped_cell}</td></tr>"
+                )
+            else:
+                row = (
+                    f"<tr><td>{_e(metric_display(metric_id))}</td><td>{ok}</td>"
+                    f"<td>{degraded}</td><td>{violated}</td>"
+                    f"<td>{skipped_cell}</td></tr>"
+                )
+            metric_rows.append(row)
+        case_rows = []
+        for case in block.tasks:
+            title = f"「{case.title}」" if case.title else ""
+            judged, skipped_items = task_metric_split(case, block.declared)
+            cells = []
+            for item in judged:
+                bits = []
+                if item.counts.ok:
+                    bits.append(
+                        f'<span style="color:var(--pass)">ok {item.counts.ok}</span>'
+                    )
+                if item.counts.degraded:
+                    bits.append(
+                        f'<span style="color:var(--warn, #b8860b)">'
+                        f"降级 {item.counts.degraded}</span>"
+                    )
+                if item.counts.violated:
+                    bits.append(
+                        f'<span style="color:var(--fail)">违规 {item.counts.violated}</span>'
+                    )
+                cells.append(f"{_e(metric_display(item.metric_id))}（{' · '.join(bits)}）")
+            judged_text = (
+                " · ".join(cells)
+                if cells
+                else '<span class="meta">无有效判定（全部跳过）</span>'
+            )
+            skip_cell = (
+                f'<span style="color:var(--warn, #b8860b)">{skipped_items}</span>'
+                if skipped_items
+                else "0"
+            )
+            case_rows.append(
+                f"<tr><td>{_e(case.task_id)} [{_e(case.role)}] "
+                f"{_e(title)}</td><td>{case.trials}</td>"
+                f"<td>{judged_text}</td><td>{skip_cell}</td></tr>"
+            )
+        # 声明清单不在这里复列：下面那张表就按声明顺序列同样的 id。
+        blocks.append(
+            f"<details><summary>{_e(block.display)}"
+            f'<span class="cnt">({_e(block.key)}) · 引擎 {_e(engines)} · '
+            f"适用任务 {len(block.tasks)} · 声明指标 {len(block.declared)} 项"
+            f"</span></summary>"
+            '<table><tr><th>指标（按声明顺序）</th><th>判定 ok</th><th>降级</th>'
+            "<th>违规</th><th>跳过</th></tr>"
+            f"{''.join(metric_rows)}</table>"
+            '<table><tr><th>任务</th><th>试次</th><th>本任务判的指标</th>'
+            "<th>跳过（项）</th></tr>"
+            f"{''.join(case_rows)}</table></details>"
+        )
+    baseline_guards = detail.baseline_guards
+    guard_metrics_present = any(
+        guard.metrics for guard in (baseline_guards.guards if baseline_guards else ())
+    )
+    # 基线表只列与「终判结果」不同值的行；这一节别的什么都没有 ⇒ 整块省掉
+    # （同一份事实写两遍，读者只会怀疑哪张才准）。面板的「终判结果」总会渲染，
+    # 所以这里的 final_table_rendered 恒为真。
+    baseline_rows = (
+        baseline_rows_to_render(baseline_guards, final_table_rendered=True)
+        if baseline_guards is not None
+        else ()
+    )
+    if (
+        baseline_guards is not None
+        and not (not baseline_rows and not guard_metrics_present and not blocks)
+    ):
+        labels = "、".join(baseline_guards.baseline_labels) or "—"
+        rows = []
+        for row in baseline_rows:
+            label = (
+                f"{row.title}({row.task_id})" if row.title else row.task_id
+            )
+            rows.append(
+                f"<tr><td>{_e(label)}</td><td>{row.trials}</td>"
+                f'<td style="color:var(--pass)">{row.passes}</td>'
+                f'<td style="color:var(--fail)">{row.fails}</td>'
+                f"<td>{row.cannot_judge}</td></tr>"
+            )
+        if not rows:
+            baseline_note = (
+                '<p class="meta">逐任务计数与「终判结果」逐行相同（同任务、同试次、'
+                "同通过/失败），故不复列；无法判定 = 有效 − 通过 − 失败。</p>"
+                if baseline_guards.tasks
+                else ""
+            )
+        else:
+            same = len(baseline_guards.tasks) - len(rows)
+            scope = (
+                f"只列<b>基线与「终判结果」不同值</b>的 {len(rows)} 行"
+                + (f"（其余 {same} 行同值，不复列）" if same else "（全部）")
+            )
+            baseline_note = (
+                f'<p class="meta">下表{scope}：这些行就是被守卫 veto / 族阈值改判的'
+                "行（归因见「终判来源分解」）；无法判定 = 有效 − 通过 − 失败。</p>"
+            )
+        baseline_table = (
+            "<table><tr><th>任务</th><th>试次</th><th>通过</th>"
+            "<th>失败</th><th>无法判定</th></tr>"
+            f"{''.join(rows)}</table>"
+            if rows
+            else ""
+        )
+        guard_rows = []
+        for guard in baseline_guards.guards:
+            role = guard_role(guard, baseline_guards.legacy)
+            declared_note = (
+                f" · 声明清单 {len(guard.declared)} 项 · 读密封 ATIF 轨迹"
+                if guard.declared
+                else ""
+            )
+            label = (
+                f"{_e(role)} {_e(guard.grader_label)}"
+                f"<small>（{guard.trials} 试{_e(declared_note)}）</small>"
+            )
+            rows_for_guard = guard_metric_rows(guard)
+            if not rows_for_guard:
+                guard_rows.append(
+                    f'<tr><td class="gname">{label}</td>'
+                    f'<td colspan="5" class="meta">无指标输出</td></tr>'
+                )
+                continue
+            for offset, (metric_id, ok, degraded, violated, skipped, note) in enumerate(
+                rows_for_guard
+            ):
+                # 同一判分器只在第一行写名字（rowspan），后面留空——一张表
+                # 读完一个判分器的整份清单，而不是几行合在一句里。
+                name_cell = (
+                    f'<td class="gname" rowspan="{len(rows_for_guard)}">{label}</td>'
+                    if offset == 0
+                    else ""
+                )
+                violated_cell = (
+                    f'<td style="color:var(--fail)">{violated}</td>'
+                    if violated
+                    else f"<td>{violated}</td>"
+                )
+                skipped_cell = (
+                    f'<td style="color:var(--warn, #b8860b)">{skipped}</td>'
+                    if skipped
+                    else f"<td>{skipped}</td>"
+                )
+                degraded_cell = (
+                    f'<td style="color:var(--warn, #b8860b)">{degraded}</td>'
+                    if degraded
+                    else f"<td>{degraded}</td>"
+                )
+                guard_rows.append(
+                    f"<tr>{name_cell}<td class=\"mid\">{_e(metric_id)}</td>"
+                    f"<td>{ok}</td>"
+                    f"{degraded_cell}{violated_cell}{skipped_cell}"
+                    f'<td class="mnote">{_e(note)}</td></tr>'
+                )
+        if baseline_guards.legacy:
+            title = "基线与轨迹层判分器"
+            cnt = "v4 封存模型：声明未记录族/守卫归属"
+            note = (
+                '<p class="meta">本 run 封存于 v5 指标模型之前'
+                "（dimension_model 只有 categories/blocks/redline_tasks，没有 "
+                "metric_catalog）。下面按判分层列出 store 里实际产出判定的判分器："
+                "轨迹层判分器在今天的模型里对应 classification: gate，但归属以"
+                "当时的声明为准，本页不代它断言。</p>"
+            )
+        else:
+            title = "基线与守卫"
+            cnt = "官方评分 + 有效性门，无类别行"
+            note = ""
+        guard_table = (
+            '<table class="guard-metrics"><tr><th class="gname">判分器</th>'
+            '<th class="mid">指标</th>'
+            "<th>判定 ok</th><th>降级</th><th>违规</th><th>跳过</th>"
+            '<th class="mnote">跳过原因 / 备注</th></tr>'
+            f"{''.join(guard_rows)}</table>"
+            if guard_rows
+            else ""
+        )
+        blocks.append(
+            f"<details><summary>{title}"
+            f'<span class="cnt">{cnt}</span>'
+            f"</summary>{note}<p class=\"meta\">官方基线：{_e(labels)}</p>"
+            f"{baseline_note}{baseline_table}{guard_table}</details>"
+        )
+    if not blocks:
+        # 没有指标级判定也要把话说清楚：这一节曾经静默消失，读者的第一反应
+        # 就是"指标去哪了"（sbench 型 outcome-only 契约）。
+        absence = metric_detail_absence_note(detail, final_table_rendered=True)
+        if not absence:
+            return ""
+        body = "".join(f'<p class="meta">{_e(line)}</p>' for line in absence)
+        return f"<h2>逐项指标（本 run 无指标级判定）</h2>{body}"
+    if detail.baseline_guards is not None and detail.baseline_guards.legacy:
+        return f"<h2>逐项指标（按判分层）</h2>{''.join(blocks)}"
+    return f"<h2>逐项指标（按族 / 任务）</h2>{''.join(blocks)}"
 
 
 def _task_table(summary: RunSummary, task_ids) -> str:
@@ -320,18 +647,34 @@ def _task_table(summary: RunSummary, task_ids) -> str:
     return f"<table>{head}{''.join(body)}</table>"
 
 
-def _task_section(summary: RunSummary, rollup: list[CategoryRollup] | None) -> str:
+def _task_section(
+    summary: RunSummary,
+    families=None,
+) -> str:
     # 大套件默认折叠（123 任务的明细不该一屏铺开），小套件默认展开。
     open_attr = " open" if len(summary.task_groups) <= 30 else ""
-    if rollup is not None:
+    if families:
+        # 族模式：分组键 = 声明该 task 的族集合（多值归并列）。
         blocks = []
-        for cat in rollup:
+        grouped: dict[tuple[str, ...], list[str]] = {}
+        for task_id in sorted(summary.task_groups):
+            grouped.setdefault(
+                summary.task_families.get(task_id) or (), []
+            ).append(task_id)
+        for keys in sorted(grouped, key=lambda ks: (len(ks), ks)):
+            if keys:
+                header = "、".join(
+                    f"{summary.families[k]['name']}({k})" for k in keys
+                )
+                ids = "、".join(keys)
+            else:
+                header = "未入族（基线与守卫）"
+                ids = "uncategorized"
             blocks.append(
-                f"<details{open_attr}><summary>{_e(cat.display)}"
-                f'<span class="cnt">({_e(cat.key)}) · {cat.tasks} 任务 · '
-                f"通过 {cat.passes}/{cat.valid} · pass^k "
-                f"{_fmt(category_pass_pow_k(cat, summary.k))}</span></summary>"
-                f"{_task_table(summary, cat.task_ids)}</details>"
+                f"<details{open_attr}><summary>{_e(header)}"
+                f'<span class="cnt">({_e(ids)}) · '
+                f"{len(grouped[keys])} 任务</span></summary>"
+                f"{_task_table(summary, grouped[keys])}</details>"
             )
     else:
         blocks = [
@@ -340,7 +683,7 @@ def _task_section(summary: RunSummary, rollup: list[CategoryRollup] | None) -> s
             f"</summary>{_task_table(summary, sorted(summary.task_groups))}"
             "</details>"
         ]
-    return f"<h2>按任务结果</h2>{''.join(blocks)}"
+    return f"<h2>终判结果</h2>{''.join(blocks)}"
 
 
 def _health_html(watermark: Watermark) -> str:
@@ -621,20 +964,26 @@ def render_dashboard_html(
             '<div class="banner warn">排除率超标：分数不可单独作为可信'
             "信号（详见排除明细）。</div>"
         )
+    if summary.aggregation is not None and not summary.aggregation.comparable:
+        agg = summary.aggregation
+        detail = "；".join(
+            f"{label} ← {'、'.join(runs)}"
+            for label, runs in zip(agg.labels, agg.groups)
+        )
+        banners += (
+            f'<div class="banner warn">聚合 {len(agg.run_ids)} run / '
+            f"{len(agg.groups)} 组条件（同套件 {agg.suite_id}）："
+            "组内可比才合并同键族，跨组各自成行"
+            f"（{_e(detail)}）</div>"
+        )
     if comparison is not None and not comparison.comparable:
         banners += (
             '<div class="banner warn">run 之间不可比：'
             f"{_e(comparison.first_difference())}</div>"
         )
 
-    rollup = (
-        rollup_categories(summary)
-        if summary.task_groups and len(summary.task_groups) > 1
-        else None
-    )
-    category_html = (
-        _category_section(summary, rollup) if rollup is not None else ""
-    )
+    families = summary.family_rollups
+    category_html = _family_section(summary, families) if families else ""
 
     # 能力水位（首屏核心视图）：未声明维度模型的
     # 套件不加这四层（向后兼容）。
@@ -665,6 +1014,9 @@ def render_dashboard_html(
         else ""
     )
 
+    # 逐项指标层（族模式）：跑不了的指标带原因可见。
+    metric_detail_html = _metric_detail_html(summary.metric_detail)
+
     return (
         "<!doctype html>\n<html lang=\"zh-CN\">\n<head>\n<meta charset="
         '"utf-8">\n<meta name="viewport" content="width=device-width, '
@@ -677,7 +1029,8 @@ def render_dashboard_html(
         f"{watermark_html}"
         f'<div class="split">{_verdict_panel(summary)}'
         f"{_exclusion_panel(summary)}</div>\n"
-        f"{category_html}\n{_task_section(summary, rollup)}\n"
+        f"{category_html}\n{_task_section(summary, families)}\n"
+        f"{metric_detail_html}\n"
         "<footer>每个数字与 markdown 报告同源（同一 RunSummary、同一类别聚"
         "合）；可追溯到密封证据、判分器版本、有效分母与运行时锁，详见 "
         "run_manifest.json。本页自包含、无脚本、离线可开。</footer>\n"

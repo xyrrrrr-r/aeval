@@ -3,6 +3,7 @@
 Composition::
 
     TrajectoryGrader (base)      sealed transcript, metric loop, identity
+      └── presets.*_metric_registry           id → factory metric libraries
       └── presets.build_standard_grader     common runtime rubric
       └── presets.build_terminalbench_grader  standard + integrity gates
       └── presets.ThresholdTrajectoryGrader   aggregate must clear a threshold
@@ -17,7 +18,8 @@ Layers:
                  anchor data for suite-authored rubrics
     aggregate.py folding rules: integrity ⇒ fail, efficiency ⇒ score,
                  unjudgeable ⇒ cannot_judge
-    presets.py   suite-ready builders (inherit, don't reimplement)
+    presets.py   suite-ready registries + builders (inherit, don't
+                 reimplement; guards may declare their own metric list)
 """
 
 from aeval.contracts import MetricOutcome

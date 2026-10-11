@@ -314,20 +314,15 @@ def test_provenance_fields_remain_required(tmp_path, missing):
         load_suite(suite_dir)
 
 
-def test_design_yaml_assert_and_extra_graders(tmp_path):
+def test_design_yaml_assert_and_baseline_only_graders(tmp_path):
+    """baseline 断言表达式与解释页；判分声明只有 default 一个槽。"""
     suite_dir = _copy_demo(tmp_path)
     expression = "approval_policy != 'ask'"
     _edit(suite_dir, lambda d: d.update(
         baselines=[{"id": "no_ask", "assert": expression}],
         verdict={
             "requirements": ["agent_finished"],
-            "graders": {
-                "extra": [
-                    {"impl": "trajectory.py@v1", "layer": "trajectory", "veto": True},
-                    {"impl": "both.py@v2", "layer": "both"},
-                ],
-                "default": {"impl": "outcome.py@v1"},
-            },
+            "graders": {"default": {"impl": "outcome.py@v1", "layer": "outcome"}},
         },
     ))
     suite = load_suite(suite_dir)
@@ -336,13 +331,43 @@ def test_design_yaml_assert_and_extra_graders(tmp_path):
     assert baseline.model_dump()["assert_expr"] == expression
     assert baseline.model_dump(by_alias=True)["assert"] == expression
     assert f"assert={expression!r}" in render_suite_explanation(suite)
-    graders = suite.overlay.verdict.resolved_graders()
-    assert [g.impl for g in graders] == [
-        "outcome.py@v1", "trajectory.py@v1", "both.py@v2",
-    ]
-    assert graders[1].veto
-    assert suite.overlay.verdict.resolved_graders() == graders
-    assert BaselineAssertion(id="python", assert_expr=expression).assert_expr == expression
+    assert set(suite.overlay.verdict.graders) == {"default"}
+    assert suite.baseline().impl == "outcome.py@v1"
+
+
+def test_only_the_baseline_slot_is_a_valid_graders_shape():
+    """v5 之后没有第二种声明形状：多余槽 / list 形式都拒绝。"""
+    with pytest.raises(SuiteError, match="only slot is 'default'"):
+        VerdictSpec(
+            requirements=["agent_finished"],
+            graders={
+                "extra": {"impl": "trajectory.py@v1", "layer": "trajectory", "veto": True},
+                "default": {"impl": "outcome.py@v1", "layer": "outcome"},
+            },
+        )
+    with pytest.raises(SuiteError, match="only slot is 'default'"):
+        VerdictSpec(
+            requirements=["agent_finished"],
+            graders={"trajectory": {"impl": "t.py@v1", "layer": "trajectory"}},
+        )
+    with pytest.raises(ValidationError):
+        VerdictSpec(
+            requirements=["agent_finished"],
+            graders={"default": [{"impl": "outcome.py@v1", "layer": "outcome"}]},
+        )
+    ok = VerdictSpec(
+        requirements=["agent_finished"],
+        graders={"default": {"impl": "outcome.py@v1", "layer": "outcome"}},
+    )
+    assert set(ok.graders) == {"default"}
+
+
+def test_baseline_slot_must_be_outcome_layer():
+    with pytest.raises(SuiteError, match="outcome-layer"):
+        VerdictSpec(
+            requirements=["agent_finished"],
+            graders={"default": {"impl": "t.py@v1", "layer": "trajectory"}},
+        )
 
 
 @pytest.mark.parametrize("declaration", [
@@ -363,24 +388,6 @@ def test_baseline_requires_exactly_one_form(declaration):
 def test_empty_or_ambiguous_baseline_rejected(declaration):
     with pytest.raises(ValidationError):
         BaselineAssertion.model_validate({"id": "count", **declaration})
-
-
-@pytest.mark.parametrize("graders, expected", [
-    ({"second": {"impl": "b"}, "default": {"impl": "a"}}, ["a", "b"]),
-    ({"second": {"impl": "b"}, "first": {"impl": "a"}}, ["b", "a"]),
-    ([{"impl": "b"}, {"impl": "a"}], ["b", "a"]),
-    ({"default": {"impl": "a"}, "extra": []}, ["a"]),
-    ({"extra": {"impl": "legacy"}}, ["legacy"]),
-    ({}, []),
-])
-def test_existing_grader_formats_preserve_order(graders, expected):
-    verdict = VerdictSpec(requirements=["agent_finished"], graders=graders)
-    assert [g.impl for g in verdict.resolved_graders()] == expected
-
-
-def test_default_grader_cannot_be_a_list():
-    with pytest.raises(SuiteError, match="default"):
-        VerdictSpec(requirements=["agent_finished"], graders={"default": [{"impl": "a"}]})
 
 
 @pytest.mark.parametrize("mutate", [
@@ -646,111 +653,44 @@ def test_invalid_native_mapping_rejected(tmp_path, field, suffix, text, message)
         resolve_harbor_inputs(load_suite(suite_dir))
 
 
-def test_task_titles_merge_with_suite_side_priority(tmp_path):
-    """中文任务显示名：注入器生成的 task_titles.cases.yaml 与套件自写
-    的 task_titles.yaml 合并，套件侧优先（混合套件里命名权在套件）；
-    两个文件都没有时为空。坏文件报错，不静默忽略。"""
+def test_dimension_model_is_the_sealed_family_declaration(tmp_path):
+    """维度模型 = 密封的族声明（名称/大块/权重/阈值/红线 + 基线 + 守卫）。
+
+    v5 没有第二条来源：套件级 task_categories/task_titles 侧车文件已删，
+    显示名与标题从族声明的 ``scope`` 投影。
+    """
     suite_dir = _copy_demo(tmp_path)
-    assert load_suite(suite_dir).task_titles == {}
-    (suite_dir / "task_titles.cases.yaml").write_text(
-        "native-task: 注入名\nextra-task: 库属名\n", encoding="utf-8"
+    (suite_dir / "families").mkdir(exist_ok=True)
+    (suite_dir / "graders").mkdir(exist_ok=True)
+    (suite_dir / "graders" / "engine.py").write_text(
+        'GRADER_ID = "demo-engine"\nGRADER_VERSION = "v1"\n', encoding="utf-8"
     )
-    (suite_dir / "task_titles.yaml").write_text(
-        "native-task: 套件名\n", encoding="utf-8"
+    (suite_dir / "families" / "a2a.yaml").write_text(
+        "name: A2A 协议\nblock: orch\nweight: 2.0\nthreshold: 1.0\n"
+        "redline: true\nengine: {impl: graders/engine.py@v1, layer: outcome}\n"
+        "metrics: []\nscope:\n  a2a.one: {title: 甲, role: home}\n",
+        encoding="utf-8",
     )
+    _edit(suite_dir, lambda d: d.update(
+        families=["families/a2a.yaml"],
+        blocks={"orch": "编排与协作"},
+        verdict={
+            "requirements": ["agent_finished"],
+            "graders": {"default": {"impl": "graders/engine.py@v1", "layer": "outcome"}},
+        },
+    ))
     suite = load_suite(suite_dir)
-    assert suite.task_titles == {
-        "native-task": "套件名", "extra-task": "库属名",
+    spec = suite.dimension_model["families"]["a2a"]
+    assert spec["name"] == "A2A 协议"
+    assert spec["block"] == "orch"
+    assert spec["weight"] == 2.0
+    assert spec["threshold"] == 1.0
+    assert spec["redline"] is True
+    assert spec["scope"] == {"a2a.one": {"title": "甲", "role": "home"}}
+    assert suite.dimension_model["blocks"] == {"orch": "编排与协作"}
+    assert suite.dimension_model["baseline"]["impl"] == "graders/engine.py@v1"
+    # 标题从族 scope 投影；类别名从族声明投影（都不是侧车文件）
+    assert suite.task_titles == {"a2a.one": "甲"}
+    assert {k: spec.name for k, spec in suite.families.items()} == {
+        "a2a": "A2A 协议"
     }
-    (suite_dir / "task_titles.yaml").write_text("- 不是映射\n", encoding="utf-8")
-    with pytest.raises(SuiteError, match="flat task_id -> title"):
-        load_suite(suite_dir)
-
-
-def test_task_categories_merge_and_default(tmp_path):
-    """类别聚合声明：注入器生成的 task_categories.cases.yaml 与套件
-    自写的 task_categories.yaml 合并（套件侧优先），default 只认显式
-    声明；坏结构报错。"""
-    suite_dir = _copy_demo(tmp_path)
-    (suite_dir / "task_categories.cases.yaml").write_text(
-        "categories:\n  a2a: 注入名\n  native-cat: 库属类别\n",
-        encoding="utf-8",
-    )
-    suite = load_suite(suite_dir)
-    assert suite.category_names == {"a2a": "注入名", "native-cat": "库属类别"}
-    assert suite.default_category is None
-    (suite_dir / "task_categories.yaml").write_text(
-        "categories:\n  a2a: 套件名\ndefault: a2a\n", encoding="utf-8"
-    )
-    suite = load_suite(suite_dir)
-    assert suite.category_names["a2a"] == "套件名"  # 套件侧优先
-    assert suite.default_category == "a2a"
-    (suite_dir / "task_categories.yaml").write_text(
-        "categories:\n  a2a:\n    - 不是映射\n", encoding="utf-8"
-    )
-    with pytest.raises(SuiteError, match="display name or a mapping"):
-        load_suite(suite_dir)
-
-
-def test_dimension_model_extended_schema(tmp_path):
-    """维度模型详式：name/block/weight/threshold/
-    redline + blocks + redline_tasks；简式只有显示名，其余取默认；坏
-    参数报错。"""
-    suite_dir = _copy_demo(tmp_path)
-    (suite_dir / "task_categories.yaml").write_text(
-        "categories:\n"
-        "  a2a:\n"
-        "    name: A2A 协议\n"
-        "    block: orch\n"
-        "    weight: 1.5\n"
-        "    threshold: 0.85\n"
-        "  error:\n"
-        "    name: 异常处理\n"
-        "    block: redline\n"
-        "    redline: true\n"
-        "blocks:\n"
-        "  orch: 编排与协作\n"
-        "  redline: 红线\n"
-        "redline_tasks:\n"
-        "  - a2a.duplicate_task_id\n"
-        "default: a2a\n",
-        encoding="utf-8",
-    )
-    suite = load_suite(suite_dir)
-    model = suite.dimension_model
-    assert model["categories"]["a2a"] == {
-        "name": "A2A 协议", "block": "orch", "weight": 1.5,
-        "threshold": 0.85, "redline": False,
-    }
-    # 未声明字段取默认（weight 1.0 / threshold 0.9 / 非红线）。
-    assert model["categories"]["error"] == {
-        "name": "异常处理", "block": "redline", "weight": 1.0,
-        "threshold": 0.9, "redline": True,
-    }
-    assert model["blocks"] == {"orch": "编排与协作", "redline": "红线"}
-    assert model["redline_tasks"] == ["a2a.duplicate_task_id"]
-    assert model["default"] == "a2a"
-    # 显示名投影（报告的「按类别结果」）来自同一份模型。
-    assert suite.category_names == {"a2a": "A2A 协议", "error": "异常处理"}
-    assert suite.default_category == "a2a"
-    # 阈值必须在 (0, 1]——达标度是值/阈值，>1 的阈值没有意义。
-    (suite_dir / "task_categories.yaml").write_text(
-        "categories:\n  a2a:\n    name: X\n    threshold: 1.5\n",
-        encoding="utf-8",
-    )
-    with pytest.raises(SuiteError, match="threshold must be in"):
-        load_suite(suite_dir)
-    # 权重必须为正。
-    (suite_dir / "task_categories.yaml").write_text(
-        "categories:\n  a2a:\n    name: X\n    weight: 0\n",
-        encoding="utf-8",
-    )
-    with pytest.raises(SuiteError, match="weight must be"):
-        load_suite(suite_dir)
-    # redline_tasks 必须是任务 id 列表。
-    (suite_dir / "task_categories.yaml").write_text(
-        "categories:\n  a2a: 名\nredline_tasks: not-a-list\n",
-        encoding="utf-8",
-    )
-    with pytest.raises(SuiteError, match="redline_tasks"):
-        load_suite(suite_dir)

@@ -1,0 +1,47 @@
+# 由 aeval/cases/generate.py 生成 —— 分组式指标族（v5）：族只分组，
+# 判定由官方基线给出（engine.impl == verdict.graders.default.impl）；
+# 评分参数（显示名/大块/权重/阈值/红线）与逐任务标题都在这里声明。
+name: 任务中心
+block: orch
+weight: 1.0
+threshold: 0.9
+redline: false
+engine:
+  impl: graders/sbench_outcome.py@v1
+  layer: outcome
+  veto: false
+metrics: []
+scope:
+  task_center.cancel:
+    title: 取消
+    role: home
+  task_center.cron_create:
+    title: 定时任务创建
+    role: home
+  task_center.delete:
+    title: 删除
+    role: home
+  task_center.disable:
+    title: 禁用
+    role: home
+  task_center.enable:
+    title: 启用
+    role: home
+  task_center.immediate_create:
+    title: 即时任务创建
+    role: home
+  task_center.lifecycle:
+    title: 全生命周期
+    role: home
+  task_center.missed_run:
+    title: 漏跑恢复
+    role: home
+  task_center.next_run:
+    title: 下次执行排程
+    role: home
+  task_center.oneshot_create:
+    title: 一次性任务创建
+    role: home
+  task_center.query:
+    title: 查询
+    role: home

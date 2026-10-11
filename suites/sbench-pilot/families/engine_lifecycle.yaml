@@ -1,0 +1,38 @@
+# 由 aeval/cases/generate.py 生成 —— 分组式指标族（v5）：族只分组，
+# 判定由官方基线给出（engine.impl == verdict.graders.default.impl）；
+# 评分参数（显示名/大块/权重/阈值/红线）与逐任务标题都在这里声明。
+name: 引擎生命周期
+block: basic
+weight: 1.0
+threshold: 0.9
+redline: false
+engine:
+  impl: graders/sbench_outcome.py@v1
+  layer: outcome
+  veto: false
+metrics: []
+scope:
+  engine_lifecycle.dedup_202:
+    title: 去重(202)
+    role: home
+  engine_lifecycle.failure_retry_fields:
+    title: 失败重试字段
+    role: home
+  engine_lifecycle.heartbeat_timeout:
+    title: 心跳超时
+    role: home
+  engine_lifecycle.heartbeat_update:
+    title: 心跳精确更新
+    role: home
+  engine_lifecycle.state_machine:
+    title: 状态机流转
+    role: home
+  engine_lifecycle.status_healthy:
+    title: 健康状态（重启恢复面）
+    role: home
+  engine_lifecycle.task_complete:
+    title: 任务完成
+    role: home
+  engine_lifecycle.task_execute_accept:
+    title: task_execute 接收
+    role: home

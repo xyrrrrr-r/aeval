@@ -32,10 +32,15 @@ def _suite(name: str):
 
 
 def test_both_shipped_suites_extend_the_shared_base():
-    for name in ("e2e-hello", "tbench-pilot"):
+    # 族的声明文件也是身份链的一节（激活即锁定）；没有族的套件只有 base/child。
+    expected = {
+        "e2e-hello": ["base", "child"],
+        "tbench-pilot": ["base", "child", "family"],
+    }
+    for name, roles in expected.items():
         suite = _suite(name)
         assert suite.extends == [BASE], name
-        assert [source.role for source in suite.sources] == ["base", "child"]
+        assert [source.role for source in suite.sources] == roles, name
         assert inherited_source_paths(suite) == [SUITES / BASE]
 
 
@@ -68,7 +73,11 @@ def test_the_base_carries_no_agent_capability_requirements():
 def test_suite_specific_facts_stay_in_the_suite():
     pilot = _suite("tbench-pilot").overlay
     assert [obs.name for obs in pilot.observables] == ["ready", "reward"]
-    assert pilot.verdict.graders["trajectory"].veto is True
+    # 非基线判分只有两个家：守卫或族。tbench-pilot 的反作弊是守卫。
+    (anti_cheat,) = pilot.verdict.guards
+    assert anti_cheat.impl.endswith("tbench_trajectory.py@v1")
+    assert anti_cheat.veto is True
+    assert set(pilot.verdict.graders) == {"default"}
     assert pilot.driver.workspace_dir == "/app"
     assert pilot.driver.stage_tests_before_collect is True
     assert pilot.metrics[0].k == 3

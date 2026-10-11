@@ -36,7 +36,7 @@ def _trials():
 
 
 def test_dashboard_shows_the_same_numbers_as_the_report():
-    """面板与 markdown 报告同源：同一 RunSummary、同一类别聚合——
+    """面板与 markdown 报告同源：同一 RunSummary（含密封清单的显示名），
     报告里的行（数字）在面板里原样出现。"""
     from aeval.agents.dsh.release import build_official_dsh_lock
     from aeval.contracts import OverlayIdentity, RunManifest, VersionsBundle
@@ -53,8 +53,6 @@ def test_dashboard_shows_the_same_numbers_as_the_report():
         ),
         versions=VersionsBundle(aeval_version="0.1.0"),
         task_titles={"memory.store_recall": "取货码召回"},
-        category_names={"memory": "跨会话记忆", "intelligence": "会话智能度"},
-        default_category="intelligence",
     )
     summary = _summary(_trials(), manifests=[manifest])
     html = render_dashboard_html(summary)
@@ -63,12 +61,17 @@ def test_dashboard_shows_the_same_numbers_as_the_report():
     assert "0.6667" in html  # pass^3
     # 判定 donut + 图例（契约词对照）。
     assert "通过(pass)" in html and "<svg" in html
-    # 类别聚合与报告同数字：memory 2 任务 6 试 5 过 1 败，pass^3=0.5。
-    assert "跨会话记忆" in html
-    assert "pass^k 0.5000 · 5/6" in html
-    assert "会话智能度" in html
-    # 任务行：标题对照原 id。
+    # 没有族的套件：不凭 task_id 前缀造类别分区（报告与面板同一份聚合）。
+    assert "跨会话记忆" not in html
+    assert "按类别结果" not in html
+    # 任务行：标题对照原 id（密封清单里的显示名照旧生效）。
     assert "取货码召回(memory.store_recall)" in html
+    # 与 markdown 报告同数字：头部指标一致。
+    from aeval.metrics.report import render_static_report
+
+    text = render_static_report(summary)
+    assert "- 试次：共 9，有效分母 9" in text
+    assert "- pass^3：0.6667" in text
     # 头部带套件标识（清单 overlay）。
     assert "套件 s@1" in html
 

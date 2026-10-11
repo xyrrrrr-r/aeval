@@ -6,8 +6,10 @@ Denominator discipline:
 - a grader whose required evidence fields are partial/unavailable ⇒
   that grader returns cannot_judge (never a disguised 0);
 - final verdict: infra_invalid dominates (never graded), then any
-  veto-fail, then cannot_judge if no grader could judge, else the
-  aggregate of pass/fail.
+  veto-fail, then any fail; **a trial that at least one layer judged
+  counts** (v5, Q8：optional 的族"这一层判不了"不剥夺整条试次的判
+  决——否则一个族的 skip 就会把试次踢出分母）；只有**没有任何层**
+  给出 pass/fail 时，终判才是 cannot_judge。
 """
 
 from __future__ import annotations
@@ -28,11 +30,21 @@ from aeval.contracts import (
 
 __all__ = [
     "Grader",
+    "GraderLoadError",
     "ResolvedGrader",
     "GraderInput",
     "validate_grade_result",
     "decide_final_verdict",
 ]
+
+
+class GraderLoadError(RuntimeError):
+    """A grader declaration and its implementation disagree — never executed.
+
+    Defined here (not in the loader) so both the loader and the declared-
+    metric family assembly raise the SAME class; ``aeval.verdict.loader``
+    re-exports it for the modules that already import it from there.
+    """
 
 
 @runtime_checkable
@@ -119,6 +131,9 @@ def decide_final_verdict(results: Sequence[GradeResult]) -> Verdict:
     statuses = {r.status for r in results}
     if "fail" in statuses:
         return "fail"
-    if "cannot_judge" in statuses:
-        return "cannot_judge"
-    return "pass"
+    if "pass" in statuses:
+        # v5（Q8）：至少有一层判出结果 ⇒ 试次留在分母。族级 cannot_judge
+        # 只说明"这一层没有可判指标"，不是"这次评测无法判定"；把它当毒化
+        # 会让可选测量族的 skip 剥夺整条试次的判决权（并把它踢出分母）。
+        return "pass"
+    return "cannot_judge"

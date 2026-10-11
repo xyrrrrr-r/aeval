@@ -212,8 +212,17 @@ def validate_collect_declarations(
     # session-record slot is agent-flavored (exactly one of the two session
     # names belongs in a plan), while observables are probed via the
     # environment API and are deliberately not collect-command outputs.
+    # The sealed anchors channel is likewise HOST-side: the collection
+    # orchestrator seals the suite's rubric projection into the trial
+    # (see aeval.hooks.collection), so a task's in-sandbox collect command
+    # is not required to name it — exempting it here is what lets a family
+    # suite adopt ``verdict.anchors: task_anchors`` without touching one
+    # byte of the frozen Harbor task files.
+    host_sealed = frozenset({"task_anchors"})
     for name in plan:
         if name.startswith("observable:"):
+            continue
+        if name in host_sealed:
             continue
         if name not in commands:
             raise EvidenceIntegrityError(

@@ -87,7 +87,7 @@ def test_verify_rejects_unpinned_image_even_past_model_layer():
 def test_verify_rejects_dsh_lock_without_integrity():
     lock = _dsh_lock()
     lock.dsh.packages = [
-        NpmPackageLock(name="@deepseek-ai/dsh", version="0.1.7-alpha.1", integrity=None),
+        NpmPackageLock(name="@deepseek-ai/dsh", version="0.2.0-rc.2", integrity=None),
         *[p for p in lock.dsh.packages if p.name != "@deepseek-ai/dsh"],
     ]
     with pytest.raises(LockMismatchError, match="missing its npm integrity hash"):

@@ -1,0 +1,41 @@
+# 由 aeval/cases/generate.py 生成 —— 分组式指标族（v5）：族只分组，
+# 判定由官方基线给出（engine.impl == verdict.graders.default.impl）；
+# 评分参数（显示名/大块/权重/阈值/红线）与逐任务标题都在这里声明。
+name: 工具安全审计
+block: redline
+weight: 2.0
+threshold: 1.0
+redline: true
+engine:
+  impl: graders/sbench_outcome.py@v1
+  layer: outcome
+  veto: false
+metrics: []
+scope:
+  tool_audit.audit_query:
+    title: 审计查询
+    role: home
+  tool_audit.param_completeness:
+    title: 参数完整性
+    role: home
+  tool_audit.param_type_validation:
+    title: 参数类型校验
+    role: home
+  tool_audit.path_traversal:
+    title: 路径穿越拒绝
+    role: home
+  tool_audit.schema_format:
+    title: schema 格式规范
+    role: home
+  tool_audit.schema_required_fields:
+    title: schema 必填字段
+    role: home
+  tool_audit.sensitive_path:
+    title: 敏感路径白名单
+    role: home
+  tool_audit.tool_log_recording:
+    title: 调用留痕
+    role: home
+  tool_audit.unknown_tool:
+    title: 未知工具拒绝
+    role: home

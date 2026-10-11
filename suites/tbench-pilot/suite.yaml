@@ -1,12 +1,23 @@
 schema_version: 2
 id: tbench-pilot
+# 0.6.0（2026-10-10）：trace 判定进声明（v5 A）——守卫的 9 项轨迹指标
+# 写进 verdict.guards[].metrics（读密封 ATIF 轨迹），模块退化为
+# id → 工厂的 METRICS 库；判分口径与数字不变，声明字节变化故重新签名。
+# 0.5.0（2026-10-10）：判分模型 v5 迁移 —— 分组式族声明落到
+# families/tbench.yaml（原 task_categories.yaml / task_titles.yaml
+# 退役，显示名与阈值原样搬入族声明），大块显示名回到 blocks:。
+# 任务集（3 例）与判分口径（outcome 层 + 轨迹守卫）不变；因判分声明
+# 字节变化，本版本不与 0.4.0 同域可比。
 # 0.4.0（2026-10-08）：试点任务注释去术语化——去掉注释里的内部阶段标签。任务内容与判分口径不变；因文件字节变化，本版本不与 0.3.0 同域可比。
 # 0.3.0（2026-10-08）：注释清理——去掉对外不可读的内部阶段/缺陷编号与机器名。判分口径与任务集不变；因文件字节变化，本版本不与上一版同域可比。
 # 0.2.0（2026-09-30）：准入规则变更 —— 驱动能力要求收窄为任务真正需要的
 # [acp_stdio, shell]（去掉 DSH 专属的 sdk_jsonrpc），会话槽位改为显式声明。对 DSH 的
 # 被测结果没有变化，但"谁能被这个评测集接受"变了，因此版本进位：本版本的跑次
-# 不与 0.1.0 同域可比。
-version: 0.4.0
+# 不与 0.1.0 同域可比。# 0.7.0（2026-10-11）：指标目录化（v5 Step 6）——9 项守卫指标的**定义**
+#   （层/严重度/归属）收敛到 verdict.metric_catalog 一处，守卫声明只写
+#   id 引用；判哪些指标、怎么折叠、报告数字都不变（密封维度模型逐字节
+#   相同），声明字节变化故重新签名。
+version: 0.7.0
 # 与 e2e-hello 共用同一份环境级基座：时钟、ready 观测点与 baseline
 # （证明跑的是"被适配过的镜像"而不是上游原镜像）、六项 requirements、
 # 驱动能力 [acp_stdio, sdk_jsonrpc]、指标种类、datasets 路径约定。
@@ -18,7 +29,28 @@ observables:
   # `reward` is published by the upstream verifier (tests/test.sh) during
   # the verifier phase; `ready` comes from the base.
   - { name: reward, type: string, source: "file:/logs/verifier/reward.txt" }
+families:
+  - families/tbench.yaml
+# 大块显示名（雷达轴）：v5 之前住在 task_categories.yaml，随侧车退役
+# 回到这里——少了它，报告/面板的「大块」列会退回原始键 core。
+blocks:
+  core: 任务执行
 verdict:
+  # 指标目录（v5 Step 6）：一项指标的**定义只有这一处**——层 / 严重度
+  # （severity: integrity = 违规即 veto）/ 可选降级线 + 归属角色
+  # （classification: gate = 套件级有效性门，只由守卫引用；dimension =
+  # 计分维度，由族引用）。守卫声明与族文件只写 id 引用，逐任务输入留在
+  # 族里（同一项指标可以被多个族用不同锚点判）。
+  metric_catalog:
+  - { id: step_efficiency, layer: trajectory, classification: gate }
+  - { id: token_efficiency, layer: trajectory, classification: gate }
+  - { id: tool_error_rate, layer: trajectory, classification: gate }
+  - { id: loop_detection, layer: trajectory, classification: gate }
+  - { id: recovery, layer: trajectory, classification: gate }
+  - { id: redundant_actions, layer: trajectory, classification: gate }
+  - { id: budget_adherence, layer: trajectory, classification: gate }
+  - { id: forbidden_access, layer: trajectory, severity: integrity, classification: gate }
+  - { id: scope_discipline, layer: trajectory, severity: integrity, classification: gate }
   graders:
     # The outcome layer is the upstream verifier's own verdict; the
     # trajectory layer adds the framework rubric and vetoes a pass that
@@ -26,7 +58,27 @@ verdict:
     # 注意：带 veto 的 grader 不能继承，必须在本套件里显式声明 ——
     # veto 改变"什么叫通过"，这是套件自己的判定策略。
     default: { impl: "graders/tbench_outcome.py@v1", layer: outcome }
-    trajectory: { impl: "graders/tbench_trajectory.py@v1", layer: trajectory, veto: true }
+  # 守卫（试次有效性门，无类别行，对全体 task 生效）：反作弊——读测试
+  # 或 oracle 解法拿到的 pass 被 veto 推翻。v5 起非基线判分只有两个家：
+  # 守卫（本处）或指标族（families/）。
+  guards:
+    # 反作弊/范围门：判定读密封 ATIF 轨迹（真实 agent 会话 → mapper →
+    # canonical_transcript）。清单 = 目录里 gate 角色的这 9 项（id 引用，
+    # 顺序 = 判分顺序；定义与 severity 在 metric_catalog）。模块只提供
+    # id → 工厂的 METRICS 库，加载期与清单逐 id 对表。
+    - impl: "graders/tbench_trajectory.py@v1"
+      layer: trajectory
+      veto: true
+      metrics:
+        - step_efficiency
+        - token_efficiency
+        - tool_error_rate
+        - loop_detection
+        - recovery
+        - redundant_actions
+        - budget_adherence
+        - forbidden_access
+        - scope_discipline
 metrics:
   # pass^3: the probability that all three attempts of a task pass.
   - { id: reliability, kind: pass_pow_k, k: 3 }

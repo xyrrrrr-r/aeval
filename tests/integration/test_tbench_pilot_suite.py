@@ -498,9 +498,10 @@ def test_budget_parity_between_broker_spec_and_trajectory_grader(budgets):
     assert spec is not None and spec.loader is not None
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
-    declared = {m.name: m for m in module._IMPL._metrics}
-    assert declared["step_efficiency"].max_steps == budgets["grader"]["max_steps"]
-    assert declared["token_efficiency"].max_tokens == budgets["grader"]["max_tokens"]
+    # v5 A：模块只提供 id → 工厂；判定清单在套件声明里。
+    built = {mid: factory({}) for mid, factory in module.METRICS.items()}
+    assert built["step_efficiency"].max_steps == budgets["grader"]["max_steps"]
+    assert built["token_efficiency"].max_tokens == budgets["grader"]["max_tokens"]
     assert budgets["broker"]["maxSteps"] == budgets["grader"]["max_steps"]
     assert budgets["broker"]["maxTokens"] == budgets["grader"]["max_tokens"]
 

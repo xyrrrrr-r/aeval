@@ -9,7 +9,7 @@ import tempfile
 import os
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, Sequence
 
 from aeval.contracts import ExclusionSummary, RunManifest
 
@@ -19,6 +19,7 @@ __all__ = [
     "create_test_result_attestation",
     "recompute_bundle",
     "compare_manifests",
+    "compare_all_manifests",
     "ComparabilityReport",
 ]
 
@@ -114,6 +115,26 @@ def compare_manifests(left: RunManifest, right: RunManifest) -> ComparabilityRep
         right.runtime_lock.dsh.model_dump(mode="json") if right.runtime_lock.dsh else None,
     )
     _dimension("overlay", left.overlay, right.overlay)
+    # Family declarations (gradeCategory v4): the sealed 族→用例→引擎
+    # mapping plus baseline/guards. Old manifests lack the fields — they
+    # compare as empty, so a family suite vs. a legacy suite is (correctly)
+    # not comparable, and two family suites must agree on every family
+    # byte (v4 design).
+    _dimension(
+        "families",
+        left.dimension_model.get("families") or {},
+        right.dimension_model.get("families") or {},
+    )
+    _dimension(
+        "baseline",
+        left.dimension_model.get("baseline"),
+        right.dimension_model.get("baseline"),
+    )
+    _dimension(
+        "guards",
+        left.dimension_model.get("guards") or [],
+        right.dimension_model.get("guards") or [],
+    )
     # The agent is part of the experiment: scores from two different adapters are
     # never averageable, even when every other dimension matches.
     _dimension("adapters", left.adapters, right.adapters)
@@ -126,6 +147,27 @@ def compare_manifests(left: RunManifest, right: RunManifest) -> ComparabilityRep
     )
     _dimension("argv", left.argv_hash, right.argv_hash)
     _dimension("config", left.config_hash, right.config_hash)
+    return report
+
+
+def compare_all_manifests(
+    manifests: Sequence[RunManifest],
+) -> ComparabilityReport:
+    """Every run pair, not just the first two: one blocked pair taints the set.
+
+    Aggregating N runs means every pair must be averageable (same contract
+    as :func:`compare_manifests`); checking only ``manifests[0]`` vs
+    ``manifests[1]`` would let an incomparable third run pass unnoticed.
+    Each difference is prefixed with the offending run pair.
+    """
+    report = ComparabilityReport()
+    items = list(manifests)
+    for index, left in enumerate(items):
+        for right in items[index + 1 :]:
+            for dimension, diffs in compare_manifests(left, right).items():
+                bucket = report.setdefault(dimension, [])
+                for diff in diffs:
+                    bucket.append(f"{left.run_id} vs {right.run_id}: {diff}")
     return report
 
 

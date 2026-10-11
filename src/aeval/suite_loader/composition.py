@@ -362,7 +362,7 @@ def compose_harbor_job(
             "apply image.pin/rebuild at runtime. Pin the image in task.toml and remove the overlay action."
         )
     validate_thin_overlay(suite, {}, job_data)
-    graders = suite.overlay.verdict.resolved_graders()
+    graders = suite.resolved_graders(None)
     if not graders:
         raise SuiteError("Suite must select at least one versioned grader")
     for grader in graders:
@@ -371,6 +371,12 @@ def compose_harbor_job(
             raise SuiteError(f"Grader must reference a versioned Python file: {grader.impl!r}")
         if not suite_path(root, reference).is_file():
             raise SuiteError(f"Grader implementation does not exist: {reference}")
+    # 组合期对账（在线套件）：族与守卫的指标声明 × 模块 METRICS 对表
+    # （同一个检查点，一段代码）——模块在这里加载一次，坏契约在任何沙箱
+    # 构建之前报错。baseline-only / 未声明清单的消费者天然无事。
+    from aeval.verdict.pipeline import validate_metric_contracts
+
+    validate_metric_contracts(suite)
     _resolve_model_paths(job, root)
     for agent in job.agents:
         if agent.load_trajectory:
@@ -400,9 +406,22 @@ def compose_harbor_job(
                 dataset.path = suite_path(root, dataset.path)
                 if not dataset.path.is_dir():
                     raise SuiteError(f"Local dataset directory does not exist: {dataset.path}")
+                scanned: set[str] = set()
                 for path in sorted(dataset.path.iterdir()):
                     if (path / "task.toml").exists():
+                        scanned.add(path.name)
                         _validate_local_task(suite, path, job_data)
+                # 组合期对账（在线套件）：族适用范围之并 ⊆ 数据集扫描集。
+                # 悬空引用（族声明了数据集里没有的 task_id）报错；扫描到但
+                # 未被任何族声明的 task 合法——只吃官方基线 + 守卫，是
+                # baseline-only 的一等形态。
+                dangling = sorted(suite.family_task_union() - scanned)
+                if dangling:
+                    raise SuiteError(
+                        "families reference task ids the dataset does not "
+                        f"scan: {dangling} — a family's reach is a foreign-key "
+                        "reference to an existing task, never a wish for one"
+                    )
                 job.tasks = asyncio.run(dataset.get_task_configs())
                 if not job.tasks:
                     raise SuiteError("Local dataset selects no valid native Harbor tasks")

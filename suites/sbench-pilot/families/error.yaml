@@ -1,0 +1,32 @@
+# 由 aeval/cases/generate.py 生成 —— 分组式指标族（v5）：族只分组，
+# 判定由官方基线给出（engine.impl == verdict.graders.default.impl）；
+# 评分参数（显示名/大块/权重/阈值/红线）与逐任务标题都在这里声明。
+name: 异常处理
+block: redline
+weight: 2.0
+threshold: 1.0
+redline: true
+engine:
+  impl: graders/sbench_outcome.py@v1
+  layer: outcome
+  veto: false
+metrics: []
+scope:
+  error.bad_auth:
+    title: 错误鉴权
+    role: home
+  error.invalid_json:
+    title: 畸形 JSON
+    role: home
+  error.method_not_allowed:
+    title: 不允许的方法
+    role: home
+  error.no_auth:
+    title: 无鉴权
+    role: home
+  error.oversized_body:
+    title: 超大 body
+    role: home
+  error.unknown_endpoint:
+    title: 未知端点
+    role: home

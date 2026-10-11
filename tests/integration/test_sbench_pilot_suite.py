@@ -180,23 +180,39 @@ def test_the_library_injects_by_category_into_another_suite(tmp_path):
     assert {n.partition(".")[0] for n in names} == {"health", "error"}
     assert not (other / "tasks" / "chat.basic").exists()  # 反选残留被清理
 
-    # 显示名/类别声明文件也按类别注入：只含选中类别的条目。
+    # 类别声明 = 分组式指标族：只注入选中类别的族文件，反选类别的族
+    # 文件与激活项都被清掉。
     import yaml as _yaml
 
-    titles = _yaml.safe_load((other / "task_titles.cases.yaml").read_text("utf-8"))
-    assert set(titles) == set(names)
-    assert all(isinstance(title, str) and title for title in titles.values())
-    categories = _yaml.safe_load(
-        (other / "task_categories.cases.yaml").read_text("utf-8")
-    )["categories"]
-    assert set(categories) == {"health", "error"}
+    families = sorted(p.name for p in (other / "families").iterdir())
+    assert families == ["error.yaml", "health.yaml"]
+    declared = _yaml.safe_load(
+        (other / "families" / "health.yaml").read_text("utf-8")
+    )
+    assert declared["name"] == "基础连通"
+    assert declared["engine"]["impl"] == "graders/sbench_outcome.py@v1"
+    assert declared["metrics"] == []
+    assert set(declared["scope"]) == {
+        n for n in names if n.startswith("health.")
+    }
+    assert all(
+        isinstance(binding["title"], str) and binding["title"]
+        for binding in declared["scope"].values()
+    )
 
     from aeval.suite_loader.composition import compose_harbor_job
     from aeval.suite_loader.loader import load_suite
 
     suite = load_suite(other, suites_root=SUITE.parent)
     assert suite.id == "sbench-subset"
-    assert suite.task_titles == titles  # 加载器合并生成文件后可见
+    assert set(suite.families) == {"health", "error"}
+    titles = {
+        task_id: binding.title
+        for spec in suite.families.values()
+        for task_id, binding in spec.scope.items()
+    }
+    assert set(titles) == set(names)
+    assert suite.task_titles == titles  # 标题从族声明 scope 投影
     job = compose_harbor_job(suite)
     assert len(job.tasks) == 9
 

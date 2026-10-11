@@ -85,7 +85,7 @@ def test_trial_hook_event_computes_trial_id():
         task_id=LocalTaskId(path=Path("C:/tmp/task.yaml")),
         task_checksum="0" * 64,
         config=config,
-        agent_info=AgentInfo(name="dsh", version="0.1.7-alpha.1"),
+        agent_info=AgentInfo(name="dsh", version="0.2.0-rc.2"),
     )
     event = TrialHookEvent(
         event=TrialEvent.VERIFICATION_START,

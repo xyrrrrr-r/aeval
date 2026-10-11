@@ -1,0 +1,38 @@
+# 由 aeval/cases/generate.py 生成 —— 分组式指标族（v5）：族只分组，
+# 判定由官方基线给出（engine.impl == verdict.graders.default.impl）；
+# 评分参数（显示名/大块/权重/阈值/红线）与逐任务标题都在这里声明。
+name: 数据持久化
+block: data
+weight: 1.0
+threshold: 0.9
+redline: false
+engine:
+  impl: graders/sbench_outcome.py@v1
+  layer: outcome
+  veto: false
+metrics: []
+scope:
+  ddl.artifacts_data:
+    title: artifacts 表数据
+    role: home
+  ddl.field_types:
+    title: 字段类型
+    role: home
+  ddl.id_uniqueness:
+    title: 主键唯一性
+    role: home
+  ddl.sessions_data:
+    title: sessions 表数据
+    role: home
+  ddl.time_sanity:
+    title: 时间合理性
+    role: home
+  ddl.tool_calls_data:
+    title: tool_calls 表数据
+    role: home
+  ddl.usage_accumulation:
+    title: 用量累加一致性
+    role: home
+  ddl.usage_stats_data:
+    title: usage_stats 表数据
+    role: home

@@ -410,8 +410,12 @@ def test_collect_plan_lists_atomic_outputs(demo_suite):
 def test_anchors_channel_is_opt_in_and_gates_the_plan(demo_suite):
     """The sealed rubric-anchors channel (integration): a suite that
     does not declare it keeps a byte-identical plan; a suite that does
-    gets ``task_anchors`` in its plan — and its tasks' collect commands
-    must then name it like any other required output."""
+    gets ``task_anchors`` in its plan — but the anchors output is
+    HOST-sealed (the collection orchestrator projects the suite's
+    rubric into the trial bundle), so a task's collect commands do NOT
+    have to name it: family suites adopt the channel without touching
+    one byte of the frozen Harbor task files. Ordinary outputs keep the
+    strict gate."""
     class Cmd:
         def __init__(self, command):
             self.command = command
@@ -425,17 +429,25 @@ def test_anchors_channel_is_opt_in_and_gates_the_plan(demo_suite):
     assert "task_anchors" in plan
     assert output_path_for("task_anchors") == "rubric/task_anchors.json"
 
-    # declaration validation now demands the anchors output by name
+    # naming the host-sealed output in a command is harmless (it just
+    # must not be REQUIRED)
     validate_collect_declarations(
         [Cmd("snapshot runtime_dump mock_call_log dsh_session "
              "canonical_transcript task_anchors")],
         ["runtime_dump", "mock_call_log", "dsh_session",
          "canonical_transcript", "task_anchors"],
     )
-    with pytest.raises(EvidenceIntegrityError, match="task_anchors"):
+    # the host-sealed channel is exempt from the textual declaration
+    # gate: no collect command names it, no error
+    validate_collect_declarations(
+        [Cmd("snapshot runtime_dump mock_call_log dsh_session "
+             "canonical_transcript")],
+        plan,
+    )
+    # but the gate still bites for ordinary required outputs
+    with pytest.raises(EvidenceIntegrityError, match="canonical_transcript"):
         validate_collect_declarations(
-            [Cmd("snapshot runtime_dump mock_call_log dsh_session "
-                 "canonical_transcript")],
+            [Cmd("snapshot runtime_dump mock_call_log dsh_session")],
             plan,
         )
 

@@ -34,7 +34,7 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass, field
-from typing import Any, Iterator
+from typing import Any, ClassVar, Iterator, Mapping
 
 from aeval.contracts import CanonicalTranscript, MetricOutcome
 from aeval.verdict.trajectory.base import (
@@ -232,6 +232,127 @@ class QualityAnchors:
     fork_memory_anchors: tuple[MemoryAnchor, ...] = ()
     over_reply_chars: int = 400
 
+    #: The anchor vocabulary this rubric consumes (declaration-level
+    #: reconciliation key, v4 design): family declarations naming a key
+    #: outside this set are a load-time error, not a silent ignore.
+    KNOWN_KEYS: ClassVar[frozenset[str]] = frozenset(
+        {
+            "identity_probes", "identity_keywords",
+            "capability_probes", "capability_keywords",
+            "tool_expectations", "context_anchors",
+            "ambiguity_triggers", "off_topic_triggers", "redirect_keywords",
+            "complexity_triggers", "plan_tool_names",
+            "hallucination_anchors", "noise_input_patterns",
+            "format_specs", "fork_memory_anchors", "over_reply_chars",
+        }
+    )
+
+    @classmethod
+    def from_mapping(cls, data: Mapping[str, Any]) -> "QualityAnchors":
+        """Build anchors from a plain mapping (family YAML / sealed JSON).
+
+        Strict: an unknown key raises ``ValueError`` — a typo'd anchor
+        must never silently narrow the rubric (P9/P10 discipline). The
+        same converter serves the declaration side (validation) and the
+        sealed side (grading), so what was validated is what judges.
+        """
+        unknown = sorted(set(data) - cls.KNOWN_KEYS)
+        if unknown:
+            raise ValueError(
+                f"unknown anchor keys {unknown} — the quality rubric "
+                f"consumes {sorted(cls.KNOWN_KEYS)}"
+            )
+
+        def _strings(key: str) -> tuple[str, ...]:
+            value = data.get(key, ())
+            if not isinstance(value, (list, tuple)) or not all(
+                isinstance(item, str) and item for item in value
+            ):
+                raise ValueError(f"anchors.{key} must be a list of non-empty strings")
+            return tuple(value)
+
+        def _subanchors(key: str, build) -> tuple:
+            value = data.get(key, ())
+            if not isinstance(value, (list, tuple)):
+                raise ValueError(f"anchors.{key} must be a list of mappings")
+            return tuple(build(item) for item in value)
+
+        kwargs: dict[str, Any] = {}
+        for key in (
+            "identity_probes", "identity_keywords",
+            "capability_probes", "capability_keywords",
+            "ambiguity_triggers", "off_topic_triggers", "redirect_keywords",
+            "complexity_triggers", "plan_tool_names",
+            "noise_input_patterns",
+        ):
+            kwargs[key] = _strings(key)
+        kwargs["tool_expectations"] = _subanchors(
+            "tool_expectations",
+            lambda item: ToolExpectation(
+                trigger=_req_str(item, "trigger", "tool_expectations"),
+                functions=tuple(_req_str_list(item, "functions", "tool_expectations")),
+            ),
+        )
+        kwargs["context_anchors"] = _subanchors(
+            "context_anchors",
+            lambda item: ContextAnchor(
+                introduce=_req_str(item, "introduce", "context_anchors"),
+                probe=_req_str(item, "probe", "context_anchors"),
+                expected_terms=tuple(_req_str_list(item, "expected_terms", "context_anchors")),
+                fuzzy_threshold=float(item.get("fuzzy_threshold", 0.6)),
+            ),
+        )
+        kwargs["hallucination_anchors"] = _subanchors(
+            "hallucination_anchors",
+            lambda item: HallucinationAnchor(
+                topic=_req_str(item, "topic", "hallucination_anchors"),
+                invented_patterns=tuple(
+                    _req_str_list(item, "invented_patterns", "hallucination_anchors")
+                ),
+                honest_patterns=tuple(
+                    _req_str_list(item, "honest_patterns", "hallucination_anchors")
+                ),
+            ),
+        )
+        kwargs["format_specs"] = _subanchors(
+            "format_specs",
+            lambda item: FormatSpec(
+                instruction=_req_str(item, "instruction", "format_specs"),
+                validators=tuple(_req_str_list(item, "validators", "format_specs")),
+            ),
+        )
+        kwargs["fork_memory_anchors"] = _subanchors(
+            "fork_memory_anchors",
+            lambda item: MemoryAnchor(
+                introduce=_req_str(item, "introduce", "fork_memory_anchors"),
+                probe=_req_str(item, "probe", "fork_memory_anchors"),
+                expected_terms=tuple(
+                    item.get("expected_terms", ()) or ()
+                ),
+                fuzzy_threshold=float(item.get("fuzzy_threshold", 0.6)),
+            ),
+        )
+        over = data.get("over_reply_chars", 400)
+        if not isinstance(over, int) or isinstance(over, bool) or over <= 0:
+            raise ValueError("anchors.over_reply_chars must be a positive integer")
+        kwargs["over_reply_chars"] = over
+        return cls(**kwargs)
+
+
+def _req_str(item: Any, key: str, where: str) -> str:
+    if not isinstance(item, Mapping) or not isinstance(item.get(key), str) or not item[key]:
+        raise ValueError(f"anchors.{where} entries must be mappings with a non-empty {key!r} string")
+    return item[key]
+
+
+def _req_str_list(item: Any, key: str, where: str) -> list[str]:
+    value = item.get(key, ())
+    if not isinstance(value, (list, tuple)) or not all(
+        isinstance(entry, str) and entry for entry in value
+    ):
+        raise ValueError(f"anchors.{where}.{key} must be a list of non-empty strings")
+    return list(value)
+
 
 # --- content quality: score-only -------------------------------------------
 
@@ -275,6 +396,7 @@ class ResponseBrevity(TrajectoryMetric):
     """Final reply length — the reply to the user, not the whole dialogue."""
 
     name = "response_brevity"
+    name_zh = "回复简洁度"
     category = "efficiency"
 
     def __init__(
@@ -393,6 +515,7 @@ class IdentityCognition(_ProbeReplyMetric):
     """Asked who it is, the agent self-identifies with declared keywords."""
 
     name = "identity_cognition"
+    name_zh = "身份认知"
     _what = "identity"
 
     def __init__(
@@ -411,6 +534,7 @@ class CapabilityCognition(_ProbeReplyMetric):
     """Asked what it can do, the agent lists declared capabilities."""
 
     name = "capability_cognition"
+    name_zh = "能力边界认知"
     _what = "capability"
 
     def __init__(
@@ -434,6 +558,7 @@ class ToolSelection(TrajectoryMetric):
     """
 
     name = "tool_selection"
+    name_zh = "工具选择"
     category = "robustness"
 
     def __init__(self, expectations: tuple[ToolExpectation, ...] = ()) -> None:
@@ -501,6 +626,7 @@ class ContextRetention(TrajectoryMetric):
     """A fact introduced early is still recalled when probed later."""
 
     name = "context_retention"
+    name_zh = "上下文保持"
     category = "robustness"
 
     def __init__(self, anchors: tuple[ContextAnchor, ...] = ()) -> None:
@@ -587,6 +713,7 @@ class ClarificationAbility(_ProbeReplyMetric):
     """An ambiguous question should be answered with a clarifying question."""
 
     name = "clarification"
+    name_zh = "歧义澄清"
     _what = "ambiguity"
 
     def __init__(
@@ -606,6 +733,7 @@ class ScopeHandling(_ProbeReplyMetric):
     """Off-topic questions get a brief redirect back to business."""
 
     name = "scope_handling"
+    name_zh = "话题边界处理"
     _what = "off-topic"
 
     def __init__(
@@ -632,6 +760,7 @@ class ComplexityHandling(TrajectoryMetric):
     """Complex requests combine plan-level orchestration with tools."""
 
     name = "complexity_handling"
+    name_zh = "复杂任务规划"
     category = "efficiency"
 
     def __init__(
@@ -694,6 +823,7 @@ class HallucinationCheck(TrajectoryMetric):
     """
 
     name = "hallucination_check"
+    name_zh = "幻觉筛查"
     category = "robustness"
 
     def __init__(self, anchors: tuple[HallucinationAnchor, ...] = ()) -> None:
@@ -769,6 +899,7 @@ class NoiseRobustness(TrajectoryMetric):
     """Garbled input must not crash the agent nor blank its reply."""
 
     name = "noise_robustness"
+    name_zh = "抗噪"
     category = "robustness"
 
     def __init__(
@@ -817,6 +948,7 @@ class InstructionFollowing(TrajectoryMetric):
     """A declared format demand is satisfied by the following reply."""
 
     name = "instruction_following"
+    name_zh = "指令遵循"
     category = "robustness"
 
     def __init__(self, specs: tuple[FormatSpec, ...] = ()) -> None:
@@ -910,6 +1042,7 @@ class ForkMemoryRetention(TrajectoryMetric):
     """
 
     name = "fork_memory_retention"
+    name_zh = "fork 记忆保持"
     category = "robustness"
 
     def __init__(self, anchors: tuple[MemoryAnchor, ...] = ()) -> None:
@@ -1020,6 +1153,7 @@ class SensitiveLeakage(TrajectoryMetric):
     """
 
     name = "sensitive_leakage"
+    name_zh = "敏感泄露"
     category = "integrity"
 
     def __init__(
@@ -1085,6 +1219,7 @@ class InjectionResistance(TrajectoryMetric):
     """
 
     name = "injection_resistance"
+    name_zh = "注入抵抗"
     category = "integrity"
 
     def __init__(
@@ -1136,3 +1271,13 @@ class InjectionResistance(TrajectoryMetric):
             self, "ok", 1.0,
             [f"{len(staged)} injection payload(s) staged, none echoed"],
         )
+
+
+#: 指标 id → 中文展示名（同 ``metrics.METRIC_ZH``：从类的 ``name_zh`` 派生）。
+METRIC_ZH: dict[str, str] = {
+    obj.name: obj.name_zh
+    for obj in list(globals().values())
+    if isinstance(obj, type)
+    and issubclass(obj, TrajectoryMetric)
+    and getattr(obj, "name_zh", None)
+}

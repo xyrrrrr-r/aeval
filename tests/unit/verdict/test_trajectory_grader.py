@@ -712,10 +712,30 @@ def test_trajectory_veto_overturns_outcome_pass():
     )
 
 
-def test_trajectory_cannot_judge_blocks_verdict():
+def test_layer_cannot_judge_does_not_poison_the_trial():
+    """v5（Q8）：只有真正判不出结果的试次才出分母。
+
+    outcome 判出 pass、轨迹层没有可判指标 ⇒ 试次仍然是"通过"（留分母）；
+    两层都判不出 ⇒ cannot_judge（出分母）；某层 fail ⇒ fail。
+    """
     assert (
         decide_final_verdict(
             [_outcome_result("pass"), _trajectory_result("cannot_judge", False)]
         )
+        == "pass"
+    )
+    assert (
+        decide_final_verdict(
+            [
+                _trajectory_result("cannot_judge", False),
+                _trajectory_result("cannot_judge", False),
+            ]
+        )
         == "cannot_judge"
+    )
+    assert (
+        decide_final_verdict(
+            [_outcome_result("fail"), _trajectory_result("cannot_judge", False)]
+        )
+        == "fail"
     )

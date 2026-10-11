@@ -290,7 +290,27 @@ async def collect_trial_evidence(
 
 
 def _read_suite_anchors(suite: Any) -> bytes:
-    """The suite's ``rubric/task_anchors.json`` bytes, fail-closed."""
+    """The anchors bytes to seal, fail-closed.
+
+    Two shapes share one channel (``rubric/task_anchors.json``):
+
+    - family suites (``families``): the deterministic projection
+      of the family declarations — ``{task_id: {family: anchors}}``
+      (v4 design). The projection is a derived artifact; its inputs (the
+      activated family files) are already inside the chain digest.
+    - legacy opt-in suites: the suite's own ``rubric/task_anchors.json``
+      file, sealed verbatim (a reformat would change what graders see
+      without changing the source file).
+    """
+    families = getattr(suite, "families", None)
+    if families:
+        try:
+            return suite.sealed_anchor_projection()
+        except Exception as exc:  # noqa: BLE001 — projection is a promise
+            raise CollectionError(
+                f"the family suite's anchor projection failed: {exc} — "
+                "collection refuses to seal a rubric it cannot derive"
+            ) from exc
     suite_dir = Path(getattr(suite, "suite_dir", ""))
     anchors_path = suite_dir / "rubric" / "task_anchors.json"
     try:

@@ -19,7 +19,14 @@ from typing import Any, Callable
 
 from aeval.contracts import GradeResult, TrialRecord
 from aeval.suite_models import GraderDeclaration
-from aeval.verdict.base import Grader, ResolvedGrader
+from aeval.verdict.base import Grader, GraderLoadError, ResolvedGrader
+from aeval.verdict.trajectory.assembly import (
+    DeclaredGuardPlan,
+    DeclaredMetricPlan,
+    build_declared_family_grader,
+    build_declared_guard_grader,
+    metric_registry,
+)
 
 __all__ = [
     "GraderLoadError",
@@ -39,21 +46,26 @@ def load_grader_module(
     ``turn_metrics(task_id)`` 之类的分析入口。身份校验与
     :func:`load_grader` 完全一致（模块必须自证 id/version），只是
     返回模块对象而非协议包装。
+
+    The pinned version is authoritative: ``GraderDeclaration.version``
+    when explicitly set, otherwise the ``@version`` suffix of the impl
+    reference (``FamilyEngine`` declarations carry no separate field —
+    the pin lives in the impl string). A module that self-identifies
+    with any other version never loads.
     """
     reference = Path(reference)
     module = _load_module(reference)
     grader_id = _required_text(module, "GRADER_ID")
     grader_version = _required_text(module, "GRADER_VERSION")
-    if declared.version is not None and grader_version != declared.version:
+    pinned = getattr(declared, "version", None)
+    if pinned is None:
+        _, pinned = split_impl(declared.impl)
+    if grader_version != pinned:
         raise GraderLoadError(
             f"grader module {grader_id} declares version {grader_version!r} "
-            f"but the suite declared {declared.version!r}"
+            f"but the suite pinned {pinned!r}"
         )
     return module
-
-
-class GraderLoadError(RuntimeError):
-    """The grader module violates the loading contract — never executed."""
 
 
 # impl references are ``<relative path>.py@<version>``
@@ -124,13 +136,30 @@ def _required_text(module: Any, attribute: str) -> str:
     return value.strip()
 
 
-def load_grader(reference: Path, declared: GraderDeclaration) -> ResolvedGrader:
+def load_grader(
+    reference: Path,
+    declared: GraderDeclaration,
+    *,
+    family_key: str | None = None,
+    family_spec: Any | None = None,
+) -> ResolvedGrader:
     """Load and verify one declared grader.
 
     The declaration is authoritative for the version and layer; the module
     must agree. The returned ``Grader`` protocol object carries the module
     identity, so a result from another grader can never be attributed to
     this one (checked again by :func:`aeval.verdict.executor.grade_trial`).
+
+    ``family_key`` (gradeCategory v4) is the family this load is FOR: the
+    wrapper injects it into the record as ``grade_bindings[grader_id]``
+    right before ``grade`` runs, so a family engine can read its own
+    anchors from the sealed copy (``{task_id: {family: anchors}}``).
+    v5: a module exposing ``METRICS`` is a metric LIBRARY, not a family
+    engine — the grader is built from the declaration's metric plan
+    (``family_spec.metrics``, judging order) plus the module's
+    ``id → factory`` registry, so the module keeps no second copy of the
+    metric list, the threshold or the veto flag. ``family_spec`` is
+    mandatory on that path (fail-closed).
     """
     reference = Path(reference)
     module = _load_module(reference)
@@ -145,6 +174,26 @@ def load_grader(reference: Path, declared: GraderDeclaration) -> ResolvedGrader:
         )
     if declared.layer not in _ALLOWED_LAYERS:
         raise GraderLoadError(f"grader layer must be one of {_ALLOWED_LAYERS}")
+
+    if family_spec is not None and family_spec.metrics:
+        return _load_declared_family_grader(
+            module,
+            declared,
+            grader_id=grader_id,
+            grader_version=grader_version,
+            family_key=family_key,
+            family_spec=family_spec,
+        )
+
+    # v5 A：守卫声明了 trace 指标清单 → 走声明驱动装配（模块须是指标
+    # 库）。只声明 impl/layer/veto 的守卫保持 legacy 路径，逐字节兼容。
+    if getattr(declared, "metrics", None) and family_spec is None:
+        return _load_declared_guard_grader(
+            module,
+            declared,
+            grader_id=grader_id,
+            grader_version=grader_version,
+        )
 
     required = getattr(module, "REQUIRED_FIELDS", None)
     if required is None:
@@ -173,13 +222,30 @@ def load_grader(reference: Path, declared: GraderDeclaration) -> ResolvedGrader:
         grade=grade,
     )
 
+    # v5：模块不再声明锚点词汇表/解析器——inputs 由声明逐指标绑定，
+    # 引擎没有锚点契约面（锚点通道是套件级 verdict.anchors: task_anchors）。
+    _module_family_key = family_key
+
     class _ModuleGrader:
         # Protocol view over the verified module identity.
         id = loaded.grader_id
         version = loaded.grader_version
         layer = loaded.layer  # type: ignore[assignment]
+        family_key = _module_family_key
 
         async def grade(self, record: TrialRecord) -> GradeResult:
+            if _module_family_key is not None:
+                # Runtime-only binding: which family this engine instance
+                # is judging FOR. Copied per call — the sealed record the
+                # pipeline persists never carries it.
+                record = record.model_copy(
+                    update={
+                        "grade_bindings": {
+                            **(record.grade_bindings or {}),
+                            loaded.grader_id: _module_family_key,
+                        }
+                    }
+                )
             return await loaded.call(record)
 
     return ResolvedGrader(
@@ -188,3 +254,77 @@ def load_grader(reference: Path, declared: GraderDeclaration) -> ResolvedGrader:
         veto=declared.veto,
         requires_fields=list(required_fields),
     )
+
+def _load_declared_family_grader(
+    module: Any,
+    declared: GraderDeclaration,
+    *,
+    grader_id: str,
+    grader_version: str,
+    family_key: str | None,
+    family_spec: Any | None,
+) -> ResolvedGrader:
+    """Assembly for a metric-library module (v5 declaration-driven path).
+
+    The family declaration is the truth: its metric list (judging order),
+    threshold and veto flag drive the built grader. A family load without
+    a spec is refused — the assembler must never guess which metrics to
+    judge.
+    """
+    registry = metric_registry(module)
+    if registry is None:
+        raise GraderLoadError(
+            f"{grader_id}@{grader_version} is declared as a family engine but "
+            "exposes no METRICS registry — a family's metrics are declared, so "
+            "the engine must be a metric library (there is no second, coded "
+            "metric list any more)"
+        )
+    plan = DeclaredMetricPlan(
+        grader_id=grader_id,
+        grader_version=grader_version,
+        layer=declared.layer,
+        threshold=float(family_spec.threshold),
+        veto=bool(declared.veto),
+        metric_ids=tuple(metric.id for metric in family_spec.metrics),
+        declared_severities={
+            metric.id: metric.severity for metric in family_spec.metrics
+        },
+        declared_inputs={
+            metric.id: (next(iter(metric.inputs.values())) if metric.inputs else None)
+            for metric in family_spec.metrics
+        },
+        family_key=family_key or family_spec.name,
+        metric_specs=tuple(family_spec.metrics),
+        consumes_inputs=any(
+            bool(metric.inputs) for metric in family_spec.metrics
+        ),
+    )
+    return build_declared_family_grader(module, plan)
+
+def _load_declared_guard_grader(
+    module: Any,
+    declared: GraderDeclaration,
+    *,
+    grader_id: str,
+    grader_version: str,
+) -> ResolvedGrader:
+    """Assembly for a guard that declares its trace metric list (v5 A).
+
+    声明的清单是判分真源：按声明序逐 id 从模块的 ``METRICS`` 取工厂，
+    ``severity`` 与实现 ``category`` 对表；``veto`` 仍来自声明（守卫的
+    门是套件策略，不是模块常量）。守卫不吃逐任务输入、不设阈值。
+    """
+    declared_metrics = list(getattr(declared, "metrics", None) or [])
+    plan = DeclaredGuardPlan(
+        grader_id=grader_id,
+        grader_version=grader_version,
+        layer=declared.layer,
+        veto=bool(declared.veto),
+        metric_ids=tuple(metric.id for metric in declared_metrics),
+        declared_severities={
+            metric.id: metric.severity for metric in declared_metrics
+        },
+        guard_key=declared.impl,
+    )
+    return build_declared_guard_grader(module, plan)
+

@@ -63,7 +63,16 @@ def native_suite_dir(tmp_path) -> Path:
         "job_name: synthetic\nn_attempts: 2\nn_concurrent_trials: 1\nagents: [{name: nop}]\n",
         encoding="utf-8",
     )
-    (root / "graders/outcome.py").write_text('VERSION = "v7"\n', encoding="utf-8")
+    # 判分器模块必须自证身份（v5：密封 dimension_model 解析每个声明的
+    # 判分器，缺失/说谎即 fail-closed）——这个桩模块也照此声明。
+    (root / "graders/outcome.py").write_text(
+        'GRADER_ID = "native-outcome"\n'
+        'GRADER_VERSION = "v7"\n'
+        'LAYER = "outcome"\n'
+        'REQUIRED_FIELDS = []\n'
+        "\n\nasync def grade(record):\n    return record\n",
+        encoding="utf-8",
+    )
     (task / "task.toml").write_text(
         'version = "1.0"\n'
         "[[verifier.collect]]\n"

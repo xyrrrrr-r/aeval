@@ -17,22 +17,95 @@ id: tbench-intel
 # （变体各自声明契约，跨套件共享应提为 _base），故在此整体声明。
 # 本变体用于对已密封的 trial 证据按扩展标准判分，不声明 datasets
 # （不组合新 run，也就不复制任何上游 vendored 任务数据）。
-version: 0.1.0
+# 0.2.0（判分类别统一 v4）：
+#   - 判分类别升格为指标族：suite.yaml 只保留官方基线（default 槽 =
+#     tbench_outcome，terminal-bench 自带 verifier 的 reward）；轨迹
+#     完整性（反作弊 veto）与效率（预算/时长，信息性）收敛为守卫
+#     （对全体 task 生效、折叠进终判、无类别行）；判分类别进
+#     families/（自足可移植，单向锁定）。
+#   - 两个族：conversation-quality 会话质量（3 例全 home，quality@v2，
+#     锚点自模块 ANCHORS 移入密封通道）、security 安全（3 例 home，
+#     security@v1 veto；规格与 aeval-intel 侧安全族逐项一致——但两者
+#     分属不同套件，各出各的报告，不合成一份）。
+#   - 锚点密封通道（verdict.anchors: task_anchors）：quality.py@v1→
+#     @v2 删除模块内 ANCHORS，改读密封副本 rubric/task_anchors.json。
+#   - task_categories.yaml / task_titles.yaml 退役（值原样搬入族声明）；
+#     task_id 一个不改；每 task 装配集合 = 0.1.0 五件套逐一相同
+#     （基线 + 2 守卫 + 2 族引擎）。# 0.4.0（2026-10-11）：指标目录化（v5 Step 6）——25 项判分指标（守卫 11 +
+#   会话质量 4 + 安全 2 …合计 17 条，含逐任务输入）的定义与归属收敛到
+#   verdict.metric_catalog 一处，族文件与守卫只写 id 引用；判分口径与数字
+#   不变，声明字节变化故重新签名。
+version: 0.4.0
 extends: _base/harbor.base.yaml
 harbor:
   job: jobs/tbench-intel-m0.yaml
 observables:
   - { name: reward, type: string, source: "file:/logs/verifier/reward.txt" }
+# 单向锁定（列出即激活）：族的声明文件（规格/引擎/用例/锚点自足可
+# 移植；chain digest 收录激活族文件字节——编辑族即换 run 身份）。
+families:
+  - families/conversation-quality.yaml
+  - families/security.yaml
+# 大块显示名（雷达轴）：core 承接 task_categories.yaml，safety 新增
+# （安全族）。
+blocks:
+  core: 任务执行
+  safety: 输出安全
 verdict:
+  # 指标目录（v5 Step 6）：一项指标的**定义只有这一处**——层 / 严重度
+  # （integrity = 违规即 veto）/ 可选降级线 + 归属角色（gate = 套件级
+  # 有效性门，只由守卫引用；dimension = 计分维度，由族引用）。守卫声明
+  # 与族文件只写 id 引用；逐任务锚点输入留在族文件里。
+  metric_catalog:
+  - { id: response_brevity, layer: trajectory, classification: dimension }
+  - { id: tool_selection, layer: trajectory, classification: dimension }
+  - { id: hallucination_check, layer: trajectory, classification: dimension }
+  - { id: instruction_following, layer: trajectory, classification: dimension }
+  - { id: sensitive_leakage, layer: trajectory, severity: integrity, classification: dimension }
+  - { id: injection_resistance, layer: trajectory, severity: integrity, classification: dimension }
+  - { id: step_efficiency, layer: trajectory, classification: gate }
+  - { id: token_efficiency, layer: trajectory, classification: gate }
+  - { id: tool_error_rate, layer: trajectory, classification: gate }
+  - { id: loop_detection, layer: trajectory, classification: gate }
+  - { id: recovery, layer: trajectory, classification: gate }
+  - { id: redundant_actions, layer: trajectory, classification: gate }
+  - { id: budget_adherence, layer: trajectory, classification: gate }
+  - { id: forbidden_access, layer: trajectory, severity: integrity, classification: gate }
+  - { id: scope_discipline, layer: trajectory, severity: integrity, classification: gate }
+  - { id: task_wall_clock, layer: trajectory, classification: gate }
+  - { id: turn_efficiency, layer: trajectory, classification: gate }
   graders:
-    # 与 tbench-pilot 相同的两层（同 rubric 身份 tbench-outcome@v1 /
-    # tbench-trajectory@v1，thin wrapper 副本随套件携带）……
+    # 官方基线（新格式唯一允许的槽）：terminal-bench 自带 verifier
+    # 的 reward（同 rubric 身份 tbench-outcome@v1，thin wrapper 副本
+    # 随套件携带）。
     default: { impl: "graders/tbench_outcome.py@v1", layer: outcome }
-    trajectory: { impl: "graders/tbench_trajectory.py@v1", layer: trajectory, veto: true }
-    # ……加上本轮新增的评分层。
-    quality: { impl: "graders/quality.py@v1", layer: trajectory }
-    security: { impl: "graders/security.py@v1", layer: trajectory, veto: true }
-    efficiency: { impl: "graders/efficiency.py@v1", layer: trajectory }
+  # 守卫（试次有效性门，无类别行）：对全体 task 生效。
+  guards:
+    # 反作弊：9 项轨迹完整性（required 字段缺失/超时中断/伪造即
+    # veto 推翻 outcome pass）。判定读密封 ATIF 轨迹；清单 = 目录里
+    # gate 角色的 9 项（id 引用）。
+    - impl: "graders/tbench_trajectory.py@v1"
+      layer: trajectory
+      veto: true
+      metrics:
+        - step_efficiency
+        - token_efficiency
+        - tool_error_rate
+        - loop_detection
+        - recovery
+        - redundant_actions
+        - budget_adherence
+        - forbidden_access
+        - scope_discipline
+    # 预算/时长（信息性）：完成时间/沟通轮次 vs 套件声明预算。
+    - impl: "graders/efficiency.py@v1"
+      layer: trajectory
+      metrics:
+        - task_wall_clock
+        - turn_efficiency
+  # 锚点密封通道：组合期投影 {task_id: {族键: anchors}} → 每条试次
+  # 证据束密封 rubric/task_anchors.json → 族引擎读密封副本。
+  anchors: task_anchors
 metrics:
   - { id: reliability, kind: pass_pow_k, k: 3 }
 driver:

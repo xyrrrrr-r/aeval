@@ -2,9 +2,12 @@
 
 The rules, in order:
 
-1. **Integrity violation ⇒ ``fail``.** Any metric with
-   ``category == "integrity"`` and ``status == "violated"`` fails the
-   trajectory layer with a valid 0.0 score. Combined with a
+1. **Integrity violation ⇒ ``fail``.** Any metric declared
+   ``severity: integrity`` (v5 Step 2: the *declaration* is the source;
+   ``integrity_metrics`` carries those ids) with ``status ==
+   "violated"`` fails the trajectory layer with a valid 0.0 score.
+   Free-form modules without a metric library fall back to the
+   implementation's ``category == "integrity"``. Combined with a
    ``veto: true`` suite declaration this overturns an outcome ``pass``
    (see ``decide_final_verdict`` in ``aeval.verdict.base``).
 2. **Required metric skipped ⇒ ``cannot_judge``.** A metric the suite
@@ -35,6 +38,7 @@ def fold_outcomes(
     grader_version: str,
     veto: bool,
     layer: str = "trajectory",
+    integrity_metrics: frozenset[str] | None = None,
 ) -> GradeResult:
     outcomes = list(outcomes)
 
@@ -54,8 +58,18 @@ def fold_outcomes(
             metrics=outcomes,
         )
 
-    # Rule 1 — integrity violations fail the trial.
-    violated = [o for o in outcomes if o.category == "integrity" and o.status == "violated"]
+    # Rule 1 — integrity violations fail the trial。两条来源，各有其主：
+    # 声明路径（族/守卫用 METRICS 注册表装配，``integrity_metrics`` 来自
+    # ``severity: integrity``）以声明为准；整词表守卫（模块自己构造
+    # TrajectoryGrader，没有声明层）以指标实现自己的
+    # ``MetricOutcome.category`` 为准——那是该模块自己的契约，不是第二份
+    # 声明。
+    def _is_integrity(outcome: MetricOutcome) -> bool:
+        if integrity_metrics is not None:
+            return outcome.name in integrity_metrics
+        return outcome.category == "integrity"
+
+    violated = [o for o in outcomes if _is_integrity(o) and o.status == "violated"]
     if violated:
         reasons: list[str] = [
             f"trajectory integrity violated by {len(violated)} metric(s): "

@@ -22,6 +22,7 @@ from aeval.suite_loader.loader import (
     load_suite,
     render_suite_explanation,
 )
+from aeval.verdict.pipeline import sealed_dimension_model
 
 app = typer.Typer(
     name="aeval",
@@ -449,6 +450,10 @@ def run_cmd(
             control_dist=broker_spec.control_dist if broker_spec else None,
             facade_dist=facade_dist,
         )
+        # 族模式（v4）：清单封存的维度模型补上引擎自证身份（族→用例
+        # →引擎，含 resolved grader_id）——报告 join 只读密封映射，
+        # 不 import 判分器（P4）。说谎/缺失的引擎在这里就报错。
+        dimension_model = sealed_dimension_model(resolved)
         manifest = RunManifest(
             run_id=f"run-{run_dir.name}",
             runtime_lock=lock,
@@ -469,9 +474,7 @@ def run_cmd(
                 source_commit=source_commit,
             ),
             task_titles=resolved.task_titles,
-            category_names=resolved.category_names,
-            default_category=resolved.default_category,
-            dimension_model=resolved.dimension_model,
+            dimension_model=dimension_model,
             versions=VersionsBundle(
                 aeval_version=version("aeval-harbor"),
                 converter_version=resolved.overlay.provenance.converter_version,
@@ -540,6 +543,25 @@ def run_cmd(
         f"run {report.run_id} sealed: {report.recorded_trials} trial(s) recorded, "
         f"{report.attested_files} file(s) attested, recompute passed"
     )
+    # "Sealed" is a statement about the evidence chain, not about the run being
+    # usable: an excluded trial is not scored at all, and a run whose trials
+    # were all excluded measured nothing while still exiting 0 and sealing.
+    # The per-trial cause is in the summary, but nobody reads a JSON first, so
+    # the shape of the loss is printed here.
+    exclusions = report.exclusions
+    if exclusions is not None and exclusions.excluded:
+        for reason, count in sorted(exclusions.excluded.items()):
+            typer.secho(
+                f"  excluded {count} trial(s): {reason}",
+                fg=typer.colors.YELLOW, err=True,
+            )
+        typer.secho(
+            f"  {exclusions.valid}/{exclusions.total} trial(s) scored "
+            f"(exclusion rate {exclusions.exclusion_rate:.1%}) — the cause of each "
+            f"is in {run_dir / 'aeval_run_summary.json'} under "
+            "trials[*].infra_invalid_reasons",
+            fg=typer.colors.YELLOW, err=True,
+        )
     raise typer.Exit(EXIT_OK)
 
 
@@ -681,12 +703,23 @@ def new_agent_cmd(
 @app.command("agents")
 def agents_cmd(
     agents_dir: Annotated[Path, typer.Option(help="Directory holding agents/<id>.yaml")] = Path("agents"),
+    init: Annotated[
+        bool,
+        typer.Option("--init", help="Write the shipped starter declarations into the agents directory"),
+    ] = False,
+    force: Annotated[
+        bool, typer.Option("--force", help="With --init: overwrite files that already exist")
+    ] = False,
 ) -> None:
     """List declared agent adapters and prove each agrees with its adapter class.
 
     The declaration is the discoverable surface; the class is what the runtime
     reads. Printing both here — and failing loudly on disagreement — is what keeps
     them from drifting apart unnoticed.
+
+    ``--init`` writes the declarations this install ships (the base, the
+    runtime→image table, and the DSH adapter) so an installed aeval has a
+    starting point instead of an empty directory.
     """
     from aeval.agents.contract import load_adapter_class
     from aeval.agents.declaration import (
@@ -694,10 +727,20 @@ def agents_cmd(
         discover_agent_declarations,
         resolve_agent_declaration,
     )
+    from aeval.agents.scaffold import write_starter_declarations
     from aeval.suite_loader.paths import suite_path
     from aeval.suite_models import SuiteError
 
     try:
+        if init:
+            for path in write_starter_declarations(agents_dir, force=force):
+                typer.echo(f"wrote {path}")
+            typer.echo(
+                f"next: `aeval agents --agents-dir {agents_dir}` should list the "
+                "adapters, then set the launch kwargs in the declaration for your "
+                "sandbox (install prefix, npm cache, session reader)."
+            )
+            return
         ids = discover_agent_declarations(agents_dir)
         if not ids:
             _die(f"no agent declarations under {agents_dir}", EXIT_VALIDATION_ERROR)
@@ -839,18 +882,112 @@ def _iter_sealed_evidence(store: Path, records):
         yield record, build_evidence(transcript, record.stop_reason), None
 
 
-def _load_trajectory_stats(store: Path, records):
-    """逐试次采集密封轨迹（报告/面板共用的入口）。
+def _collect_run_inputs(stores: list[Path], run_ids: list[str]):
+    """多 store 聚合入口：按 run_id 找到拥有它的 store，取试次与清单。
 
-    返回 ``(stats, unavailable)``：stats 是 ``TrajectoryStats`` 列表；
-    unavailable 是 ``(trial_id, 原因)``——读不到的试次如实报原因，
-    不假装完整。
+    ``--store`` 可重复给出，用来聚合**同一套件**的多个 run（重复跑 /
+    不同条件）——每个 run 的密封证据在自己的 run 目录里。一份报告只
+    属于一个套件：跨套件由 ``aggregate_run`` 拒绝（见 report.py）。
+    一个 run 不在任何 store 里 = 报错（不许静默漏一个）。返回 ``(trials, manifests, run_store)``，
+    ``run_store[run_id]`` 是该 run 证据所在的 store 路径。
     """
+    from aeval.store.sqlite import TrialStore
+
+    trials: list = []
+    manifests = []
+    run_store: dict[str, Path] = {}
+    for run_id in run_ids:
+        db = None
+        manifest = None
+        owner = None
+        for candidate in stores:
+            probe = TrialStore(candidate)
+            try:
+                manifest = probe.load_run_manifest(run_id)
+            except KeyError:
+                probe.close()
+                continue
+            else:
+                db = probe
+                owner = candidate
+                break
+        if db is None or manifest is None:
+            _die(
+                f"run {run_id!r} is not recorded in any of the given stores "
+                f"({', '.join(str(s) for s in stores)}) — cannot report "
+                "unrecorded runs",
+                EXIT_VALIDATION_ERROR,
+            )
+        try:
+            manifests.append(manifest)
+            trials.extend(db.list_trials([run_id]))
+            run_store[run_id] = owner
+        finally:
+            db.close()
+    return trials, manifests, run_store
+
+
+def _iter_sealed_evidence_multi(run_store: dict[str, Path], records):
+    """逐试次产出 ``(record, evidence, reason)``（多 store 版）。
+
+    trial 目录的定位与单 store 版相同（store.parent/trials 下的
+    collection_manifest 记录 trial_id），只是每个 record 用它所属
+    run 的 store。
+    """
+    import json as _json
+
+    from aeval.verdict.trajectory.base import (
+        SealedTranscriptError,
+        build_evidence,
+        load_sealed_transcript,
+    )
+
+    dir_by_trial: dict[str, Path] = {}
+    seen_dirs: set[Path] = set()
+    for store in set(run_store.values()):
+        trials_dir = store.parent / "trials"
+        if trials_dir in seen_dirs or not trials_dir.is_dir():
+            continue
+        seen_dirs.add(trials_dir)
+        for entry in sorted(trials_dir.iterdir()):
+            manifest_path = entry / "collection_manifest.json"
+            if not entry.is_dir() or not manifest_path.is_file():
+                continue
+            try:
+                sealed_id = _json.loads(
+                    manifest_path.read_text("utf-8")
+                ).get("trial_id")
+            except (OSError, ValueError):
+                continue
+            if isinstance(sealed_id, str):
+                dir_by_trial[sealed_id] = entry
+
+    for record in records:
+        trial_dir = dir_by_trial.get(record.trial_id)
+        if trial_dir is None:
+            yield record, None, "试次目录缺失"
+            continue
+        try:
+            transcript = load_sealed_transcript(
+                record.model_copy(update={"artifact_base": str(trial_dir)})
+            )
+        except SealedTranscriptError as exc:
+            yield record, None, exc.reason
+            continue
+        yield record, build_evidence(transcript, record.stop_reason), None
+
+
+def _load_trajectory_stats_multi(
+    run_store: dict[str, Path], records
+) -> tuple[list, list[tuple[str, str]]]:
+    """逐试次采集密封轨迹（多 store 版，与单 store 同语义）。"""
     from aeval.verdict.trajectory.stats import collect_stats
 
     stats: list = []
     unavailable: list[tuple[str, str]] = []
-    for record, evidence, reason in _iter_sealed_evidence(store, records):
+    for record, evidence, reason in _iter_sealed_evidence_multi(
+        run_store, records
+    ):
         if evidence is None:
             unavailable.append((record.trial_id, reason))
         else:
@@ -860,34 +997,29 @@ def _load_trajectory_stats(store: Path, records):
 
 @app.command("report")
 def report_cmd(
-    store: Annotated[Path, typer.Option()],
+    store: Annotated[list[Path], typer.Option("--store")],
     run_ids: Annotated[list[str], typer.Argument()],
     k: Annotated[Optional[int], typer.Option()] = None,
     compare: Annotated[bool, typer.Option()] = False,
 ) -> None:
-    """Aggregate runs from the store and render the static report."""
+    """Aggregate runs (possibly across stores) and render the static report.
+
+    ``--store`` 可重复给出以聚合**同一套件**的多个 run（重复跑 / 不同
+    条件）；跨套件聚合会被拒绝（不同套件 = 不同实验，各自出报告）。
+    每个 run 必须被其中某个 store 记录。
+    """
     from aeval.bundle.manifest import ManifestTamperError
     from aeval.metrics.report import aggregate_run, render_static_report
-    from aeval.store.sqlite import TrialStore
 
-    db = TrialStore(store)
+    trials, manifests, run_store = _collect_run_inputs(list(store), run_ids)
+    trajectory, unavailable = _load_trajectory_stats_multi(run_store, trials)
     try:
-        trials = db.list_trials(run_ids)
-        manifests = []
-        for run_id in run_ids:
-            try:
-                manifests.append(db.load_run_manifest(run_id))
-            except KeyError as exc:
-                _die(f"{exc} — cannot report or compare unrecorded runs",
-                     EXIT_VALIDATION_ERROR)
-    finally:
-        db.close()
-    # 轨迹采集：逐试次读密封证据（sha256 校验），失败的如实记原因。
-    trajectory, unavailable = _load_trajectory_stats(store, trials)
-    summary = aggregate_run(
-        run_ids, trials, k=k, manifests=manifests,
-        trajectory=trajectory, trajectory_unavailable=unavailable,
-    )
+        summary = aggregate_run(
+            run_ids, trials, k=k, manifests=manifests,
+            trajectory=trajectory, trajectory_unavailable=unavailable,
+        )
+    except ValueError as exc:  # 可比组内声明不一致 → 内部矛盾，拒绝出报告
+        _die(str(exc), EXIT_VALIDATION_ERROR)
     if compare:
         if len(run_ids) < 2:
             _die("--compare needs at least two run ids", EXIT_PARAM_ERROR)
@@ -907,40 +1039,32 @@ def report_cmd(
 
 @app.command("dashboard")
 def dashboard_cmd(
-    store: Annotated[Path, typer.Option()],
+    store: Annotated[list[Path], typer.Option("--store")],
     run_ids: Annotated[list[str], typer.Argument()],
     k: Annotated[Optional[int], typer.Option()] = None,
 ) -> None:
     """Render the run dashboard as one self-contained HTML file.
 
-    Same aggregation pipeline as ``report`` (same store, same manifests,
+    Same aggregation pipeline as ``report`` (same stores, same manifests,
     same ``aggregate_run``); the dashboard is a second renderer over the
-    verified numbers, not a second source of truth. Output is printed to
-    stdout — redirect to a file to keep it::
+    verified numbers, not a second source of truth. ``--store`` 可重复
+    给出（多 run 聚合）。Output is printed to stdout — redirect to a
+    file to keep it::
 
         aeval dashboard --store out/run/store.sqlite3 run-... --k 3 > dash.html
     """
     from aeval.metrics.dashboard import render_dashboard_html
     from aeval.metrics.report import aggregate_run
-    from aeval.store.sqlite import TrialStore
 
-    db = TrialStore(store)
+    trials, manifests, run_store = _collect_run_inputs(list(store), run_ids)
+    trajectory, unavailable = _load_trajectory_stats_multi(run_store, trials)
     try:
-        trials = db.list_trials(run_ids)
-        manifests = []
-        for run_id in run_ids:
-            try:
-                manifests.append(db.load_run_manifest(run_id))
-            except KeyError as exc:
-                _die(f"{exc} — cannot report or compare unrecorded runs",
-                     EXIT_VALIDATION_ERROR)
-    finally:
-        db.close()
-    trajectory, unavailable = _load_trajectory_stats(store, trials)
-    summary = aggregate_run(
-        run_ids, trials, k=k, manifests=manifests,
-        trajectory=trajectory, trajectory_unavailable=unavailable,
-    )
+        summary = aggregate_run(
+            run_ids, trials, k=k, manifests=manifests,
+            trajectory=trajectory, trajectory_unavailable=unavailable,
+        )
+    except ValueError as exc:
+        _die(str(exc), EXIT_VALIDATION_ERROR)
     typer.echo(render_dashboard_html(summary))
 
 
@@ -963,9 +1087,19 @@ def _resolve_turn_metrics_factory(suites_dir: Path, manifest):
     grader that declares no ``turn_metrics`` degrades to ``(None, None)``
     (structural facets only, never a fabricated attribution score). The warning
     is emitted once here, not once per task in a batch.
+
+    族模式（v5）：工厂按族装配——任务点进哪个族（激活序），就用那
+    个族**声明**的指标清单（判分顺序）与该族给它的锚点，从模块的
+    ``METRICS`` 注册表构建指标对象（与判分侧同一
+    ``build_family_metrics`` 构建路径，锚点换源为密封声明映射）。
+    判分真源只有一处：声明。
     """
     from aeval.suite_loader.loader import load_suite
     from aeval.verdict.loader import load_grader_module, split_impl
+    from aeval.verdict.trajectory.assembly import (
+        build_family_metrics,
+        metric_registry,
+    )
 
     suite_path = suites_dir / manifest.overlay.suite_id
     if not suite_path.is_dir():
@@ -976,6 +1110,39 @@ def _resolve_turn_metrics_factory(suites_dir: Path, manifest):
         )
         return None, None
     suite = load_suite(suite_path)
+    if suite.has_families:
+        modules = {}
+        labels = []
+        for key, spec in suite.families.items():
+            if spec.engine.layer not in ("trajectory", "both"):
+                continue
+            path, _ = split_impl(spec.engine.impl)
+            module = load_grader_module(suite_path / path, spec.engine)
+            if metric_registry(module) is None:
+                continue
+            modules[key] = module
+            labels.append(
+                f"{getattr(module, 'GRADER_ID', key)}@"
+                f"{getattr(module, 'GRADER_VERSION', '')}"
+            )
+
+        def _family_factory(task_id: str):
+            for key, spec in suite.families.items():
+                inputs = spec.inputs_for(task_id)
+                if not inputs:
+                    continue
+                module = modules.get(key)
+                if module is None:
+                    continue
+                registry = metric_registry(module)
+                # v5：输入按指标 id 归属（任务只是键），构建路径与判分
+                # 共用一份（面板不会用第二份 rubric 归因）。
+                return build_family_metrics(registry, spec.metrics, inputs)
+            return None
+
+        if modules:
+            return _family_factory, "、".join(labels)
+        return None, None
     for declared in suite.overlay.verdict.resolved_graders():
         if declared.layer not in ("trajectory", "both"):
             continue

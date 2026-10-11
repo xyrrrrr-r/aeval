@@ -43,6 +43,7 @@ __all__ = [
     "TrajectoryGrader",
     "TrajectoryMessage",
     "load_sealed_anchors",
+    "load_sealed_family_anchors",
     "load_sealed_transcript",
     "build_evidence",
     "agent_replies_from_steps",
@@ -222,6 +223,47 @@ def load_sealed_anchors(record: TrialRecord) -> dict[str, Any]:
             "rubric table has no usable shape"
         )
     return data
+
+
+def load_sealed_family_anchors(
+    record: TrialRecord, task_id: str, family_key: str | None
+) -> dict[str, Any] | None:
+    """该族对该 task 的密封锚点（族键读取）。
+
+    密封副本结构 ``{task_id: {族键: anchors}}``。返回 None（连同一个
+    人话原因）的三种诚实情形——绝不猜一份 rubric：
+
+    - 通道未密封 / 不可读 / 摘要不符：``SealedArtifactError`` 向上抛
+      （调用方折为 ``cannot_judge``）；
+    - 该 task 无任何族锚点 / 该族未声明该 task 的锚点 → ``(None,
+      reason)``：族×用例缺锚点，依赖锚点的维度诚实 skipped；
+    - 引擎没有族绑定（非族装配加载）→ ``(None, reason)``。
+    """
+    task_id = task_id or "unknown"
+    if family_key is None:
+        return None, (
+            "no grade-category binding on this grader load — anchors are "
+            "family-scoped and this engine was not loaded for a family"
+        )
+    data = load_sealed_anchors(record)
+    entry = data.get(task_id)
+    if not isinstance(entry, dict) or not entry:
+        return None, (
+            f"no sealed anchors for task {task_id!r} — no family declared "
+            "anchors for this case"
+        )
+    anchors = entry.get(family_key)
+    if anchors is None:
+        return None, (
+            f"family {family_key!r} declares no anchors for task {task_id!r} "
+            "— anchor-dependent dimensions skip themselves honestly"
+        )
+    if not isinstance(anchors, dict):
+        raise SealedArtifactError(
+            f"sealed anchors for task {task_id!r} family {family_key!r} are "
+            "not a JSON object"
+        )
+    return anchors, None
 
 
 def _observation_text(observation: Any, call_id: str) -> tuple[str, bool]:
@@ -451,11 +493,17 @@ class TrajectoryGrader:
         grader_version: str,
         metrics: Sequence[Any],
         veto: bool = False,
+        integrity_metrics: frozenset[str] | None = None,
     ) -> None:
         self.id = grader_id
         self.version = grader_version
         self.veto = veto
         self._metrics = list(metrics)
+        # v5 Step 2：诚信语义以**声明**为准。族的 metrics 清单里
+        # severity: integrity 的那些 id 在这里传下去，折叠时按 id 判定
+        # 违规；实现自身的 ``MetricOutcome.category`` 只作加载期断言
+        # 目标（两者矛盾即拒绝装载），不再是第二个语义来源。
+        self.integrity_metrics = integrity_metrics
 
     @property
     def metrics(self) -> tuple[Any, ...]:
@@ -491,4 +539,5 @@ class TrajectoryGrader:
             grader_id=self.id,
             grader_version=self.version,
             veto=self.veto,
+            integrity_metrics=self.integrity_metrics,
         )

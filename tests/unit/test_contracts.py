@@ -38,7 +38,7 @@ from tests.conftest import FIXTURES
 
 def _atif() -> Trajectory:
     return Trajectory(
-        agent=Agent(name="dsh", version="0.1.7-alpha.1"),
+        agent=Agent(name="dsh", version="0.2.0-rc.2"),
         steps=[Step(step_id=1, source="user", message="hi")],
     )
 

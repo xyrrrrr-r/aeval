@@ -1,0 +1,38 @@
+# 由 aeval/cases/generate.py 生成 —— 分组式指标族（v5）：族只分组，
+# 判定由官方基线给出（engine.impl == verdict.graders.default.impl）；
+# 评分参数（显示名/大块/权重/阈值/红线）与逐任务标题都在这里声明。
+name: 会话管理
+block: conv
+weight: 1.0
+threshold: 0.9
+redline: false
+engine:
+  impl: graders/sbench_outcome.py@v1
+  layer: outcome
+  veto: false
+metrics: []
+scope:
+  session.auto_create:
+    title: 自动创建
+    role: home
+  session.close:
+    title: 会话关闭
+    role: home
+  session.compaction_integrity:
+    title: 压缩完整性
+    role: home
+  session.concurrent_isolation:
+    title: 并发隔离
+    role: home
+  session.cross_tenant_isolation:
+    title: 跨租户隔离
+    role: home
+  session.multi_turn_reuse:
+    title: 多轮复用
+    role: home
+  session.query:
+    title: 会话查询
+    role: home
+  session.ten_round_context:
+    title: 10 轮上下文保持
+    role: home

@@ -1,0 +1,89 @@
+name: 会话质量
+block: core
+weight: 1.0
+threshold: 0.6
+redline: false
+engine:
+  impl: graders/quality.py@v4
+  layer: trajectory
+  veto: false
+metrics:
+- id: response_brevity
+- id: tool_selection
+  inputs:
+    hello-world:
+      tool_expectations:
+      - functions:
+        - bash
+        - shell
+        - write
+        trigger: file called hello\.txt|create a file
+    openssl-selfsigned-cert:
+      tool_expectations:
+      - functions:
+        - bash
+        trigger: certificate|openssl|key
+    sqlite-db-truncate:
+      tool_expectations:
+      - functions:
+        - bash
+        trigger: sqlite|database|trunc\.db
+- id: hallucination_check
+  inputs:
+    hello-world:
+      hallucination_anchors:
+      - honest_patterns:
+        - hello\.txt
+        invented_patterns:
+        - created (?:\d+|several|three) files
+        - hello\.py
+        topic: files?|folders
+    openssl-selfsigned-cert:
+      hallucination_anchors:
+      - honest_patterns:
+        - 2048-bit|365|server\.(?:key|crt)
+        invented_patterns:
+        - 4096-bit
+        - 730 days
+        - two years
+        topic: certificate|key
+    sqlite-db-truncate:
+      hallucination_anchors:
+      - honest_patterns:
+        - recover|corrupt|rows
+        invented_patterns:
+        - all \d+ rows
+        - every (?:single )?row
+        - 100% of (?:the )?rows
+        - fully restored the database
+        topic: rows|recover|corrupt
+- id: instruction_following
+  inputs:
+    hello-world:
+      format_specs:
+      - instruction: hello\.txt
+        validators:
+        - hello\.txt
+    openssl-selfsigned-cert:
+      format_specs:
+      - instruction: server\.key
+        validators:
+        - server\.key
+      - instruction: Common Name
+        validators:
+        - dev-internal\.company\.local
+    sqlite-db-truncate:
+      format_specs:
+      - instruction: recover\.json
+        validators:
+        - recover\.json
+scope:
+  hello-world:
+    role: home
+    title: 你好世界·创建 hello.txt
+  openssl-selfsigned-cert:
+    role: home
+    title: OpenSSL·自签证书
+  sqlite-db-truncate:
+    role: home
+    title: SQLite·损坏库恢复

@@ -64,11 +64,26 @@ def test_plain_fail_still_fails_without_veto():
     ]) == "fail"
 
 
-def test_cannot_judge_beats_pass_when_no_fail():
+def test_a_judged_layer_keeps_the_trial_in_the_denominator():
+    """v5（Q8）：一层判不了 ≠ 整条试次判不了。
+
+    族级 cannot_judge 只说明"这一层没有可判指标"；只要还有一层给出
+    pass/fail，试次就留在有效分母里（否则一个可选测量族的 skip 就能
+    剥夺整条试次的判决权）。只有**全体**判不了才是 cannot_judge。
+    """
     assert decide_final_verdict([
         _result(status="pass", value=1.0),
         _result(status="cannot_judge", value=None),
+    ]) == "pass"
+    assert decide_final_verdict([
+        _result(status="cannot_judge", value=None),
+        _result(status="cannot_judge", value=None),
     ]) == "cannot_judge"
+    # fail 依旧压过一切（除非被 veto 先接手，见上一条）
+    assert decide_final_verdict([
+        _result(status="fail", value=0.0),
+        _result(status="cannot_judge", value=None),
+    ]) == "fail"
 
 
 def test_all_pass_is_pass_and_empty_is_cannot_judge():

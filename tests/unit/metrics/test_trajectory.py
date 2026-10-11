@@ -59,15 +59,81 @@ def test_trajectory_aggregate_numbers():
     assert traj.longest_call[0] == "bash" and traj.longest_call[1] == 10.0
 
 
-def test_trajectory_aggregate_by_category():
+def test_trajectory_aggregate_without_families_is_one_bucket():
+    """没有族的套件：轨迹只落一个"未分族"桶（v5 不按 task_id 前缀猜族，
+    也不编造类别显示名）。"""
     traj = _summary().trajectory
     rows = {c.key: c for c in traj.categories}
-    assert set(rows) == {"alpha", "beta"}
-    assert rows["alpha"].trials == 1 and rows["beta"].trials == 1
-    assert rows["alpha"].total_tokens == 3730
-    assert rows["beta"].tool_calls == 2 and rows["beta"].missing_obs == 1
-    # 无类别显示名声明时回退键名（不编造）。
-    assert rows["alpha"].display == "alpha"
+    assert set(rows) == {"未分族"}
+    assert rows["未分族"].trials == 2
+    assert rows["未分族"].total_tokens == 2 * 3730
+    assert rows["未分族"].tool_calls == 4
+    assert rows["未分族"].missing_obs == 2
+    assert rows["未分族"].display == "未分族"
+
+
+def test_trajectory_rows_label_display_with_family_key():
+    """族行的括号里是族键，不是显示名的复读机。
+
+    v5 的任务可以同时属多个族，所以两半都是多值：单族
+    ``terminal-bench 任务(tbench)``，多族
+    ``会话智能度+安全(intelligence+security)``。
+    """
+    summary = _summary(manifests=[_family_manifest()])
+    rows = {c.key: c for c in summary.trajectory.categories}
+    assert set(rows) == {"intel+sec", "sec"}
+    assert rows["intel+sec"].display == "会话智能度+安全"
+    assert rows["intel+sec"].trials == 1
+    assert rows["sec"].trials == 1
+    md = render_static_report(summary)
+    assert "| 会话智能度+安全(intel+sec) | 1 |" in md
+    assert "| 安全(sec) | 1 |" in md
+
+
+def _family_manifest():
+    """两个归组族（metrics: [] + 引擎 = 基线）→ alpha.one 属两族。"""
+    from aeval.agents.dsh.release import build_official_dsh_lock
+    from aeval.contracts import OverlayIdentity, RunManifest, VersionsBundle
+    from aeval.provenance import build_runtime_lock
+
+    baseline = {
+        "impl": "graders/outcome.py@v1",
+        "grader_id": "outcome",
+        "grader_version": "v1",
+    }
+
+    def family(name, block, tasks):
+        return {
+            "name": name,
+            "block": block,
+            "weight": 1.0,
+            "threshold": 0.9,
+            "redline": False,
+            "engine": dict(baseline, veto=False),
+            "metrics": [],
+            "scope": {task: {"role": "home"} for task in tasks},
+        }
+
+    return RunManifest(
+        run_id="r1",
+        runtime_lock=build_runtime_lock(
+            release_locks={"dsh": build_official_dsh_lock()}
+        ),
+        overlay=OverlayIdentity(
+            suite_id="s", suite_version="1", overlay_digest="d" * 64,
+            source_commit="9" * 40,
+        ),
+        versions=VersionsBundle(aeval_version="0.1.0"),
+        dimension_model={
+            "families": {
+                "intel": family("会话智能度", "b1", ["alpha.one"]),
+                "sec": family("安全", "b2", ["alpha.one", "beta.two"]),
+            },
+            "blocks": {"b1": "会话", "b2": "安全"},
+            "baseline": baseline,
+            "guards": [],
+        },
+    )
 
 
 def test_backward_compatible_without_trajectory():
@@ -92,7 +158,7 @@ def test_report_trajectory_section():
     assert "- 上下文峰值：单步最大输入 1,400 tokens（" in md
     assert "- 最长调用：bash 10.0s（" in md
     assert "| 类别 | 试次 | Token | 平均时长(s) | 工具调用 | 无观测 |" in md
-    assert "| alpha(alpha) | 1 | 3,730 | 40.0 | 2 | 1 |" in md
+    assert "| 未分族(未分族) | 2 | 7,460 | 40.0 | 4 | 2 |" in md
 
 
 # --- 运行面板（dashboard）轨迹带 ------------------------------------------

@@ -1,0 +1,69 @@
+name: 跨会话记忆
+block: memory
+weight: 1.0
+threshold: 0.8
+redline: false
+engine:
+  impl: graders/aeval_intel.py@v6
+  layer: trajectory
+  veto: false
+metrics:
+- id: fork_memory_retention
+  inputs:
+    memory.context_enrichment:
+      fork_memory_anchors:
+      - expected_terms:
+        - Alpha
+        - 陈工
+        - v2\.1
+        introduce: 仓库代号|负责人|版本
+        probe: 关键事实|汇总|代号
+    memory.cross_session:
+      fork_memory_anchors:
+      - expected_terms:
+        - BLUE-WHALE-77
+        introduce: 访问令牌|记住
+        probe: 访问令牌
+    memory.noise_resistance:
+      fork_memory_anchors:
+      - expected_terms:
+        - '4711'
+        introduce: 门禁码|记住
+        probe: 门禁码
+    memory.preference_apply:
+      fork_memory_anchors:
+      - expected_terms:
+        - 三句|简短|简洁
+        introduce: 三句话以内|回答风格
+        probe: 偏好|风格
+    memory.store_recall:
+      fork_memory_anchors:
+      - expected_terms:
+        - '8842'
+        introduce: 取货码|记住
+        probe: 取货码
+    memory.update:
+      fork_memory_anchors:
+      - expected_terms:
+        - 200\s*万|两百万
+        introduce: 预算改为|预算是
+        probe: 预算
+scope:
+  memory.context_enrichment:
+    role: home
+    title: 记忆·上下文要点补全
+  memory.cross_session:
+    role: home
+    title: 记忆·跨会话召回
+  memory.noise_resistance:
+    role: home
+    title: 记忆·门禁码抗噪召回
+  memory.preference_apply:
+    role: home
+    title: 记忆·回答偏好遵循
+  memory.store_recall:
+    role: home
+    title: 记忆·召回
+  memory.update:
+    role: home
+    title: 记忆·更新

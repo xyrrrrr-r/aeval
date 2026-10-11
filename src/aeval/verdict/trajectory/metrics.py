@@ -151,6 +151,7 @@ class StepEfficiency(TrajectoryMetric):
     """
 
     name = "step_efficiency"
+    name_zh = "步数效率"
     category = "efficiency"
 
     def __init__(self, max_steps: int | None = None) -> None:
@@ -197,6 +198,7 @@ class TaskWallClock(TrajectoryMetric):
     """
 
     name = "task_wall_clock"
+    name_zh = "任务墙钟耗时"
     category = "efficiency"
 
     def __init__(self, max_seconds: float | None = None) -> None:
@@ -238,6 +240,7 @@ class TurnEfficiency(TrajectoryMetric):
     """
 
     name = "turn_efficiency"
+    name_zh = "轮次效率"
     category = "efficiency"
 
     def __init__(self, max_turns: int | None = None) -> None:
@@ -270,6 +273,7 @@ class TokenEfficiency(TrajectoryMetric):
     """Total tokens vs the suite-declared token budget, with cache share."""
 
     name = "token_efficiency"
+    name_zh = "Token 效率"
     category = "efficiency"
 
     def __init__(self, max_tokens: int | None = None) -> None:
@@ -308,6 +312,7 @@ class RedundantActions(TrajectoryMetric):
     """Successful tool calls repeated with identical arguments."""
 
     name = "redundant_actions"
+    name_zh = "冗余动作"
     category = "efficiency"
 
     def __init__(self, tolerance: float = 0.1) -> None:
@@ -348,6 +353,7 @@ class ToolErrorRate(TrajectoryMetric):
     """Fraction of tool calls whose observation looks like a failure."""
 
     name = "tool_error_rate"
+    name_zh = "工具错误率"
     category = "robustness"
 
     def __init__(
@@ -390,6 +396,7 @@ class LoopDetection(TrajectoryMetric):
     """The same tool call repeated back-to-back without variation."""
 
     name = "loop_detection"
+    name_zh = "循环检测"
     category = "robustness"
 
     def __init__(self, max_repeat: int = 3) -> None:
@@ -452,6 +459,7 @@ class RecoveryAbility(TrajectoryMetric):
     """
 
     name = "recovery"
+    name_zh = "恢复能力"
     category = "robustness"
 
     def evaluate(self, evidence: TrajectoryEvidence) -> MetricOutcome:
@@ -505,6 +513,7 @@ class BudgetAdherence(TrajectoryMetric):
     """
 
     name = "budget_adherence"
+    name_zh = "预算遵循"
     category = "governance"
 
     def evaluate(self, evidence: TrajectoryEvidence) -> MetricOutcome:
@@ -548,6 +557,7 @@ class ForbiddenAccess(TrajectoryMetric):
     """
 
     name = "forbidden_access"
+    name_zh = "禁区访问"
     category = "integrity"
 
     def __init__(
@@ -609,6 +619,7 @@ class ScopeDiscipline(TrajectoryMetric):
     """
 
     name = "scope_discipline"
+    name_zh = "工作区范围纪律"
     category = "integrity"
 
     _WRITE_TARGETS = (
@@ -662,3 +673,14 @@ class ScopeDiscipline(TrajectoryMetric):
         return _outcome(
             self, "ok", 1.0, ["all explicit write targets stayed in scope"]
         )
+
+
+#: 指标 id → 中文展示名：从上面各指标类的 ``name_zh`` 派生（展示名跟着类
+#: 走，不再另开一张会漂移的名字表）。只给报告/面板读，判分逻辑一概不读。
+METRIC_ZH: dict[str, str] = {
+    obj.name: obj.name_zh
+    for obj in list(globals().values())
+    if isinstance(obj, type)
+    and issubclass(obj, TrajectoryMetric)
+    and getattr(obj, "name_zh", None)
+}

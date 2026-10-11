@@ -15,10 +15,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from aeval.metrics.report import (
-    CategoryRollup,
+    FamilyRollup,
     RunSummary,
-    _category_of,
-    rollup_categories,
 )
 
 __all__ = [
@@ -84,101 +82,11 @@ def _band(achievement: float | None) -> str:
     return "red"
 
 
-def _spec(summary: RunSummary, key: str) -> dict:
-    """维度 key 的评分参数；未声明处取与加载器一致的默认。"""
-    spec = dict(
-        summary.dimension_model.get("categories", {}).get(
-            key,
-            {"name": key, "block": "other", "weight": 1.0,
-             "threshold": 0.9, "redline": False},
-        )
-    )
-    spec["name"] = spec.get("name") or key
-    spec.setdefault("block", "other")
-    spec.setdefault("weight", 1.0)
-    spec.setdefault("threshold", 0.9)
-    spec.setdefault("redline", False)
-    return spec
-
-
 def _block_display(summary: RunSummary, block: str) -> str:
     blocks = summary.dimension_model.get("blocks", {})
     if block in blocks:
         return blocks[block]
     return {"redline": "红线", "other": "其他"}.get(block, block)
-
-
-def _dimension_from_rollup(
-    summary: RunSummary, rollup: CategoryRollup
-) -> DimensionScore:
-    spec = _spec(summary, rollup.key)
-    value = (
-        rollup.passes / rollup.valid if rollup.valid > 0 else None
-    )
-    achievement = (
-        value / spec["threshold"] if value is not None else None
-    )
-    failing = tuple(
-        task_id
-        for task_id in rollup.task_ids
-        if summary.task_groups[task_id].fails > 0
-    )
-    return DimensionScore(
-        key=rollup.key,
-        display=rollup.display,
-        block=spec["block"],
-        block_display=_block_display(summary, spec["block"]),
-        weight=float(spec["weight"]),
-        threshold=float(spec["threshold"]),
-        redline=bool(spec["redline"]),
-        value=value,
-        achievement=achievement,
-        band=_band(achievement),
-        tasks=rollup.tasks,
-        valid=rollup.valid,
-        passes=rollup.passes,
-        failing_tasks=failing,
-    )
-
-
-def _redline_dimension(summary: RunSummary) -> DimensionScore | None:
-    """任务级红线伪维度：redline_tasks 集合的合并通过率。
-
-    红线任务的判定本身就是 veto 层语义（泄露/注入 ⇒ fail），这里只
-    汇总它们是否全过——阈值固定 1.0：红线没有「部分达标」。
-    """
-    tasks = tuple(
-        task
-        for task in summary.dimension_model.get("redline_tasks", [])
-        if task in summary.task_groups
-    )
-    if not tasks:
-        return None
-    valid = sum(summary.task_groups[t].valid_trials for t in tasks)
-    passes = sum(summary.task_groups[t].passes for t in tasks)
-    value = passes / valid if valid > 0 else None
-    achievement = value / 1.0 if value is not None else None
-    return DimensionScore(
-        key="redline",
-        display="任务红线",
-        block="redline",
-        block_display=_block_display(summary, "redline"),
-        weight=max(
-            [float(_spec(summary, k)["weight"]) for k in
-             summary.dimension_model.get("categories", {})] or [1.0]
-        ),
-        threshold=1.0,
-        redline=True,
-        value=value,
-        achievement=achievement,
-        band=_band(achievement),
-        tasks=len(tasks),
-        valid=valid,
-        passes=passes,
-        failing_tasks=tuple(
-            t for t in tasks if summary.task_groups[t].fails > 0
-        ),
-    )
 
 
 def _weighted_mean(
@@ -191,18 +99,54 @@ def _weighted_mean(
     return sum(d.weight * d.value for d in scored) / total_weight
 
 
-def score_watermark(summary: RunSummary) -> Watermark | None:
-    """按维度模型给 RunSummary 打达标分；未声明维度的套件返回 None。"""
-    if not summary.dimension_model.get("categories"):
-        return None
-    rollup = rollup_categories(summary)
-    if rollup is None:
-        return None
-    dimensions = [_dimension_from_rollup(summary, cat) for cat in rollup]
-    pseudo = _redline_dimension(summary)
-    if pseudo is not None:
-        dimensions.append(pseudo)
+def _dimension_from_family(
+    summary: RunSummary, family: FamilyRollup
+) -> DimensionScore:
+    """族维度的达标评分（v4：族是维度，规格来自族声明）。
 
+    值 = 族行通过率（族引擎判定的 passes/valid）；红线族是真实行
+    （不再是 legacy 的任务级伪维度）。
+    """
+    spec = family.spec or {}
+    threshold = float(spec.get("threshold", 0.9))
+    value = family.passes / family.valid if family.valid > 0 else None
+    achievement = value / threshold if value is not None else None
+    return DimensionScore(
+        key=family.key,
+        display=family.display,
+        block=str(spec.get("block", "other")),
+        block_display=_block_display(summary, str(spec.get("block", "other"))),
+        weight=float(spec.get("weight", 1.0)),
+        threshold=threshold,
+        redline=bool(spec.get("redline", False)),
+        value=value,
+        achievement=achievement,
+        band=_band(achievement),
+        tasks=family.tasks,
+        valid=family.valid,
+        passes=family.passes,
+        failing_tasks=family.failing_tasks,
+    )
+
+
+def score_watermark(summary: RunSummary) -> Watermark | None:
+    """按维度模型给 RunSummary 打达标分；没有族的套件返回 None。
+
+    维度 = 族（值 = 族行通过率，红线族是真实行）。族是唯一的维度
+    来源（v5）——不再有"类别维度 + 任务级红线伪维度"的第二条路。
+    """
+    if not summary.families or summary.family_rollups is None:
+        return None
+    dimensions = [
+        _dimension_from_family(summary, family)
+        for family in summary.family_rollups
+    ]
+    return _watermark_of(summary, dimensions)
+
+
+def _watermark_of(
+    summary: RunSummary, dimensions: list[DimensionScore]
+) -> Watermark:
     # 大块：成员维度的加权均分（声明顺序稳定输出）。
     block_keys: list[str] = []
     for dim in dimensions:
