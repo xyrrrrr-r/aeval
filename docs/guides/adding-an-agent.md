@@ -58,6 +58,7 @@ $ aeval new-agent --id myagent --provides acp_stdio,shell,file_tools \
 scaffolded agent myagent:
   wrote src/aeval/agents/myagent/agent.py
   wrote agents/myagent.yaml
+  import path: aeval.agents.myagent.agent:MyagentAgent
 next: implement read_trial_session(), then run `aeval agents` and `aeval conformance --agent agents/myagent.yaml`
 ```
 
@@ -73,7 +74,7 @@ next: implement read_trial_session(), then run `aeval agents` and `aeval conform
 | `--transcript-source` | `atif_native` | `atif_native` \| `native_session_via_bridge` |
 | `--agents-dir` | `agents` | 声明目录 |
 | `--package-dir` | `src/aeval/agents` | 适配器模块写到哪（PyPI 安装场景应指向你自己的包） |
-| `--import-path` | 自动 | 覆盖生成的 import path |
+| `--import-path` | 按模块实际落点推导 | 覆盖生成的 import path。**推导规则**：从模块目录向上走，直到遇到第一个不含 `__init__.py` 的目录，那之上就是 import 根。所以默认布局得到 `aeval.agents.<id>.agent`，而 `--package-dir src` 得到 `<id>.agent`——同一个模块、两种源码根，声明必须说真话 |
 | `--force` | 关 | 覆盖已存在的声明 |
 
 生成器还要求 `agents/_base/agent.base.yaml` 存在，否则直接拒绝。如果你不在仓库布局里，
@@ -128,12 +129,31 @@ class MyagentAgent:
     PROVIDES = frozenset({"acp_stdio", "file_tools", "shell"})
     BUDGET_ENFORCEMENT = "none"
     WRITE_SURFACE = "ephemeral_overlay"
+    SERVER_SIDE_SESSION = "forbidden"
+    # 必须与 agents/myagent.yaml 的 transcript: 块逐字段一致
+    TRANSCRIPT_CAPABILITY = TranscriptCapability(
+        source="native_session_via_bridge",
+        reader="myagent-reader",
+        capabilities=["native_session_via_bridge"],
+        fields_available={"events": "unavailable", "token_usage": "unavailable"},
+    )
     SESSION_RECORD_OUTPUT = "agent_session_record"
     REQUIRED_OBSERVATIONS = ()
 
     name = "myagent"
     version = "1"
-    # 骨架的 __init__ 里设置 self.agent_session_id = None
+
+    def __init__(self, **kwargs):
+        self.kwargs = dict(kwargs)
+        self._agent_session_id: str | None = None   # 由你的 run() 填
+
+    @property
+    def agent_session_id(self) -> str | None:
+        return self._agent_session_id
+
+    def paths(self) -> Any:
+        logs_dir = Path(self.kwargs.get("logs_dir", "."))
+        return type("MyagentAgentPaths", (), {"logs_dir": logs_dir, "session_root": logs_dir})()
 
     def read_session_record(self) -> bytes:
         raise NotImplementedError("read the myagent official session record and return its bytes")
@@ -145,10 +165,18 @@ class MyagentAgent:
         )
 ```
 
-骨架**已经满足契约**：成员齐、声明可解析、词表合法。`read_trial_session()` 故意抛
-`NotImplementedError`，于是 conformance 会把轨迹检查记成 **skipped 并带上这句话**，
-而不是假装它可用。`read_session_record()` 同样故意抛错：收集阶段会 fail closed，
-不会写一份伪造的会话记录。
+骨架**已经满足契约**，这是实测过的状态，不是承诺：
+
+- `aeval agents` 通过（`1 agent declaration(s) agree with their adapter classes.`）；
+- `aeval conformance` 的 `declaration` 与 `contract` 两项**通过**——声明与类逐字段一致，
+  证据链要读的成员（`name`/`version`/`paths`/`agent_session_id`/两个 reader/`SESSION_RECORD_OUTPUT`）齐全。
+
+它**故意不通过**的部分，恰好是只有你能写的部分：`read_trial_session()` 抛
+`NotImplementedError`，于是 conformance 把轨迹检查记成 **skipped 并带上这句话**，而不是假装
+可用；`read_session_record()` 同样故意抛错，收集阶段 fail closed，不会写一份伪造的会话记录。
+除此之外的 `capabilities` 类失败不是骨架的问题，而是**配对**问题——套件声明的能力门槛和
+`driver.session_record` 槽位要和你的 `--provides` 对齐（见「写声明 `agents/<id>.yaml`」与
+「验证：`aeval agents` 与 `aeval conformance`」两节）。
 
 ### 3.2 实现适配器类
 

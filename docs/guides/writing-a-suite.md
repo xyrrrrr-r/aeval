@@ -34,6 +34,8 @@ suites/
     │   └── e2e-hello.yaml        # Harbor job：job_name / n_attempts / 并发 / 后端
     ├── graders/
     │   └── hello_outcome.py      # 版本化判分器：GRADER_ID / GRADER_VERSION / LAYER
+    ├── families/                 # （可选）指标族声明：一族一文件，<族键>.yaml
+    │   └── quality.yaml          # 规格 + 指标库引擎 + 指标 id 引用（定义在 verdict.metric_catalog）
     └── tasks/
         └── hello/                # 一个任务 = 一个目录；目录名就是 task_id
             ├── task.toml         # Harbor 原生任务：环境、网络、collect 声明、provenance
@@ -145,6 +147,7 @@ provenance: { source: authored-internally, license: MIT }
 | `baselines` | **继承**（`ready` 断言 `/workspace/ready == "true"`） | 证明环境/种子真的就位 | 一个都没有则拒绝 |
 | `verdict.requirements` | **继承**（固定六项） | **门**：这里没列到的位不参与判定，列到而没成立的位 ⇒ 该试次 `cannot_judge`（见[指标语义](metric-semantics.md)） | 空则拒绝 |
 | `verdict.graders` | 套件 | 判分层与版本 | 一个都没有则拒绝 |
+| `verdict.metric_catalog` | 套件 | **指标定义处**：每项判分指标的层/严重度/降级线 + 角色（`gate`/`dimension`） | 可省略（旧套件在族文件里内联定义）；写了目录，族与守卫就只能写 id 引用 |
 | `metrics` | `kind` **继承**，`k` 由套件声明 | 声明要报告哪些指标口径 | 可省略（默认空列表）；这个块只被 `aeval explain` 渲染，判分与 `aeval report` 都不读它（pass^k 的 `k` 由 `aeval report --k` 给） |
 | `provenance` | 套件 | 数据来源与许可 | **默认不继承**；自己写或写 `provenance: inherit`，否则拒绝 |
 
@@ -206,6 +209,7 @@ REQUIRED_FIELDS = ["events", "token_usage"]
 | `baselines` | 是（≥1） | list | 环境基线断言 | 每项 `id`，并**恰好**给一个 `probe` 或 `assert`；`probe: "observable:<名字>"` 只能探套件自己声明的观测点 |
 | `verdict.requirements` | 是（≥1） | list[str] | 必须成立的前置事实；未成立 ⇒ 该试次 `cannot_judge` 并退出有效分母 | 只能是固定六项；与基座并集去重 |
 | `verdict.graders` | 否 | mapping 或 list | 判分器声明 | 每项 `impl: "<路径>.py@<版本>"`（版本必填）、`layer: outcome\|trajectory\|both`、可选 `veto: true`；mapping 形式里只有 `extra` 槽位可以给列表 |
+| `verdict.metric_catalog` | 否 | list | 指标定义处（一个指标一个定义） | 每项 `id` + `layer`（必填）+ `classification`：`gate`（套件级有效性门，只由守卫引用）或 `dimension`（计分维度，由族引用）；可选 `severity`（默认 `score`）与 `degraded_below`。逐任务输入**不在这里**（那是消费方的 rubric 绑定，写在族文件里） |
 | `verdict.anchors` | 否 | str | 打开密封的评分锚点通道 | 只能写 `task_anchors`；打开后每次试次的证据包必须封入套件的 `rubric/task_anchors.json`，轨迹判分器从密封副本读锚点；默认关闭 |
 | `metrics` | 否 | list | 指标声明 | 每项 `id` + `kind`（`pass_pow_k` / `cost_normalized` / `exclusion_rate`）；`k` 在任何 `kind` 上都被接受，但这个块只由 `aeval explain` 渲染，判分与 `aeval report` 都不消费它 |
 | `provenance` | 是 | mapping 或 `inherit` | 数据来源与许可 | 默认不继承；`license` 取 `CC0`/`MIT`/`Apache-2.0`/`NONE_DECLARED`/`UNKNOWN`；后两者与 `data_imported: true` 不能同时出现 |
@@ -253,6 +257,146 @@ REQUIRED_FIELDS = ["events", "token_usage"]
 返回"判不了"。
 
 判分的详细语义（阈值折叠、成本归一、排除率）见 [指标语义](metric-semantics.md)。
+
+### 基线、守卫与指标族（v5 装配模型）
+
+套件在 `verdict.graders` 里只声明**官方基线**（`default` 槽，恰好一个 outcome 判分器），
+可选再叠**守卫**（`verdict.guards`：反作弊 veto / 预算信息性，套件级、没有类别行）。
+守卫的判定读该试次的**密封轨迹**（真实 agent 会话映射出的 ATIF 文件），判哪几项直接
+写进声明（`metrics:`，按声明顺序判）；这时判分器模块只提供"每项怎么算"的指标库，清单以
+声明为准。不写 `metrics:` 的守卫沿用模块自带的清单（旧套件行为不变）。
+
+**指标只定义一次**：`verdict.metric_catalog` 是每项判分指标的唯一定义处——层、
+`severity`（进而是"违规即 veto 还是只降分"）、降级线，以及它的**角色**
+`classification`。角色只有两种：
+
+- `gate`：套件级有效性门（**只由守卫引用**），每试次折叠一次；
+- `dimension`：计分维度（**只由族引用**），进族行并计入综合评分。
+
+族文件与守卫声明因此只写 `id` 引用。**逐任务输入留在族文件里**：输入回答的是"这个
+消费者在这条任务上用哪些锚点判这项指标"，同一个指标 id 可以被多个族各自判定、各自的
+锚点与任务不同（`aeval-intel` 的 `hallucination_check` 就同时在 intelligence 与
+redline 两个族里）。加载期 fail-closed：引用了目录里没有的 id、给门指标配族、给维度
+指标配守卫、定义了却没人判、或者声明里又写一遍 `severity`/`layer`，都在装载时报错。
+
+在此之上，自定义判分按**指标族**声明：`families/<族键>.yaml` 一族一文件，
+携带规格（name/block/weight/threshold/redline）、**指标 id 引用**（`metrics:`，判分
+顺序）、指标库（`engine.impl` + `layer`，可 `veto: true`）与可选的 `scope`（显示名与
+home/enrich 角色）。套件用 `families:` 列表激活并排序族文件——
+激活序就是族的逐试次装配序。
+
+这一版没有"用例"这一层定义：**族的适用范围由指标的输入派生**——某项指标在哪条任务上
+有输入（`metrics[].inputs` 的任务键），这个族就判那条任务；`scope` 只是报告显示名与
+角色的落点，写了一条谁都测不了的 scope 会在加载期报错。
+
+```yaml
+# suite.yaml（族模式）
+verdict:
+  anchors: task_anchors        # 族模式必须声明锚点密封通道
+  metric_catalog:              # 一处定义：层 / 严重度 / 角色
+    - { id: forbidden_access, layer: trajectory, severity: integrity, classification: gate }
+    - { id: step_efficiency, layer: trajectory, classification: gate }
+    - { id: sensitive_leakage, layer: trajectory, severity: integrity, classification: dimension }
+    - { id: response_brevity, layer: trajectory, classification: dimension }
+    - id: identity_cognition
+      layer: trajectory
+      classification: dimension
+  graders:
+    default: { impl: graders/outcome.py@v1, layer: outcome }
+  guards: []                   # 可选，例：
+                               #   - impl: graders/trajectory.py@v1
+                               #     layer: trajectory
+                               #     veto: true
+                               #     metrics: [forbidden_access, step_efficiency]   # id 引用，顺序 = 判分顺序
+families:
+  - families/intelligence.yaml
+  - families/security.yaml
+```
+
+```yaml
+# families/intelligence.yaml（族声明 = 判分真源）
+name: 会话智能度
+block: conv
+weight: 1.0
+threshold: 0.8            # 唯一阈值来源：引擎不再自带一份
+redline: false
+engine:
+  impl: graders/aeval_intel.py@v6   # 指标库模块（METRICS 注册表）
+  layer: trajectory
+  veto: false
+metrics:                  # 判哪些指标、什么顺序（id 引用；定义在 verdict.metric_catalog）
+  - response_brevity      # 不吃输入 ⇒ 在本族范围内对每条任务都判
+  - id: identity_cognition
+    inputs:               # 本族的 rubric 绑定：这项指标在本族判哪些任务、用什么锚点
+      identity-intro:
+        identity_probes: ["你是谁"]
+  - id: context_retention
+    inputs:
+      context-recall: {context_anchors: [...]}
+      memory.narrative_poisoning: {context_anchors: [...]}   # enrich 测量也行
+  - sensitive_leakage     # severity 写在目录里（integrity），族里不重复
+scope:                    # 可选：显示名 / home-enrich 角色
+  identity-intro: {title: 身份认知, role: home}
+```
+
+**指标库契约**（族引擎模块 = 指标库，不再自带阈值/veto/清单）：
+
+```python
+GRADER_ID = "aeval-intel"        # 与族声明的 grader 身份一致
+GRADER_VERSION = "v6"            # 契约变更即 bump
+LAYER = "trajectory"
+REQUIRED_FIELDS = ["events", "token_usage"]
+def _identity_cognition(inputs): ...        # 每项指标自己解析自己的输入
+def _response_brevity(_inputs): ...         # 不吃输入的指标收空 dict
+METRICS = {                      # id → factory(inputs)：声明选它，它不认识族
+    "response_brevity": _response_brevity,
+    "identity_cognition": _identity_cognition,
+}
+```
+
+代码侧**没有**锚点键词表（`ANCHOR_KEYS`）、没有键→指标的对照表、也没有阈值/veto/
+指标清单的镜像：这些都只由声明说，模块只提供 `id → 实现`。
+装配规则（`aeval.verdict.trajectory.assembly`；族与守卫同一段代码）：框架按声明构建
+判分器——引用顺序 = 指标顺序，`threshold`/`veto` 来自族/守卫声明，逐项 `severity`
+来自目录且必须与实现的 `category` 一致（矛盾即加载期报错）；引用了库里没有的指标
+id 同样加载期报错；每项指标只收到**它自己**那份输入，键写错由实现拒绝、框架在装配前
+probe 并折成加载期错误（不静默变成 skip）。判分时的诚信语义以**目录声明**为准
+（`severity: integrity` 的项违规才翻转判定），实现的 `category` 只是断言目标。
+组合期对账只有一条路径（`aeval.verdict.pipeline.validate_metric_contracts`）：
+族与守卫一起走，坏契约在任何沙箱构建之前报错。
+密封 `dimension_model` 里因此能查到"这个族测了哪几项"，报告「逐项指标」也按声明序
+出表，声明却没产出判定的项显示 0 计数并注明。
+
+> 分组式类别（D7 特例）：`engine.impl` 等于官方基线时允许 `metrics: []`——族只分组、
+> 判定由基线给出（此时族行数字与试次终判口径逐位相同）。
+
+要点：
+
+- **一次执行、多族丰富**：同一 task 可以被多个族测量（一个族是 home，其余 enrich），
+  每个族独立出报告行；报告「按类别结果」的行 = **本族引擎**的 GradeResult 聚合
+  （判定族），cannot_judge 出分母、入排除列带原因；**归组族**（`metrics: []`、引擎 =
+  官方基线，sbench 这类"只把任务分到一组"的类别）的行走**试次终判口径**——它不是
+  判定单元，行数字与试次终判逐位相同（D7 特例）。「终判来源分解」节逐试次说明每个失败
+  由哪一层判的（基线/族阈值/族 veto/守卫 veto），族行的「判定分工」列给出
+  本族决定 vs 他层决定的试次数——族不止要"有落点"，还要能在报告里看出它
+  判掉了什么。
+- **指标输入走密封通道**：`verdict.anchors: task_anchors` 时，host 在采集期把套件的
+  输入投影（`{task_id: {族键: {指标 id: 该指标的输入}}}`）密封进试次的
+  `rubric/task_anchors.json`；判分只从密封副本读——重判分不依赖套件仓的当前状态。
+  v5 由**框架**按 (task_id, 族键) 读密封副本、按指标 id 拆开，把每项自己那份输入
+  交给对应 factory（键的合法性由实现自己把关）。族里没有任何指标吃输入时
+  （如安全族）整条链路都不读密封输入，缺输入也不会把判定变成 `cannot_judge`；
+  吃了输入却没有密封副本时，该试次如实判 `cannot_judge`（不猜 rubric）。
+- **单向锁定**：激活的族文件字节进入套件身份（`overlay_chain_digest`）——编辑族
+  声明即换 run 身份；未激活的库文件不影响身份。族文件与套件解耦、可移植，但**报告
+  只聚合同一个套件**：多个 run 分属不同套件时 `aeval report` / `aeval dashboard`
+  直接拒绝（`exit 3`）——不同套件是不同实验，分数不可加，各自出报告即可。
+  套件内容可比（`compare_manifests` 的全部锁定维度，含 overlay 与
+  `families/` 逐字节，即同一锁/agent/执行参数）的重复 run 才把同键族合成
+  一行、数字叠加；同一套件换引擎/agent/参数则不可比，各自成行、行键带套件后缀，
+  报头列出差异维度。
+- **悬空即报错**：族声明的 task_id 必须在数据集里真实存在（组合期对账）；数据集里
+  未被任何族声明的任务合法——它只吃基线与守卫。
 
 ## 6. 继承与合并
 
