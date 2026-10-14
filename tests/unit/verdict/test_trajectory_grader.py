@@ -51,6 +51,7 @@ from aeval.verdict.trajectory import (
     build_evidence,
     build_standard_grader,
     build_terminalbench_grader,
+    effective_stop_reason,
     load_sealed_transcript,
 )
 from aeval.verdict.trajectory.aggregate import fold_outcomes
@@ -138,7 +139,11 @@ def evidence(
 
 
 def make_record(
-    transcript: CanonicalTranscript, tmp_path: Path, *, tamper: bytes | None = None
+    transcript: CanonicalTranscript,
+    tmp_path: Path,
+    *,
+    tamper: bytes | None = None,
+    stop_reason: str | None = None,
 ) -> TrialRecord:
     # The collector's exact serialization (produce_canonical_transcript):
     sealed = transcript.model_dump_json(indent=2).encode("utf-8")
@@ -158,7 +163,9 @@ def make_record(
         coordinates=TrialCoordinates(
             run_id="r", suite_id="s", suite_version="0", task_id="t", trial_index=0
         ),
-        stop_reason=transcript.stop_reason,  # type: ignore[arg-type]
+        # ``stop_reason`` overrides the descriptor's own observation while the
+        # sealed transcript keeps its own — the two are allowed to disagree.
+        stop_reason=(stop_reason or transcript.stop_reason),  # type: ignore[arg-type]
         artifacts={"canonical_transcript": ref},
         artifact_base=str(tmp_path),
     )
@@ -437,6 +444,85 @@ def test_budget_adherence_statuses():
     killed = BudgetAdherence().evaluate(ev("timeout_killed"))
     assert (killed.status, killed.score) == ("degraded", 0.0)
     assert BudgetAdherence().evaluate(ev("infra_error")).status == "skipped"
+
+
+# --- stop-reason resolution (descriptor vs sealed transcript) --------------
+
+
+def test_effective_stop_reason_prefers_transcript_over_generic_fallback():
+    # ``agent_exit_0`` is the generic owner's "I watched the process exit"
+    # phrase; the sealed transcript's behavioural claim wins.
+    assert (
+        effective_stop_reason("agent_claimed_done", "agent_exit_0")
+        == "agent_claimed_done"
+    )
+    assert (
+        effective_stop_reason("budget_exhausted", "agent_exit_0")
+        == "budget_exhausted"
+    )
+
+
+def test_effective_stop_reason_keeps_descriptor_infra_facts():
+    # An infra end is the operator's observation and outranks the transcript.
+    assert effective_stop_reason("agent_claimed_done", "timeout_killed") == "timeout_killed"
+    assert effective_stop_reason("agent_claimed_done", "crashed") == "crashed"
+    assert effective_stop_reason("agent_claimed_done", "infra_error") == "infra_error"
+    # A non-zero exit is a process failure, not a licence to claim done.
+    assert (
+        effective_stop_reason("agent_claimed_done", "agent_exit_nonzero")
+        == "agent_exit_nonzero"
+    )
+    # Descriptor already behavioural (or unknown) passes through unchanged.
+    assert (
+        effective_stop_reason("infra_error", "budget_exhausted") == "budget_exhausted"
+    )
+
+
+async def test_grade_reads_sealed_stop_reason_when_descriptor_is_generic(tmp_path):
+    """The terminal-beach regression: descriptor ``agent_exit_0``, transcript
+    ``agent_claimed_done`` — the evidence exists, so budget_adherence judges."""
+    steps = [make_step(1, calls=[_call("a")], observations=_obs([("a", "ok")]))]
+    record = make_record(
+        make_transcript(steps, stop_reason="agent_claimed_done"),
+        tmp_path,
+        stop_reason="agent_exit_0",
+    )
+    grader = build_standard_grader("g", "v1", max_steps=5, max_tokens=1000)
+    result = await grader.grade(record)
+    by_name = {m.name: m for m in (result.metrics or [])}
+    assert by_name["budget_adherence"].status == "ok"
+    assert by_name["budget_adherence"].score == 1.0
+
+
+async def test_grade_descriptor_infra_stop_still_wins(tmp_path):
+    """A timeout observed by the operator is not overridden by the transcript."""
+    steps = [make_step(1, calls=[_call("a")], observations=_obs([("a", "ok")]))]
+    record = make_record(
+        make_transcript(steps, stop_reason="agent_claimed_done"),
+        tmp_path,
+        stop_reason="timeout_killed",
+    )
+    grader = build_standard_grader("g", "v1", max_steps=5, max_tokens=1000)
+    result = await grader.grade(record)
+    by_name = {m.name: m for m in (result.metrics or [])}
+    assert (by_name["budget_adherence"].status, by_name["budget_adherence"].score) == (
+        "degraded",
+        0.0,
+    )
+
+
+async def test_grade_unmapped_descriptor_still_skips(tmp_path):
+    """Evidence that genuinely is not an agent behaviour still skips."""
+    steps = [make_step(1, calls=[_call("a")], observations=_obs([("a", "ok")]))]
+    record = make_record(
+        make_transcript(steps, stop_reason="crashed"),
+        tmp_path,
+        stop_reason="crashed",
+    )
+    grader = build_standard_grader("g", "v1", max_steps=5, max_tokens=1000)
+    result = await grader.grade(record)
+    by_name = {m.name: m for m in (result.metrics or [])}
+    assert by_name["budget_adherence"].status == "skipped"
 
 
 # --- metrics: integrity ---------------------------------------------------

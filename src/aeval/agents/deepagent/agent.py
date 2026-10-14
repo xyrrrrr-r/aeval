@@ -81,6 +81,13 @@ _SESSION_ARTIFACT_DIR = "."
 # acp.py:377-378 mirrors this as the agent environment's log dir).
 _SANDBOX_LOGS_DIR = "/logs/agent"
 
+# The per-call metering ledger this family's facade writes inside the sandbox
+# (deepagents-eval-control ``facade_call_log.ts``) when the deployment opts in
+# (bootstrap.py sets AEVAL_FACADE_CALL_LOG from the declaration below). Harbor
+# downloads the same directory into <trial_dir>/agent/, so the raw ledger lands
+# in the bundle next to the transcript it justifies.
+_CALL_LEDGER_FILENAME = "model_calls.jsonl"
+
 
 class DcodeRunError(OpenAiAcpRunError):
     """The deepAgent trial could not be read back fail-closed."""
@@ -104,7 +111,12 @@ def default_deepagent_registry_entry(model: str | None = None) -> dict[str, Any]
     (``OPENAI_BASE_URL``, ``OPENAI_API_KEY``, …) reaches the server through the
     distribution env — see ``model_env`` on the adapter.
 
-    ``model`` is the lease's model name, appended as ``--model``. It cannot be
+    ``model`` is the lease's model name, appended as ``--model`` in the CLI's
+    own ``provider:model`` spec form (see ``CLI_MODEL_PROVIDER``: dcode infers
+    the provider from the model NAME, so a bare ``deepseek-chat`` resolves to
+    the vendor provider — the run dies asking for that vendor's credential, or
+    worse, an operator-exported one sends the traffic to the vendor unmetered).
+    It cannot be
     baked into this entry (it is per-job) and it must not be omitted: dcode then
     falls back to its own codex-profile default, whose requests carry
     responses-only arguments (``reasoning``, builtin tools) and may name a
@@ -225,6 +237,14 @@ class DcodeAgent(OpenAiAcpAgent):
     # summary — not a DSH session file, so it takes the generic slot.
     SESSION_RECORD_OUTPUT = "agent_session_record"
 
+    # The in-sandbox per-call metering ledger (aeval.agents.contract
+    # ``sandbox_model_call_ledger``). Declaring it is what makes the facade
+    # record, and the collector read: without it the broker's accounting stays
+    # host-side and the transcript's token fields stay null — the state this
+    # adapter shipped with until the ledger existed. The path is the sandbox
+    # log dir Harbor already downloads, so the raw ledger is evidence too.
+    SANDBOX_MODEL_CALL_LEDGER = f"{_SANDBOX_LOGS_DIR}/{_CALL_LEDGER_FILENAME}"
+
     # Read-back fails closed under this name (the family raises
     # OpenAiAcpRunError; dcode's own name keeps the historical error type).
     RUN_ERROR = DcodeRunError
@@ -247,8 +267,13 @@ class DcodeAgent(OpenAiAcpAgent):
     DEEPAGENTS_CODE_VERSION = _DEEPAGENTS_CODE_VERSION
 
     def default_registry_entry(self, model: str | None = None) -> dict[str, Any] | None:
-        """The pinned dcode entry (the base's hook — see the base class)."""
-        return default_deepagent_registry_entry(model)
+        """The pinned dcode entry (the base's hook — see the base class).
+
+        ``model`` arrives as the lease's bare wire name; it is qualified with
+        the provider the declared routing points at the facade before it
+        reaches ``--model`` (``OpenAiAcpAgent.cli_model_spec``).
+        """
+        return default_deepagent_registry_entry(self.cli_model_spec(model))
 
     @staticmethod
     def name() -> str:

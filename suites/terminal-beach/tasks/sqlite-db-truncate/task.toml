@@ -1,0 +1,58 @@
+schema_version = "1.4"
+artifacts = []
+
+[metadata]
+author_name = "unknown"
+author_email = "nicholas@carlini.com"
+difficulty = "medium"
+category = "debugging"
+tags = ["file-operations"]
+
+[verifier]
+timeout_sec = 60.0
+
+[[verifier.collect]]
+# Upstream verification runs first and publishes
+# /logs/verifier/reward.txt; the aeval collection follows even when the
+# tests fail, so a failing trial still seals its evidence.
+command = "mkdir -p /logs/verifier; bash /tests/test.sh; aeval-collect runtime_dump mock_call_log agent_session_record canonical_transcript"
+
+[verifier.env]
+
+
+[agent]
+timeout_sec = 900.0
+
+[environment]
+# terminal-beach 适配（见 PROVENANCE.md）：任务镜像是内部 registry 上按摘要钉死
+# 的 terminal-beach-agent 变体——在 terminal-bench 的 pilot 基础镜像之上预置了
+# deepAgent 运行时（python3.12 + deepagents-code 0.1.78 + Harbor ACP venv）与
+# 验证器工具链（uv + 离线 wheelhouse + verifier 工程）。deepAgent 的 CLI 烘焙在
+# 镜像里，不再需要 npm/PyPI 出网；出网只留 broker 主机，模型流量由沙箱内的
+# façade 经 TLS 打回宿主侧 broker。
+network_mode = "allowlist"
+allowed_hosts = ["193.126.4.2"]
+# e2b 自建集群给不出模板构建所需的签名 URL，因此直接使用预构建镜像（同一份
+# 内容也写在 environment/Dockerfile 里，docker 后端用它构建）。
+docker_image = "harbor:443/t-bench/terminal-beach-sqlite-db-truncate@sha256:881811d410a0843f8a72ab32eb5cc556e3c626a333d72481811926bc849e9831"
+# 2 vCPU / 4 GiB：与 tbench-pilot 同一档；deepAgent 的 CLI 已烘焙进镜像，不需要
+# /dev/shm 里的 502 MB npm 安装树。
+cpus = 2
+memory_mb = 4096
+build_timeout_sec = 600.0
+os = "linux"
+mcp_servers = []
+
+[environment.env]
+
+[solution.env]
+
+[metadata.provenance]
+source = "terminal-bench-core@0.1.1 (https://github.com/laude-institute/terminal-bench @ 91e10457b5410f16c44364da1a34cb6de8c488a5)"
+source_url = "https://github.com/laude-institute/terminal-bench"
+original_id = "sqlite-db-truncate"
+imported_at = "2025-09-24"
+converter_version = "aeval-vendor-tbench/1"
+license = "Apache-2.0"
+data_imported = true
+rewritten_by_us = true

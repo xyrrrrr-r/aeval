@@ -1,0 +1,91 @@
+schema_version: 2
+id: terminal-beach
+# 0.1.0（2026-10-11）：首个版本。任务集与 tbench-pilot 同源（terminal-bench-core
+# 0.1.1 的三个试点任务，逐字节保留指令/测试/解法），但**驱动家族不同**：
+# 本套件的被测 agent 是 deepAgent（deepagents-code CLI，走 ACP stdio），
+# 而不是 DSH。判分口径 = 上游 verifier 的 reward（outcome 层）+ 九项轨迹
+# 守卫（trajectory 层，含两道诚信门）。
+version: 0.1.0
+# 与其余出厂套件共用同一份环境级基座：时钟、ready 观测点与 baseline、
+# 六项 requirements、指标种类、datasets 路径约定。
+extends: _base/harbor.base.yaml
+harbor:
+  job: jobs/terminal-beach.yaml
+observables:
+  # file: sources only（db:/screenshot:/dom: 一律 fail closed）。
+  # `reward` 由任务自带的上游 verifier（tests/test.sh）在验证阶段发布。
+  - { name: reward, type: string, source: "file:/logs/verifier/reward.txt" }
+families:
+  - families/terminal-beach.yaml
+# 大块显示名（面板的雷达轴）。
+blocks:
+  core: 任务执行
+verdict:
+  # 指标目录（v5）：一项指标的**定义只有这一处**——层 / 严重度
+  # （integrity = 违规即 veto）/ 归属角色（gate = 套件级有效性门）。
+  # 守卫与族只写 id 引用。
+  metric_catalog:
+  - { id: step_efficiency, layer: trajectory, classification: gate }
+  - { id: token_efficiency, layer: trajectory, classification: gate }
+  - { id: tool_error_rate, layer: trajectory, classification: gate }
+  - { id: loop_detection, layer: trajectory, classification: gate }
+  - { id: recovery, layer: trajectory, classification: gate }
+  - { id: redundant_actions, layer: trajectory, classification: gate }
+  - { id: budget_adherence, layer: trajectory, classification: gate }
+  - { id: forbidden_access, layer: trajectory, severity: integrity, classification: gate }
+  - { id: scope_discipline, layer: trajectory, severity: integrity, classification: gate }
+  graders:
+    # outcome 层是上游 verifier 自己的判决（/logs/verifier/reward.txt）。
+    default: { impl: "graders/tb_outcome.py@v1", layer: outcome }
+  guards:
+    # 反作弊 / 范围门：判密封的 canonical transcript（deepAgent 的 ACP
+    # session/update → Harbor 的 ATIF → aeval 的规范化轨迹）。清单 = 目录里
+    # gate 角色的这 9 项（顺序 = 判分顺序）。带 veto 的守卫改变"什么叫
+    # 通过"，因此不能继承，必须在本套件里显式声明。
+    - impl: "graders/tb_trajectory.py@v1"
+      layer: trajectory
+      veto: true
+      metrics:
+        - step_efficiency
+        - token_efficiency
+        - tool_error_rate
+        - loop_detection
+        - recovery
+        - redundant_actions
+        - budget_adherence
+        - forbidden_access
+        - scope_discipline
+metrics:
+  # pass^3：一个任务的三次尝试全过才算可靠。
+  - { id: reliability, kind: pass_pow_k, k: 3 }
+driver:
+  # 驱动能力要求是本套件自己的事实：deepAgent 的 ACP stdio 通道 + 沙箱内
+  # shell/文件工具。刻意不写 sdk_jsonrpc（DSH 特有）；写进去等于让整个
+  # 评测集只接受 DSH。
+  require: [acp_stdio, shell, file_tools]
+  # 会话记录槽位：deepAgent 的官方会话记录是 Harbor ACP runner 的
+  # acp-summary.json，走通用 agent_session_record 槽位（不是 dsh_session）。
+  session_record: agent_session_record
+  # 任务自带的上游 verifier 在验证阶段才被 Harbor 上传；套件显式要求
+  # agent 停止后先铺测试再采集。
+  stage_tests_before_collect: true
+  # 每个被 vendored 的任务 Dockerfile 都以 WORKDIR /app 结尾，测试硬编码
+  # /app（hello-world 说的是"当前目录"），因此 agent 的工作目录就是 /app。
+  workspace_dir: "/app"
+# 试次花费上限：deepAgent 声明 budget_enforcement=gateway_lease（模型流量
+# 经沙箱内 façade 走 broker lease 计量），因此这里的上限是真的会被执行的
+# 数字。operator 的 broker spec 由 tools/gen_broker_spec.py 从 budgets.yaml
+# 生成，两者不得漂移。
+budget:
+  max_tokens: 2000000
+  max_steps: 60
+  max_seconds: 1800
+  enforcement_point: gateway_lease
+provenance:
+  source: "terminal-bench-core@0.1.1 (https://github.com/laude-institute/terminal-bench @ 91e10457b5410f16c44364da1a34cb6de8c488a5)"
+  source_url: "https://github.com/laude-institute/terminal-bench"
+  imported_at: "2025-09-24"
+  converter_version: "aeval-vendor-tbench/1"
+  license: "Apache-2.0"
+  data_imported: true
+  rewritten_by_us: true

@@ -32,6 +32,7 @@ from aeval.verdict.trajectory.base import (
     TrajectoryMessage,
     agent_replies_from_steps,
     build_evidence,
+    effective_stop_reason,
     load_sealed_transcript,
     user_messages_from_steps,
 )
@@ -129,6 +130,7 @@ __all__ = [
     "agent_replies_from_steps",
     "user_messages_from_steps",
     "build_evidence",
+    "effective_stop_reason",
     "build_standard_grader",
     "build_terminalbench_grader",
     "ThresholdTrajectoryGrader",

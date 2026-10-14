@@ -38,6 +38,7 @@ from aeval.hooks.environment_access import (
 )
 from aeval.hooks.evidence import (
     EvidenceIntegrityError, finalize_trial_record, gate_verification,
+    output_path_for,
 )
 from aeval.provenance import verify_runtime_lock
 from aeval.suite_loader.loader import load_suite
@@ -696,6 +697,35 @@ def _observed_adapter(context: EvaluationContext, state: Any) -> Any:
         return None
 
 
+def _sealed_transcript_extra(state: Any) -> dict[str, Any] | None:
+    """The completeness/stop-reason the SEALED transcript carries.
+
+    The live read below is the pre-collection view of the session; the graded
+    record is the sealed ``canonical_transcript.json``, into which collection
+    may have folded further evidence (the adapter-declared per-call ledger).
+    Without this preference the store rendered one trial two ways — sealed
+    evidence ``token_usage: ok``, store row ``partial``. ``None`` when the
+    sealed file is absent or does not carry both fields, so the live read
+    still stands for a trial that was never collected (an excluded one).
+    """
+    trial_dir = getattr(state, "trial_dir", None)
+    if trial_dir is None:
+        return None
+    path = Path(trial_dir) / output_path_for("canonical_transcript")
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    if not isinstance(payload, dict):
+        return None
+    aeval: dict[str, Any] = {}
+    if isinstance(payload.get("completeness"), dict):
+        aeval["completeness"] = payload["completeness"]
+    if payload.get("stop_reason") is not None:
+        aeval["stop_reason"] = payload["stop_reason"]
+    return {"aeval": aeval} if len(aeval) == 2 else None
+
+
 def _transcript_extra(context: EvaluationContext, state: Any) -> dict[str, Any] | None:
     """The ATIF ``extra`` envelope for grading, read through the official
     session path (never parsed by hand); ``None`` when unreadable.
@@ -705,7 +735,14 @@ def _transcript_extra(context: EvaluationContext, state: Any) -> dict[str, Any] 
     fields are unavailable), and the reason must be visible in the audit
     rather than inferred (seen on a real run: the verdict was
     cannot_judge with nothing explaining why).
+
+    The SEALED transcript wins when it exists: it is what was graded, and it
+    is the only place evidence collected after the session read (the declared
+    call ledger) is recorded.
     """
+    sealed = _sealed_transcript_extra(state)
+    if sealed is not None:
+        return sealed
     environments = context.environments
     agent = environments.agent(state.trial_id) if environments is not None else None
     if agent is None or not hasattr(agent, "read_trial_session"):

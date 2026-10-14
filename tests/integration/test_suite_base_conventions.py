@@ -111,5 +111,6 @@ def test_bases_are_not_discovered_as_suites():
         "e2e-hello",
         "sbench-pilot",
         "tbench-pilot",
+        "terminal-beach",
     ]
     assert all(path.name != "_base" for path in discovered)

@@ -983,6 +983,11 @@ class RunManifest(BaseModel):
     # 维度模型（v5）：每族一份的密封声明（families）+ 大块表。空时不
     # 参与摘要（同 task_titles 的纪律）。
     dimension_model: dict[str, object] = Field(default_factory=dict)
+    # 套件 `metrics:` 块的密封副本（v5 补线）：报告在未显式传 ``--k``
+    # 时以这里声明的 ``pass_pow_k`` 的 k 作为默认值。声明必须进密封
+    # 清单，报告才可能只凭 bundle 复现而不依赖套件目录；空时不参与
+    # 摘要（同 task_titles 的纪律）。
+    declared_metrics: list[dict[str, Any]] = Field(default_factory=list)
 
     def digest(self) -> str:
         exclude = {"created_at"}
@@ -990,4 +995,6 @@ class RunManifest(BaseModel):
             exclude.add("task_titles")
         if not self.dimension_model:
             exclude.add("dimension_model")
+        if not self.declared_metrics:
+            exclude.add("declared_metrics")
         return _digest(self.model_dump(mode="json", exclude=exclude))

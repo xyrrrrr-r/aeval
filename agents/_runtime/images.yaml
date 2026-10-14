@@ -42,3 +42,12 @@ images:
     image: null
     note: >-
       同 deepagent-hello。
+
+  - suite: terminal-beach
+    runtime: deepagents-code
+    image: null
+    note: >-
+      任务镜像由 suites/terminal-beach/images/agent-image.Dockerfile 在集群宿主上
+      离线构建（base-pilot + deepAgent 运行时），摘要钉在每个 task 的
+      task.toml（docker_image）与 environment/Dockerfile（FROM）里；checkout
+      不带可移植镜像，因为本 lab 的 e2b 无法构建模板、也无 Docker Hub 出网。

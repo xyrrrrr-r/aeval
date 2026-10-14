@@ -1,0 +1,30 @@
+# The verifier's environment, pinned.
+#
+# The migrated terminal-bench verifiers run `uv run pytest` after
+# terminal-bench's setup script installs uv and pytest from the network.
+# The sealed pilot has no verification-time egress, so the closure is
+# pinned here and resolved OFFLINE from the wheelhouse baked at
+# /opt/wheels by images/build-bases.sh. setup-uv-pytest.sh copies this
+# file into the task workdir and runs `uv sync --offline`.
+#
+#   * pytest is pinned exactly (not a range): a verifier that silently
+#     upgrades between trials is not a sealed verifier.
+#   * `package = false`: this is an environment, not a distributable.
+#   * `environments = ["sys_platform == 'linux'"]`: the verifier only
+#     ever runs in the Linux sandbox, so Windows-only dependencies
+#     (colorama) stay out of the resolution.
+#   * tomli/exceptiongroup are pytest's dependencies on Python < 3.11;
+#     the image ships Python 3.10, so they are part of the pinned
+#     closure. Their wheels must be the pure-Python ones — the compiled
+#     cp311 builds of tomli cannot be installed on 3.10 (found while
+#     staging the wheelhouse).
+[project]
+name = "tbench-verifier"
+version = "0.1.0"
+requires-python = ">=3.10"
+dependencies = ["pytest==9.1.1"]
+
+[tool.uv]
+package = false
+environments = ["sys_platform == 'linux'"]
+find-links = ["/opt/wheels"]

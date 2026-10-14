@@ -304,7 +304,24 @@ return "cannot_judge"                                          # 没有任何层
 
 | 指标 id | 族 | 一句话语义 | 精确公式 / 触发 | 默认阈值或参数 | skip 条件 |
 |---|---|---|---|---|---|
-| `budget_adherence` | 运行时 | 试次以何种方式结束 | `agent_claimed_done` ⇒ `ok 1.0`；`budget_exhausted` ⇒ `degraded 0.5`；`timeout_killed` ⇒ `degraded 0.0` | 无 | 其余任何停止原因（包括 `agent_exit_0`、`agent_exit_nonzero`、`crashed`、`infra_error`）⇒ `skipped`，原因写明"基础设施停机，不是 agent 行为" |
+| `budget_adherence` | 运行时 | 试次以何种方式结束 | `agent_claimed_done` ⇒ `ok 1.0`；`budget_exhausted` ⇒ `degraded 0.5`；`timeout_killed` ⇒ `degraded 0.0` | 无 | 其余任何停止原因（`agent_exit_nonzero`、`crashed`、`infra_error` 等）⇒ `skipped`，原因写明"基础设施停机，不是 agent 行为" |
+
+**停止原因从哪来（两个来源，一个解析规则）。** `budget_adherence` 读的
+`stop_reason` 由 `effective_stop_reason(转录的 stop_reason, 描述符的 stop_reason)`
+解出，两个来源各管一半：
+
+- **密封转录**是本层自己的证据，适配器从会话推出它（`end_turn` ⇒
+  `agent_claimed_done`，`max_tokens`/`max_steps` ⇒ `budget_exhausted`；映射不出来
+  时 fail-closed 成 `infra_error`）；
+- **试次描述符**是操作侧的观测，对转录说不出的事保持权威：基础设施停机
+  （`timeout_killed` / `crashed` / `infra_error`）与进程终止状态。
+
+只有泛型兜底值 `agent_exit_0` 被视为**不带行为声明**——通用 flavor 的 owner 只能
+声明"我看到本试次的进程以 0 退出"（`hooks/plugin.py`），它存在只是为了让完成的试次
+有一份描述符。早先把 `agent_exit_0` 判成"基础设施停机"会让 `budget_adherence` 在一个
+密封转录明确写着 `agent_claimed_done` 的 run 上**整轮 skip**（terminal-beach 的九个
+试次就是这样）：证据在，却判不了。现在这种情形改为读密封转录；描述符给出的
+基础设施事实（如 `timeout_killed`）仍然优先，证据确实不属于 agent 行为时照旧 `skipped`。
 
 ### 4.4 `integrity`（完整性／安全，可判失败）
 
@@ -403,19 +420,30 @@ return "cannot_judge"                                          # 没有任何层
 
 - `pass_pow_k` 在 `k > n`、`k <= 0`、`p > n` 时直接抛错（传入的 `k` 与试次数不匹配）；
   `p < k` 时返回 `0.0`。
-- 只有 `k` 已提供（命令行传入）且 `n >= k` 时才计算并展示；不满足就留空，不编造 `0`。
+- 只有 `k` 已提供（命令行传入或套件声明，见下）且 `n >= k` 时才计算并展示；
+  不满足就留空，不编造 `0`。
 - 任务级与类别级的 pass^k 同样要求该任务/类别**有效试次数 >= k**，否则显示为空。
 
-真正决定 `k` 的是聚合报告时的命令行参数：`aeval report --k`（`aeval dashboard --k` 同理）
-把它直接传给聚合函数。套件 `metrics:` 块里写的 `k` **不参与计算**——它只被套件的说明页
-（`aeval explain`）用来显示一行人类可读的摘要：
+`k` 的来源有两处，按优先级：
+
+1. **命令行**：`aeval report --k`（`aeval dashboard --k` 同理）直接把它传给聚合函数；
+2. **套件声明**：套件 `metrics:` 块里的 `pass_pow_k` 的 `k`。这条声明在 `aeval run`
+   时被**密封进 run 清单**（`declared_metrics`），报告未收到 `--k` 时以它为默认值——
+   声明进了密封证据，报告才能只凭 bundle 复现，不必回头读套件目录。
 
 ```yaml
 metrics:
-  - { id: reliability, kind: pass_pow_k, k: 3 }   # 仅说明页展示，不影响 pass@k / pass^k
+  - { id: reliability, kind: pass_pow_k, k: 3 }   # 未传 --k 时即报告默认的 k
 ```
 
-所以想改变 pass@k / pass^k 的 `k`，改命令行参数即可；套件里的这个数字是描述性的。
+默认值只在**无歧义**时生效：至少有一个被聚合的 run 声明了带 `k` 的
+`pass_pow_k`，且所有声明了 `k` 的 run 取值一致。声明互相矛盾（例如两次 run 分
+别写 3 和 2）时不猜，留空；命令行 `--k` 永远覆盖声明。旧 run 的清单没有这个字段
+（字段为空时不参与清单摘要），因此照旧留空、不受影响。
+
+所以想临时改变 pass@k / pass^k 的 `k`，加命令行参数即可；想让某个套件的默认口径
+固定下来，写进它的 `metrics:` 声明。
+
 注意两个数回答的是不同问题：
 pass@k 高说明"总能成功一次"，pass^k 高说明"次次都稳"。一个 agent 可以有很高的 pass@k
 和很低的 pass^k——那正是它不稳定的证据。
@@ -464,7 +492,7 @@ provenance: { source: authored-internally, license: MIT }
   必须在套件里显式声明——它改变"什么叫通过"。
 - `metrics` 块声明的是**可靠性指标**：每项有 `id`、`kind`
   （`pass_pow_k` / `cost_normalized` / `exclusion_rate` 三者之一）、可选整数 `k`
-  （只用于说明页展示，不影响 pass@k / pass^k 的计算，见第 6 节）。
+  （`k` 在未传 `--k` 时作为报告的默认值，见第 6 节；声明随 run 清单密封）。
   轨迹层具体跑哪些指标**不写在这里**——v5 起写在族声明的 `metrics:` 清单里
   （见本文件「指标族与指标库」一节），判分器模块只提供这些指标的实现
   （`METRICS` 注册表）。
@@ -549,7 +577,8 @@ async def grade(record):
    对照（哪些层判了 pass）。「角色」按**用例集命中**归属：一个引擎被多个族共用时
    （aeval-intel 的智能度/红线/记忆共用同一引擎）会列出所有声明了这个试次 task 的族；
    折叠序与 `decide_final_verdict` 一致：任一 veto fail
-   → fail；否则任一 fail → fail；否则任一 cannot_judge → cannot_judge；否则 pass。
+   → fail；否则任一 fail → fail；否则任一 pass → pass（其余层即使 `cannot_judge`
+   也不影响试次，见 §8.2）；只有**没有任何层**判出 pass/fail 才是 `cannot_judge`。
    同一试次可被多层判 fail（层计数，veto 层优先）。没有这一节，读者无法回答
    "这个 fail 是基线判的还是我的族判的"。
 

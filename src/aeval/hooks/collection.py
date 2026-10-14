@@ -46,11 +46,18 @@ from aeval.hooks.collectors import (
     produce_task_anchors,
     write_collection_manifest,
 )
+from aeval.hooks.model_call_ledger import (
+    CallLedger,
+    enrich_transcript_with_call_ledger,
+    missing_call_ledger,
+    parse_call_ledger,
+)
 
 __all__ = [
     "CollectionError",
     "observe_runtime_dump",
     "collect_trial_evidence",
+    "read_model_call_ledger",
 ]
 
 
@@ -128,6 +135,38 @@ async def observe_runtime_dump(
     else:
         dump["e2b_sdk_present"] = True
     return dump
+
+
+async def read_model_call_ledger(
+    environment: Any, agent: Any, trial_dir: Path
+) -> CallLedger | None:
+    """Read the adapter-declared per-call metering ledger, if it declares one.
+
+    Returns None when the adapter declares nothing — the overwhelming majority
+    of adapters, whose behaviour is untouched. When a ledger IS declared the
+    file is fetched from the live sandbox (Harbor only downloads the agent log
+    dir after this hook runs, so waiting would read it too late to seal it) and
+    parsed with the rules in ``aeval.hooks.model_call_ledger``.
+
+    Never raises for a missing or unreadable file: the ledger improves
+    evidence, so the worst case is the honest "declared but absent" record.
+    """
+    from aeval.agents.contract import sandbox_model_call_ledger
+
+    source = sandbox_model_call_ledger(type(agent))
+    if source is None:
+        return None
+    download = getattr(environment, "download_file", None)
+    if not callable(download):
+        return missing_call_ledger(source)
+    target = Path(trial_dir) / "agent" / Path(source).name
+    try:
+        target.parent.mkdir(parents=True, exist_ok=True)
+        await download(source, target)
+        text = target.read_text(encoding="utf-8")
+    except Exception:
+        return missing_call_ledger(source)
+    return parse_call_ledger(text, source=source)
 
 
 async def collect_trial_evidence(
@@ -228,6 +267,8 @@ async def collect_trial_evidence(
     outcomes.append(outcome)
     artifacts.append(ref)
 
+    ledger = await read_model_call_ledger(environment, agent, trial_dir)
+
     try:
         transcript = agent.read_trial_session()
     except Exception as exc:
@@ -235,6 +276,12 @@ async def collect_trial_evidence(
             f"canonical transcript could not be built from the official "
             f"session read: {exc}"
         ) from exc
+    # Fold the metered per-call ledger into the transcript BEFORE it is sealed:
+    # for an agent whose official session read carries no usage or timestamps
+    # this is what turns "unavailable" into measured values, and the sealed
+    # transcript has to be the record that was graded.
+    if ledger is not None:
+        transcript = enrich_transcript_with_call_ledger(transcript, ledger)
     outcome, ref = produce_canonical_transcript(trial_dir, transcript)
     outcomes.append(outcome)
     artifacts.append(ref)
@@ -243,6 +290,10 @@ async def collect_trial_evidence(
     # broker observed nothing writes a "no calls" fact rather than an
     # empty object that could be mistaken for a passing check.
     calls = list(broker_calls or [])
+    if not calls and ledger is not None and ledger.usable:
+        # The ledger's own records are the evidence: usage, timing and the
+        # tool names the model asked for, exactly as the facade wrote them.
+        calls = ledger.mock_call_records()
     if not calls:
         # Truthful wording: an empty list means THIS collector saw no call
         # records. The in-sandbox collect hook cannot see the host-side
@@ -250,11 +301,28 @@ async def collect_trial_evidence(
         # started", which was false on a real run where the broker had
         # served the very call the run was scored on; the record now states
         # only what this collector observed.
-        calls = [{
+        if ledger is None:
+            reason = (
+                "this collector observed no broker call records for the trial"
+            )
+        elif ledger.missing:
+            reason = (
+                f"the declared model-call ledger {ledger.source} was not "
+                "present in the sandbox at collection time"
+            )
+        else:
+            reason = (
+                f"the declared model-call ledger {ledger.source} carried no "
+                "metered call"
+            )
+        record: dict[str, Any] = {
             "event": "no_calls_observed",
-            "reason": "this collector observed no broker call records for the trial",
+            "reason": reason,
             "recorded_at": _now().isoformat(),
-        }]
+        }
+        if ledger is not None and ledger.issues:
+            record["issues"] = list(ledger.issues)
+        calls = [record]
     outcome, ref = produce_mock_call_log(trial_dir, calls)
     outcomes.append(outcome)
     artifacts.append(ref)

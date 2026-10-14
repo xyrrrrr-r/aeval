@@ -153,9 +153,11 @@ def test_panel_renders_drilldown_data_deterministically():
     ev = evidence(_forked_steps("商家A的接口密钥是 TENANT-KEY-A9。"))
     analysis = analyze_turns(ev, _metrics())
     html = _panel(analysis)
-    assert "五轨联动执行视图" in html
+    assert "六轨联动执行视图" in html
     assert 'id="trajectory-inspector"' in html
-    assert "hallucination_check 0.00" in html
+    # 关注项按类别收敛：标题是类别（指标名+阈值），具体得分与试次在卡内的行里
+    assert "turn 指标 hallucination_check 低于阈值" in html
+    assert "得分 0.00" in html
     assert "记忆基底" in html
     assert '"score":0.0' in html and '"score":null' in html
     assert "失败(fail)" in html
@@ -173,7 +175,7 @@ def test_panel_renders_drilldown_data_deterministically():
 def test_panel_without_turn_analysis_keeps_shared_timeline():
     """仅 stats 输入仍可浏览步骤，但不编造消息或 turn 归因。"""
     html = _panel(None)
-    assert "五轨联动执行视图" in html
+    assert "六轨联动执行视图" in html
     assert '"messages":{}' in html
     assert '"turns":{}' in html
 
@@ -279,8 +281,10 @@ def test_panel_shared_timeline_serializes_all_trials():
             stats=collect_stats(record, ev), turn_analysis=analyze_turns(ev, metrics),
         ))
     html = render_trajectory_html(title="t", meta_lines=["m"], trials=panels)
-    assert html.count('class="timeline-trial"') == 12
-    assert html.count('data-trial="trial-') >= 12
+    # 每个试次在每条轨道上有一个泳道标签：执行/工具/Token/输入Token/首Token
+    # 五条常画（上下文轨只在有窗口声明时画），3 个试次 = 15。
+    assert html.count('class="timeline-trial"') == 15
+    assert html.count('data-trial="trial-') >= 15
     assert html.count('"verdict":"pass"') == 2
     assert html.count('"verdict":"fail"') == 1
     assert html.count('"score":1.0') >= 2

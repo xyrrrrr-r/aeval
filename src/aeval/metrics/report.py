@@ -8,6 +8,7 @@ leaks into reports.
 from __future__ import annotations
 
 import json
+import statistics
 from collections import Counter
 from dataclasses import dataclass, field
 from typing import Any, Iterable, Iterator, Mapping, Sequence
@@ -26,6 +27,7 @@ from aeval.metrics.reliability import (
     valid_trials,
 )
 from aeval.metrics.reliability import _excluded_reasons as _trial_excluded_reasons
+from aeval.verdict.trajectory.failures import grader_reasons
 from aeval.verdict.trajectory.labels import metric_zh
 
 __all__ = [
@@ -437,6 +439,9 @@ class VerdictSource:
     roles: tuple[str, ...]           # 对应角色：基线 / 族 …(key) / 守卫
     mechanism: str                   # "veto" | "阈值折叠" | "判定"
     note: str                        # 对照说明（如"基线判 pass，被本层否决"）
+    #: 决定性判分器逐字给出的理由（含其指标里报告失败的理由）。空 = 该次判定
+    #: 没有留下可陈述的理由，dashboard 写"—"，不编造。
+    reasons: tuple[str, ...] = ()
 
 
 @dataclass
@@ -521,6 +526,37 @@ def _assert_single_suite(manifests: Sequence[RunManifest] | None) -> None:
         )
 
 
+def declared_pass_pow_k(
+    manifests: Sequence[RunManifest] | None,
+) -> int | None:
+    """The ``k`` the sealed suite declarations agree on, if any.
+
+    A suite declares its sampling plan under ``metrics:``
+    (``{id: reliability, kind: pass_pow_k, k: 3}``). That declaration is
+    sealed into each run's manifest, so a report can honour it without
+    reading the suite directory — and without the operator having to
+    remember ``--k``.
+
+    Deliberately conservative: it returns a value only when at least one
+    run declared a ``pass_pow_k`` *with* an explicit ``k`` and every run
+    that did agrees. Runs that declared none (or that predate the sealed
+    field) contribute nothing; a disagreement between aggregated runs is
+    ambiguous and yields ``None`` rather than silently picking one. An
+    explicit ``--k`` from the operator always wins over this default.
+    """
+    declared: set[int] = set()
+    for manifest in manifests or ():
+        for metric in manifest.declared_metrics or ():
+            if metric.get("kind") != "pass_pow_k":
+                continue
+            value = metric.get("k")
+            if isinstance(value, int) and not isinstance(value, bool) and value >= 1:
+                declared.add(value)
+    if len(declared) == 1:
+        return next(iter(declared))
+    return None
+
+
 def aggregate_run(
     run_ids: Sequence[str],
     trials: Iterable[TrialRecord],
@@ -556,6 +592,9 @@ def aggregate_run(
             )
             for manifest in manifests
         ]
+    if k is None:
+        # No operator override: fall back to the suite's sealed declaration.
+        k = declared_pass_pow_k(manifests)
     valid = valid_trials(trials)
     passes = sum(1 for t in valid if t.verdict == "pass")
     fails = sum(1 for t in valid if t.verdict == "fail")
@@ -786,6 +825,12 @@ class TrajectoryAggregate:
     peak_input_tokens: int | None
     peak_trial_id: str | None
     peak_step_id: int | None
+    #: 首 token 时延（facade 账本记录的首个输出增量）：有记录的调用数 + 最快/中位/最慢。
+    #: 一个都没记录就整体是 None——"没量到"不是 0。
+    first_token_calls: int
+    first_token_ms_min: int | None
+    first_token_ms_median: int | None
+    first_token_ms_max: int | None
     longest_call: tuple[str, float, str] | None  # (工具, 秒, trial_id)
     categories: tuple[CategoryTrajectory, ...]
 
@@ -833,6 +878,13 @@ def _aggregate_trajectory(
     ]
     longest_call = max(calls, key=lambda t: t[1]) if calls else None
 
+    latencies = sorted(
+        point.first_token_ms
+        for s in stats
+        for point in s.steps
+        if point.first_token_ms is not None
+    )
+
     by_cat: dict[tuple[str, str], list[Any]] = {}
     for s in stats:
         by_cat.setdefault(category_of(s.task_id), []).append(s)
@@ -878,6 +930,12 @@ def _aggregate_trajectory(
         tool_calls=sum(s.tool_calls_total for s in stats),
         tool_missing_obs=sum(s.tool_missing_obs_total for s in stats),
         tool_retries=sum(s.tool_retries_total for s in stats),
+        first_token_calls=len(latencies),
+        first_token_ms_min=latencies[0] if latencies else None,
+        first_token_ms_median=(
+            int(round(statistics.median(latencies))) if latencies else None
+        ),
+        first_token_ms_max=latencies[-1] if latencies else None,
         peak_input_tokens=peak[0] if peak else None,
         peak_trial_id=peak[1] if peak else None,
         peak_step_id=peak[2] if peak else None,
@@ -1362,6 +1420,9 @@ def _verdict_sources(
             note = f"{'、'.join(passing)} 判 pass，本层折叠为 fail"
         else:
             note = ""
+        # 同一套失败理由口径给轨迹面板和 dashboard：所有非 pass 判分器的理由，
+        # 加上任何判分器里报告失败的指标理由；每条带上来源标签，理由文本逐字引用。
+        unique_reasons = grader_reasons(trial)
         sources.append(
             VerdictSource(
                 trial_id=trial.trial_id,
@@ -1372,6 +1433,7 @@ def _verdict_sources(
                 roles=roles_of,
                 mechanism=mechanism,
                 note=note,
+                reasons=unique_reasons,
             )
         )
     # 按 (task_id, trial_index) 排序：失败清单读起来和「终判结果」同序，
@@ -1865,6 +1927,23 @@ def render_static_report(
             lines.append(
                 f"- 最长调用：{tool} {seconds:.1f}s（{trial_id}）"
             )
+        if traj.total_prompt_tokens and traj.total_cached_tokens is not None:
+            # 缓存占输入：分母是计费输入（未缓存 + 缓存读 + 缓存写），
+            # 分子是缓存读——口径写清楚，别被读成"省了多少"。
+            lines.append(
+                f"- 缓存占输入：{traj.total_cached_tokens / traj.total_prompt_tokens:.1%}"
+                f"（缓存读 {traj.total_cached_tokens:,} / 计费输入 {traj.total_prompt_tokens:,}）"
+            )
+        if traj.first_token_ms_min is not None:
+            lines.append(
+                f"- 首 token 时延：{traj.first_token_calls} 次调用有记录"
+                f" · 最快 {traj.first_token_ms_min:,}ms"
+                f" · 中位 {traj.first_token_ms_median:,}ms"
+                f" · 最慢 {traj.first_token_ms_max:,}ms"
+                "（facade 账本记的首个输出增量，含推理）"
+            )
+        else:
+            lines.append("- 首 token 时延：不可用（账本未记录首个输出增量）")
         if traj.categories:
             lines.append("")
             lines.append("| 类别 | 试次 | Token | 平均时长(s) | 工具调用 | 无观测 |")
@@ -1957,7 +2036,8 @@ def render_static_report(
                 lines.append("")
                 lines.append(
                     "折叠序：任一 veto fail → fail；否则任一 fail → fail；"
-                    "否则任一 cannot_judge → cannot_judge；否则 pass。"
+                    "否则任一 pass → pass（其余层的 cannot_judge 不影响试次）；"
+                    "只有没有任何层判出 pass/fail 才是 cannot_judge。"
                 )
                 lines.append("")
                 lines.append(

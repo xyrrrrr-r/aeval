@@ -110,3 +110,65 @@ def test_dashboard_flags_exclusion_rate():
     ]
     html = render_dashboard_html(_summary(trials))
     assert "排除率超标" in html
+
+
+def test_the_failed_trial_table_quotes_the_grader_reason():
+    """失败清单必须说出「为什么失败」：决定性判分器的理由逐字出现；
+    判分器没写理由的试次显示「—」，不推断。"""
+    from aeval.contracts import GradeResult, MetricOutcome, Score
+
+    failing = _trial("x0", 0, task="openssl-selfsigned-cert", verdict="fail")
+    failing.grades = [
+        GradeResult(
+            grader_id="official-baseline",
+            grader_version="v1",
+            layer="outcome",
+            score=Score(value=0.0),
+            status="fail",
+            reasons=["upstream verifier reward is 0 (the task's tests failed)"],
+        ),
+        GradeResult(
+            grader_id="terminal-beach-trajectory",
+            grader_version="v1",
+            layer="trajectory",
+            score=Score(value=0.9),
+            status="pass",
+            reasons=["trajectory healthy"],
+            metrics=[
+                MetricOutcome(
+                    name="tool_error_rate",
+                    category="robustness",
+                    status="ok",
+                    score=0.9,
+                    reasons=["failures at: step 7"],
+                )
+            ],
+        ),
+    ]
+    # a failed grade that recorded no reason at all: the cell must say so
+    bare = _trial("x2", 2, task="openssl-selfsigned-cert", verdict="fail")
+    bare.grades = [
+        GradeResult(
+            grader_id="official-baseline",
+            grader_version="v1",
+            layer="outcome",
+            score=Score(valid=False, invalid_reasons=["judged by the task's own verifier"]),
+            status="fail",
+            reasons=[],
+        )
+    ]
+    summary = _summary([*_trials(), failing, bare])
+    # ``_verdict_source_html`` is embedded by the family section (families exist
+    # on a real run); here the helper is the unit and gets asserted directly,
+    # plus the embedded form once a family is present.
+    from aeval.metrics.dashboard import _verdict_source_html
+
+    html = _verdict_source_html(summary)
+    assert "失败理由（逐字）" in html
+    assert "upstream verifier reward is 0 (the task&#x27;s tests failed)" in html
+    assert "tool_error_rate: failures at: step 7" in html
+    assert "<td>—</td>" in html
+    # a failure with no recorded reason is shown as "—", never invented
+    assert "<td>—</td>" in html
+    # the passing grader's own reason is not part of the failure explanation
+    assert "trajectory healthy" not in html

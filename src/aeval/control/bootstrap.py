@@ -213,6 +213,7 @@ async def deploy_generic_facade(
     root: PurePosixPath | None = None,
     control_ca: Path | None = None,
     protocols: Sequence[str] | None = None,
+    call_log_path: str | None = None,
 ) -> str:
     """Deploy and start the OpenAI-compatible facade inside the sandbox.
 
@@ -226,6 +227,11 @@ async def deploy_generic_facade(
     ``protocols`` selects the client wire the facade serves
     (``chat_completions`` — the default — and/or ``responses``); it is derived
     from the agent's declared model routing, never guessed here.
+
+    ``call_log_path`` opts the deployment into the facade's per-call metering
+    ledger (``AEVAL_FACADE_CALL_LOG``): the adapter's declared sandbox path for
+    it. ``None`` — every adapter that declares no ledger — leaves the facade's
+    environment byte-identical to before.
     """
     # The production root is /opt/aeval-facade; the override exists so the
     # whole flavor can be exercised on a host where /opt is not writable
@@ -306,6 +312,11 @@ async def deploy_generic_facade(
                 else ""
             )
             + (f"AEVAL_FACADE_SESSION_ID={shlex.quote(session_id)} " if session_id else "")
+            + (
+                f"AEVAL_FACADE_CALL_LOG={shlex.quote(call_log_path)} "
+                if call_log_path
+                else ""
+            )
         )
         log = "/tmp/aeval-facade.log"
         # ``setsid --fork`` both detaches (new session, so no SIGHUP when the
@@ -404,6 +415,10 @@ async def _deploy_facade_flavor(
                 f"{str(locked.sha256)[:12]}… but {resolved} now fingerprints to "
                 f"{actual.sha256[:12]}… — refusing to deploy bytes the lock does not cover"
             )
+    # The adapter's own declaration decides whether the facade records calls:
+    # an adapter that declares no ledger deploys exactly as it did before.
+    from aeval.agents.contract import sandbox_model_call_ledger
+
     await deploy_generic_facade(
         environment=environment,
         facade_dist=resolved,
@@ -412,6 +427,7 @@ async def _deploy_facade_flavor(
         root=facade_root,
         control_ca=control_ca,
         protocols=facade_protocols_for(routing),
+        call_log_path=sandbox_model_call_ledger(type(agent)),
     )
 
 

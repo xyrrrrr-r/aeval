@@ -30,6 +30,7 @@ from collections.abc import Mapping
 from typing import TYPE_CHECKING, Any
 
 from aeval.agents.dsh.agent import SESSIONS_DIRNAME
+from aeval.agents.dsh.control_doctor import dsh_control_doctor
 from aeval.control.bootstrap import BootstrapError
 from aeval.control.flavors import ControlFlavor, register_control_flavor
 
@@ -325,4 +326,8 @@ register_control_flavor(ControlFlavor(
     # the DSH plugin consumes more than the neutral config: its half of the
     # composed control config is declared here, not hardcoded in the composer
     config_fields=dsh_config_fields,
+    # the adapter-owned facts `aeval doctor` cannot derive neutrally: the
+    # compiled control package's entry files and direct imports, and the peer
+    # window a DSH profile must satisfy (see dsh/control_doctor.py)
+    doctor_checks=dsh_control_doctor,
 ))

@@ -61,6 +61,8 @@ h1 { font-size: 22px; margin: 0 0 4px; }
 h2 { font-size: 16px; margin: 34px 0 12px; color: var(--muted);
      font-weight: 600; letter-spacing: .04em; }
 .meta { color: var(--muted); font-size: 13px; }
+.src-reason { font-size: 12px; color: var(--fail); margin: 2px 0;
+              line-height: 1.4; max-width: 380px; }
 .cards { display: grid; grid-template-columns: repeat(auto-fit,
          minmax(150px, 1fr)); gap: 12px; margin-top: 20px; }
 .card { background: var(--panel); border: 1px solid var(--line);
@@ -335,6 +337,10 @@ def _verdict_source_html(summary: RunSummary) -> str:
         title = summary.task_titles.get(source.task_id)
         if title:
             task = f"{title}({source.task_id}) #{source.trial_index}"
+        reasons = getattr(source, "reasons", ()) or ()
+        reason_html = "".join(
+            f'<div class="src-reason">{_e(reason)}</div>' for reason in reasons
+        ) or "—"
         rows.append(
             "<tr>"
             f"<td><code>{_e(source.trial_id)}</code></td>"
@@ -343,6 +349,7 @@ def _verdict_source_html(summary: RunSummary) -> str:
             f"<td>{_e('、'.join(source.roles))}</td>"
             f"<td>{_e(source.mechanism)}</td>"
             f"<td>{_e(source.note or '—')}</td>"
+            f"<td>{reason_html}</td>"
             "</tr>"
         )
     baseline_n = sum(1 for s in sources if "官方基线" in s.roles)
@@ -365,9 +372,14 @@ def _verdict_source_html(summary: RunSummary) -> str:
     return (
         "<h2>终判来源分解</h2>"
         '<p class="meta">折叠序：任一 veto fail → fail；否则任一 fail → fail；'
-        "否则任一 cannot_judge → cannot_judge；否则 pass。</p>"
+        "否则任一 pass → pass（其余层的 cannot_judge 不影响试次）；"
+        "只有没有任何层判出 pass/fail 才是 cannot_judge。"
+        "「失败理由」列引用判分器写在证据里的理由，理由文本逐字保留，前缀是"
+        "「判分器@版本」(或「判分器@版本 · 指标名」) 来源标签；含指标里报告失败的"
+        "理由。判分器没写理由就显示「—」，不推断。</p>"
         '<table><thead><tr><th>失败试次</th><th>任务</th>'
         "<th>决定性判分器</th><th>角色</th><th>机制</th><th>对照</th>"
+        "<th>失败理由（逐字）</th>"
         f"</tr></thead><tbody>{''.join(rows)}</tbody></table>"
         f'<p class="meta">失败 {len(sources)} = {" · ".join(parts)}'
         "（层计数：一个试次可被多层判 fail，veto 层优先）</p>"
@@ -929,6 +941,24 @@ def _trajectory_html(traj) -> str:
         facts.append(
             ("最长调用", f"{traj.longest_call[0]} {traj.longest_call[1]:.1f}s")
         )
+    if traj.total_prompt_tokens and traj.total_cached_tokens is not None:
+        facts.append(
+            (
+                "缓存占输入",
+                f"{traj.total_cached_tokens / traj.total_prompt_tokens:.0%}"
+                f"（{traj.total_cached_tokens:,}/{traj.total_prompt_tokens:,}）",
+            )
+        )
+    if traj.first_token_ms_min is not None:
+        facts.append(
+            (
+                "首 token 时延",
+                f"最快 {traj.first_token_ms_min:,}ms · 中位 "
+                f"{traj.first_token_ms_median:,}ms · 最慢 {traj.first_token_ms_max:,}ms",
+            )
+        )
+    else:
+        facts.append(("首 token 时延", "不可用（账本未记录）"))
     chips = "".join(
         f'<div class="card"><div class="l">{_e(label)}</div>'
         f'<div class="v">{_e(value)}</div></div>'

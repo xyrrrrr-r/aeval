@@ -510,11 +510,15 @@ def render_suite_explanation(suite: ResolvedSuite) -> str:
             for task_id in spec.task_ids():
                 binding = spec.scope.get(task_id)
                 title = f"「{binding.title}」" if binding and binding.title else ""
+                # The binding carries the role; a task listed by the family
+                # without an explicit binding is a home task (ScopeBinding's
+                # own default), which is what the scope block means.
+                role = binding.role if binding else "home"
                 inputs = spec.inputs_for(task_id)
                 inputs_mark = (
                     " · 输入 " + "/".join(sorted(inputs)) if inputs else ""
                 )
-                lines.append(f"    · {task_id} [{case.role}] {title}{inputs_mark}")
+                lines.append(f"    · {task_id} [{role}] {title}{inputs_mark}")
         lines.append("")
         lines.append("## Blocks (radar axes)")
         for block, name in o.blocks.items():

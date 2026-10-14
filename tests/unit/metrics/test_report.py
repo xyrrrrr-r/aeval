@@ -173,6 +173,94 @@ def test_pass_pow_k_is_omitted_when_exclusions_shrink_the_pool_below_k():
     assert tiny.pass_pow_k_value is None
 
 
+# --- declared reliability k (sealed suite `metrics:` block) ---------------
+
+
+def _declared_manifest(run_id: str, *metrics):
+    from aeval.contracts import OverlayIdentity, VersionsBundle
+    from aeval.contracts import RunManifest
+    from aeval.provenance import build_runtime_lock
+
+    return RunManifest(
+        run_id=run_id,
+        runtime_lock=build_runtime_lock(),
+        overlay=OverlayIdentity(
+            suite_id="s", suite_version="1", overlay_digest="d" * 64,
+            source_commit="9" * 40,
+        ),
+        versions=VersionsBundle(aeval_version="0.1.0"),
+        declared_metrics=list(metrics),
+    )
+
+
+def test_declared_pass_pow_k_used_when_operator_passes_no_k():
+    """The suite's sealed `metrics:` declaration is the default `k`.
+
+    Without this, a suite that declares `reliability/pass_pow_k/k=3` renders
+    `pass^k: -` — the declaration existed only in `aeval explain`.
+    """
+    manifest = _declared_manifest(
+        "r1", {"id": "reliability", "kind": "pass_pow_k", "k": 3}
+    )
+    trials = [_trial(f"t{i}", i) for i in range(3)]
+    summary = aggregate_run(["r1"], trials, manifests=[manifest])
+    assert summary.k == 3
+    assert summary.pass_pow_k_value == 1.0
+    text = render_static_report(summary)
+    assert "pass^3" in text
+
+
+def test_operator_k_overrides_the_sealed_declaration():
+    manifest = _declared_manifest(
+        "r1", {"id": "reliability", "kind": "pass_pow_k", "k": 3}
+    )
+    trials = [_trial(f"t{i}", i) for i in range(3)]
+    summary = aggregate_run(["r1"], trials, k=2, manifests=[manifest])
+    assert summary.k == 2
+
+
+def test_declared_k_is_ignored_when_runs_disagree_or_omit_it():
+    three = _declared_manifest(
+        "r1", {"id": "reliability", "kind": "pass_pow_k", "k": 3}
+    )
+    two = _declared_manifest(
+        "r2", {"id": "reliability", "kind": "pass_pow_k", "k": 2}
+    )
+    trials = [_trial(f"t{i}", i) for i in range(3)]
+    # disagreeing declarations are ambiguous: no default, no fabricated k
+    assert aggregate_run(["r1", "r2"], trials, manifests=[three, two]).k is None
+    # a metric without an explicit k declares nothing
+    assert aggregate_run(
+        ["r1"], trials,
+        manifests=[_declared_manifest("r1", {"id": "reliability", "kind": "pass_pow_k"})],
+    ).k is None
+
+
+def test_legacy_manifest_without_declared_metrics_still_aggregates():
+    """Old sealed bundles carry no `declared_metrics`; they must keep working
+    (and must not silently acquire a k)."""
+    trials = [_trial(f"t{i}", i) for i in range(3)]
+    summary = aggregate_run(["r1"], trials, manifests=[_declared_manifest("r1")])
+    assert summary.k is None
+    assert summary.pass_pow_k_value is None
+    # still a complete, renderable report — just without a fabricated k
+    assert "综合评分" in render_static_report(summary) or "有效分母" in render_static_report(summary)
+
+
+def test_declared_metrics_is_part_of_the_intent_digest_only_when_present():
+    """Empty → not part of the digest (old bundles must not drift); present →
+    part of the intent (a report must be reproducible from the bundle alone)."""
+    base = _declared_manifest("r1")
+    assert base.declared_metrics == []
+    # empty stays out of the digest, exactly like task_titles / dimension_model
+    assert base.digest() == base.model_copy(update={"declared_metrics": []}).digest()
+
+    declared = base.model_copy(
+        update={"declared_metrics": [{"id": "reliability", "kind": "pass_pow_k", "k": 3}]}
+    )
+    assert declared.digest() != base.digest()
+
+
 def test_report_renders_task_titles_from_the_manifest():
     """清单里封存的中文任务名进按任务表：「标题(task_id)」对照原值；
     没有标题的任务回退原 id。标题是显示层——不参与任何分母/分数。"""

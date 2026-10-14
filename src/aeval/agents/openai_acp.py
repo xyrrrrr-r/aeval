@@ -207,6 +207,35 @@ class OpenAiAcpAgent(AcpAgent):
     # the agent could not be metered at all.
     CONTROL_STACK = "deepagent-facade"
 
+    # The provider name the CLI must be told, in the ``provider:model`` spec
+    # form its own model resolution accepts (``None`` = hand over the bare
+    # name). This is a family fact AND a metering fact: every CLI in this
+    # family infers the provider from the model NAME when it is spelled bare,
+    # so a lease served as ``deepseek-chat`` resolves to the *vendor* provider.
+    # That provider demands the vendor's own credential — measured on
+    # deepagents-code 0.1.78 inside the task image:
+    # ``MissingCredentialsError: No credentials found for provider
+    # 'deepseek'`` — and if an operator had exported one, the CLI would call
+    # the vendor directly, unmetered, which is the exact overclaim the
+    # declared routing exists to prevent. The same lease stated as
+    # ``openai:deepseek-chat`` resolves to ``ChatOpenAI(model='deepseek-chat',
+    # openai_api_base=<the facade>, use_responses_api=True)``: the client the
+    # routing points at the facade, carrying the wire model name the lease
+    # actually serves. Measured, same host, same interpreter.
+    CLI_MODEL_PROVIDER: str | None = "openai"
+
+    @classmethod
+    def cli_model_spec(cls, model: str | None) -> str | None:
+        """``provider:model`` for the CLI's ``--model``, or the bare name.
+
+        Kept public and on the class so a member whose CLI spells the choice
+        differently overrides it rather than duplicating the entry builder.
+        """
+        if not model:
+            return None
+        provider = cls.CLI_MODEL_PROVIDER
+        return f"{provider}:{model}" if provider else model
+
     # The generic facade only proxies model traffic: nothing inside the
     # sandbox ever sees an exit, so the owner observes what it can and writes
     # the descriptor itself.

@@ -1,0 +1,13 @@
+# terminal-beach 的可解性基线臂：用 Harbor 内置的 oracle agent 跑每个任务
+# 自带的 solution/solve.sh，证明"这三个任务在适配过的镜像上确实可解"。
+#
+# oracle 不产生模型调用，因此这一臂不经过 façade/broker；它测的是任务本身
+# （镜像 + 测试 + 解法）而不是被测 agent。`aeval run` 不接受用于 oracle 臂的
+# 适配器注入，直接由 Harbor 跑组合后的 job。
+job_name: terminal-beach-oracle
+n_attempts: 3
+n_concurrent_trials: 1
+agents:
+  - name: oracle
+environment:
+  type: e2b

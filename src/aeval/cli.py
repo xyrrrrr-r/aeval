@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import sys
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Annotated, Optional
 
@@ -42,6 +43,10 @@ EXIT_SYSTEM_ERROR = 4
 # unobserved/unclassified trials, seal or recompute refused). The
 # Harbor exit code alone never means the evaluation completed.
 EXIT_E2E_INCOMPLETE = 5
+# A run completed and sealed, but every trial was excluded: it measured
+# nothing, so it must not look like success. `quickstart` is the command that
+# turns this into an exit code; `run` still reports it in its own output.
+EXIT_NO_VALID_TRIALS = 6
 
 
 def _declared_adapter(import_path: str):
@@ -236,6 +241,164 @@ def check_cmd(
         raise typer.Exit(code=EXIT_VALIDATION_ERROR)
     typer.echo("runtime image check: OK")
     raise typer.Exit(code=0)
+
+
+@app.command("doctor")
+def doctor_cmd(
+    broker_json: Annotated[
+        Path | None,
+        typer.Option(
+            "--broker-json",
+            help="Broker spec to inspect (default: $AEVAL_BROKER_JSON)",
+        ),
+    ] = None,
+    suite: Annotated[
+        Path | None,
+        typer.Option(help="Suite directory: checks the pairing and its source provenance"),
+    ] = None,
+    agent: Annotated[
+        str | None, typer.Option(help="Declared agent id to check the pairing with")
+    ] = None,
+    profile: Annotated[
+        str | None, typer.Option(help="Launch profile declared by the agent")
+    ] = None,
+    agents_dir: Annotated[
+        Path, typer.Option(help="Directory holding agents/<id>.yaml")
+    ] = Path("agents"),
+    backend: Annotated[
+        str | None, typer.Option(help="Sandbox backend to probe: docker or e2b")
+    ] = None,
+    run_dir: Annotated[
+        Path | None,
+        typer.Option(help="Run directory whose trials/ evidence links to check"),
+    ] = None,
+    node_bin: Annotated[
+        str, typer.Option(help="Node executable to version-check")
+    ] = "node",
+    no_probe: Annotated[
+        bool,
+        typer.Option(
+            "--no-probe",
+            help="Never contact anything: the token counter, the e2b endpoint and "
+            "the docker daemon are reported as skipped instead of probed",
+        ),
+    ] = False,
+    probe_timeout: Annotated[
+        float, typer.Option(help="Seconds per network probe")
+    ] = 5.0,
+    as_json: Annotated[
+        bool, typer.Option("--json", help="Machine-readable report on stdout")
+    ] = False,
+) -> None:
+    """Check the wiring from "installed" to "reportable" — read-only, nothing written.
+
+    Every check corresponds to a failure that was met for real, and several of
+    them disguise themselves later (a key the host never exported surfaces in
+    the sandbox as MISSING_CREDENTIAL; a loopback listenHost surfaces as "the
+    trial's agent exposes no DSH session"). One ``[ok|warn|fail] <id> <detail>``
+    line per check, a copy-pasteable ``hint:`` after anything that is not ok.
+    Exit code is 0 when nothing failed.
+    """
+    from aeval.doctor import run_doctor
+
+    report = run_doctor(
+        broker_json=broker_json,
+        suite=suite,
+        agent=agent,
+        profile=profile,
+        agents_dir=agents_dir,
+        backend=backend,
+        run_dir=run_dir,
+        node_bin=node_bin,
+        no_probe=no_probe,
+        probe_timeout=probe_timeout,
+    )
+    typer.echo(report.render_json() if as_json else report.render())
+    raise typer.Exit(code=report.exit_code)
+
+
+@app.command("quickstart")
+def quickstart_cmd(
+    backend: Annotated[
+        str, typer.Option(help="Sandbox backend: docker (this host) or e2b (managed)")
+    ] = "docker",
+    suite: Annotated[
+        Path | None,
+        typer.Option(
+            help="Suite directory (contains suite.yaml); default: the built-in suite "
+            "for the selected backend, printed when it is chosen"
+        ),
+    ] = None,
+    agents_dir: Annotated[
+        Path, typer.Option(help="Directory holding agents/<id>.yaml (initialized when empty)")
+    ] = Path("agents"),
+    workspace: Annotated[
+        Path, typer.Option(help="Where the run, its report and its TLS material are written")
+    ] = Path("aeval-quickstart"),
+    install_prefix: Annotated[
+        str | None,
+        typer.Option(
+            help="In-sandbox install prefix for the agent CLI tree (default: "
+            "/root/dshpkg, off docker's 64 MiB /dev/shm)"
+        ),
+    ] = None,
+    listen_port: Annotated[int, typer.Option(help="Broker listen port")] = 8447,
+    listen_host: Annotated[
+        str | None,
+        typer.Option(
+            help="Address the broker binds and the sandbox dials (default: the "
+            "suite's own egress allowlist decides, else this host's first address)"
+        ),
+    ] = None,
+    token_count_port: Annotated[
+        int, typer.Option(help="Port for the trusted input-token counter")
+    ] = 8792,
+    k: Annotated[int, typer.Option(help="pass^k for the report")] = 1,
+    harbor_cli: Annotated[
+        str | None, typer.Option(help="Harbor entrypoint to delegate the run to")
+    ] = None,
+    dry_run: Annotated[
+        bool, typer.Option("--dry-run", help="Print the plan and write nothing at all")
+    ] = False,
+    yes: Annotated[
+        bool, typer.Option("--yes", help="Carry the plan out (without it, nothing is written)")
+    ] = False,
+) -> None:
+    """Wire everything from an installed plugin to a scored report, in one command.
+
+    Every stage stays an individual command you can read in the printed plan;
+    this runs them in order. Nothing is written without ``--yes``.
+    """
+    from aeval.quickstart import EXIT_NO_VALID_TRIALS, QuickstartError, run_quickstart
+
+    try:
+        result = run_quickstart(
+            backend=backend,
+            suite=suite,
+            agents_dir=agents_dir,
+            workspace=workspace,
+            install_prefix=install_prefix,
+            listen_port=listen_port,
+            listen_host=listen_host,
+            token_count_port=token_count_port,
+            k=k,
+            harbor_cli=harbor_cli,
+            execute=bool(yes) and not dry_run,
+            echo=typer.echo,
+        )
+    except QuickstartError as exc:
+        typer.secho(f"quickstart: {exc}", fg=typer.colors.RED, err=True)
+        if exc.hint:
+            typer.secho(f"  hint: {exc.hint}", fg=typer.colors.YELLOW, err=True)
+        raise typer.Exit(code=EXIT_VALIDATION_ERROR) from exc
+    if result.exit_code == EXIT_NO_VALID_TRIALS:
+        typer.secho(
+            f"quickstart: exit {EXIT_NO_VALID_TRIALS} — the run completed but scored "
+            "no valid trial",
+            fg=typer.colors.RED,
+            err=True,
+        )
+    raise typer.Exit(code=result.exit_code)
 
 
 @app.command("run")
@@ -475,6 +638,13 @@ def run_cmd(
             ),
             task_titles=resolved.task_titles,
             dimension_model=dimension_model,
+            # `metrics:` 块（如 reliability/pass_pow_k/k=3）进密封清单：
+            # 报告未显式传 --k 时以它为准，否则套件契约里声明的可靠性
+            # 指标在报告里恒为 "-"（只出现在 `aeval explain`）。
+            declared_metrics=[
+                metric.model_dump(mode="json", exclude_none=True)
+                for metric in resolved.overlay.metrics
+            ],
             versions=VersionsBundle(
                 aeval_version=version("aeval-harbor"),
                 converter_version=resolved.overlay.provenance.converter_version,
@@ -835,28 +1005,68 @@ def _evidence_context_window(evidence) -> int | None:
     return None
 
 
-def _iter_sealed_evidence(store: Path, records):
-    """逐试次产出 ``(record, evidence, reason)``。
+def _trial_dir_candidates(store: Path) -> tuple[Path, ...]:
+    """Every layout that may publish this store's trial-dir links, in order.
 
-    evidence 可用时 reason 为 None；否则 evidence 为 None、reason 说
-    明原因（试次目录缺失 / 密封轨迹不可读）。trial 目录名无契约保
-    证（驱动自定义），唯一可靠的映射是目录内 collection_manifest
-    .json 记录的 trial_id。
+    The reader has to look where the writers actually publish:
+
+    * ``<store.parent>/trials`` — the historical layout, kept first so an
+      existing workspace keeps resolving exactly as before;
+    * ``<store.parent>/runs/trials`` — what ``aeval quickstart`` writes
+      (``quickstart._link_evidence`` links each trial's evidence dir here);
+    * ``<store.parent>/run/trials`` — what ``aeval doctor`` tells an operator
+      to create for ``--run-dir <workspace>/run``.
+
+    For the usual store ``<workspace>/run.sqlite3`` those are ``<workspace>/
+    trials``, ``<workspace>/runs/trials`` and ``<workspace>/run/trials``. The
+    layouts are scanned as a union (so a partially populated directory cannot
+    hide a populated one) and the first ``collection_manifest.json`` for a
+    repeated ``trial_id`` wins — the manifest stays the single source of the
+    mapping itself.
+    """
+    base = store.parent
+    return (base / "trials", base / "runs" / "trials", base / "run" / "trials")
+
+
+@dataclass(frozen=True)
+class _TrialDirScan:
+    """What one store's published trial-dir layouts hold, in one pass."""
+
+    by_trial_id: dict[str, Path]        # manifest trial_id → trial dir
+    published: tuple[Path, ...]         # candidate layouts that exist at all
+    entries: int = 0                    # direntries seen across them
+    broken_links: int = 0               # links whose target directory is gone
+    manifest_less: int = 0              # real directories without a manifest
+
+
+def _scan_trial_dirs(store: Path) -> _TrialDirScan:
+    """Scan every published trial-dir layout of one store.
+
+    The mapping itself comes from the ``trial_id`` inside each directory's
+    ``collection_manifest.json`` — the manifest stays the single source of the
+    mapping. What is collected *around* it (broken links, manifest-less
+    directories) is only ever used to say truthfully **why** a trial has no
+    evidence, never to invent a second mapping.
     """
     import json as _json
 
-    from aeval.verdict.trajectory.base import (
-        SealedTranscriptError,
-        build_evidence,
-        load_sealed_transcript,
-    )
-
-    trials_dir = store.parent / "trials"
-    dir_by_trial: dict[str, Path] = {}
-    if trials_dir.is_dir():
+    by_trial_id: dict[str, Path] = {}
+    published: list[Path] = []
+    entries = broken_links = manifest_less = 0
+    for trials_dir in _trial_dir_candidates(store):
+        if not trials_dir.is_dir():
+            continue
+        published.append(trials_dir)
         for entry in sorted(trials_dir.iterdir()):
+            entries += 1
+            if not entry.exists():          # a link whose target is gone
+                broken_links += 1
+                continue
+            if not entry.is_dir():
+                continue
             manifest_path = entry / "collection_manifest.json"
-            if not entry.is_dir() or not manifest_path.is_file():
+            if not manifest_path.is_file():
+                manifest_less += 1
                 continue
             try:
                 sealed_id = _json.loads(
@@ -865,12 +1075,94 @@ def _iter_sealed_evidence(store: Path, records):
             except (OSError, ValueError):
                 continue
             if isinstance(sealed_id, str):
-                dir_by_trial[sealed_id] = entry
+                by_trial_id.setdefault(sealed_id, entry)
+    return _TrialDirScan(
+        by_trial_id, tuple(published), entries, broken_links, manifest_less
+    )
+
+
+def _scan_trial_dirs_multi(stores) -> _TrialDirScan:
+    """The same scan merged over several stores (each store scanned once)."""
+    by_trial_id: dict[str, Path] = {}
+    published: list[Path] = []
+    entries = broken_links = manifest_less = 0
+    seen: set[Path] = set()
+    for store in dict.fromkeys(stores):
+        scan = _scan_trial_dirs(store)
+        for trial_id, trial_dir in scan.by_trial_id.items():
+            by_trial_id.setdefault(trial_id, trial_dir)
+        for candidate in scan.published:
+            if candidate not in seen:
+                seen.add(candidate)
+                published.append(candidate)
+        entries += scan.entries
+        broken_links += scan.broken_links
+        manifest_less += scan.manifest_less
+    return _TrialDirScan(
+        by_trial_id, tuple(published), entries, broken_links, manifest_less
+    )
+
+
+def _trial_dirs(store: Path) -> dict[str, Path]:
+    """``sealed trial_id → trial dir`` for one store.
+
+    Trial directory names have no contractual shape (drivers pick them), so the
+    mapping comes from the ``trial_id`` recorded inside each directory's
+    ``collection_manifest.json``. The directories are collected from every
+    layout aeval publishes or tells an operator to publish — see
+    :func:`_trial_dir_candidates` for the order — because reading only one of
+    them made a fully sealed run report "no evidence" about evidence it held.
+    """
+    return _scan_trial_dirs(store).by_trial_id
+
+
+def _missing_evidence_reason(scan: _TrialDirScan) -> str:
+    """Why a trial has no usable sealed evidence — the true reason.
+
+    Five distinguishable facts, five distinct strings. The unreadable-transcript
+    case is *not* one of them: when a directory was located and the manifest
+    points at a transcript that cannot be read, the loader's own
+    ``SealedTranscriptError`` reason is reported instead of anything here.
+    """
+    if not scan.published:
+        return "试次目录缺失"
+    if not scan.entries:
+        return "试次目录缺失（已发布的链接目录里没有任何条目）"
+    if scan.broken_links:
+        return "试次目录缺失（链接指向的试次目录不存在）"
+    if scan.manifest_less:
+        return "试次目录无 collection_manifest（采集钩子 aeval-collect 未实现）"
+    return (
+        "试次目录里没有与本试次匹配的 collection_manifest"
+        "（清单的 trial_id 对不上）"
+    )
+
+
+def _iter_sealed_evidence(store: Path, records):
+    """逐试次产出 ``(record, evidence, reason)``。
+
+    evidence 可用时 reason 为 None；否则 evidence 为 None、reason 说明
+    原因（没有已发布的试次目录 / 目录里没有 collection_manifest /
+    密封轨迹不可读）。trial 目录名无契约保证（驱动自定义），映射来自
+    每个目录内 collection_manifest.json 记录的 trial_id；目录按
+    :func:`_trial_dir_candidates` 列出的布局查找，与写入端一致。
+    """
+    import json as _json
+
+    from aeval.verdict.trajectory.base import (
+        SealedTranscriptError,
+        build_evidence,
+        effective_stop_reason,
+        load_sealed_transcript,
+    )
+
+    scan = _scan_trial_dirs(store)
+    dir_by_trial = scan.by_trial_id
 
     for record in records:
         trial_dir = dir_by_trial.get(record.trial_id)
         if trial_dir is None:
-            yield record, None, "试次目录缺失"
+            yield record, None, _missing_evidence_reason(scan)
             continue
         try:
             transcript = load_sealed_transcript(
@@ -879,7 +1171,10 @@ def _iter_sealed_evidence(store: Path, records):
         except SealedTranscriptError as exc:
             yield record, None, exc.reason
             continue
-        yield record, build_evidence(transcript, record.stop_reason), None
+        yield record, build_evidence(
+            transcript,
+            effective_stop_reason(transcript.stop_reason, record.stop_reason),
+        ), None
 
 
 def _collect_run_inputs(stores: list[Path], run_ids: list[str]):
@@ -930,42 +1225,25 @@ def _collect_run_inputs(stores: list[Path], run_ids: list[str]):
 def _iter_sealed_evidence_multi(run_store: dict[str, Path], records):
     """逐试次产出 ``(record, evidence, reason)``（多 store 版）。
 
-    trial 目录的定位与单 store 版相同（store.parent/trials 下的
-    collection_manifest 记录 trial_id），只是每个 record 用它所属
-    run 的 store。
+    trial 目录的定位与单 store 版相同：按 :func:`_trial_dir_candidates`
+    列出每个 store 周围可能的布局，映射来自目录内 collection_manifest
+    .json 记录的 trial_id（其中 ``runs/trials`` 就是 quickstart 写入端
+    的布局）。定位不到时的原因由 :func:`_missing_evidence_reason` 区分。
     """
-    import json as _json
-
     from aeval.verdict.trajectory.base import (
         SealedTranscriptError,
         build_evidence,
+        effective_stop_reason,
         load_sealed_transcript,
     )
 
-    dir_by_trial: dict[str, Path] = {}
-    seen_dirs: set[Path] = set()
-    for store in set(run_store.values()):
-        trials_dir = store.parent / "trials"
-        if trials_dir in seen_dirs or not trials_dir.is_dir():
-            continue
-        seen_dirs.add(trials_dir)
-        for entry in sorted(trials_dir.iterdir()):
-            manifest_path = entry / "collection_manifest.json"
-            if not entry.is_dir() or not manifest_path.is_file():
-                continue
-            try:
-                sealed_id = _json.loads(
-                    manifest_path.read_text("utf-8")
-                ).get("trial_id")
-            except (OSError, ValueError):
-                continue
-            if isinstance(sealed_id, str):
-                dir_by_trial[sealed_id] = entry
+    scan = _scan_trial_dirs_multi(run_store.values())
+    dir_by_trial = scan.by_trial_id
 
     for record in records:
         trial_dir = dir_by_trial.get(record.trial_id)
         if trial_dir is None:
-            yield record, None, "试次目录缺失"
+            yield record, None, _missing_evidence_reason(scan)
             continue
         try:
             transcript = load_sealed_transcript(
@@ -974,7 +1252,10 @@ def _iter_sealed_evidence_multi(run_store: dict[str, Path], records):
         except SealedTranscriptError as exc:
             yield record, None, exc.reason
             continue
-        yield record, build_evidence(transcript, record.stop_reason), None
+        yield record, build_evidence(
+            transcript,
+            effective_stop_reason(transcript.stop_reason, record.stop_reason),
+        ), None
 
 
 def _load_trajectory_stats_multi(
@@ -1170,6 +1451,10 @@ def _render_task_panel(*, store: Path, manifest, run_id: str, task_id: str,
     task fails loudly, a batch skips it — but this never returns an empty panel.
     """
     from aeval.metrics.trajectory_panel import TrialPanel, render_trajectory_html
+    from aeval.verdict.trajectory.failures import (
+        attestation_index,
+        build_failure_report,
+    )
     from aeval.verdict.trajectory.stats import collect_stats
     from aeval.verdict.trajectory.turns import analyze_turns
 
@@ -1177,11 +1462,18 @@ def _render_task_panel(*, store: Path, manifest, run_id: str, task_id: str,
     metrics = tuple(factory(task_id) or ()) if factory is not None else ()
     panels: list[TrialPanel] = []
     unavailable: list[tuple[str, str]] = []
-    index_by_trial = {
-        record.trial_id: record.coordinates.trial_index for record in records
-    }
+    # Failure perception: the reasons come from the store record, the task
+    # verifier's failing assertions only from a trace whose sha256 matches the
+    # run's sealed attestation, and the implicated steps from either an
+    # explicit grader hint or a path that literally matches a tool argument.
+    trial_dirs = _trial_dirs(store)
+    attested = attestation_index(store.with_suffix(""))
     title_zh = manifest.task_titles.get(task_id, task_id)
-    for record, evidence, reason in _iter_sealed_evidence(store, records):
+    # 页内序号（1..N）而不是 run 全局 trial_index：一页就是一个任务，
+    # "试次 8/3" 这种全局序号在本页读起来是错位的。
+    for position, (record, evidence, reason) in enumerate(
+        _iter_sealed_evidence(store, records), start=1
+    ):
         if evidence is None:
             unavailable.append((record.trial_id, reason))
             typer.secho(
@@ -1191,10 +1483,7 @@ def _render_task_panel(*, store: Path, manifest, run_id: str, task_id: str,
             continue
         panels.append(
             TrialPanel(
-                heading=(
-                    f"试次 {index_by_trial.get(record.trial_id, 0) + 1}"
-                    f"/{len(records)} · {record.trial_id}"
-                ),
+                heading=f"试次 {position}/{len(records)} · {record.trial_id}",
                 meta=(
                     f"{run_id} · {manifest.overlay.suite_id}@"
                     f"{manifest.overlay.suite_version} · {title_zh}({task_id})"
@@ -1202,6 +1491,12 @@ def _render_task_panel(*, store: Path, manifest, run_id: str, task_id: str,
                 stats=collect_stats(record, evidence),
                 turn_analysis=analyze_turns(evidence, metrics),
                 context_window=_evidence_context_window(evidence),
+                failure=build_failure_report(
+                    record,
+                    steps=evidence.transcript.atif.steps or (),
+                    trial_dir=trial_dirs.get(record.trial_id),
+                    index=attested,
+                ),
             )
         )
     if not panels:
@@ -1219,6 +1514,14 @@ def _render_task_panel(*, store: Path, manifest, run_id: str, task_id: str,
         if grader_label
         else "该套件判分器未声明 turn 指标——逐轮打分仅结构切面"
     )
+    failed = [panel for panel in panels if panel.failure is not None]
+    if failed:
+        located = sum(1 for panel in failed if panel.failure.implicated_steps)
+        meta_lines.append(
+            f"失败 {len(failed)} 个试次：{located} 个已定位到相关步骤"
+            "（来源：判分器证据的 step 提示，或失败详情里的路径与该步工具调用参数"
+            "字面相等）；失败原因与相关步骤在右侧检查器中逐条给出"
+        )
     if unavailable:
         meta_lines.append(
             "不可用试次：" + "、".join(f"{r}" for _, r in unavailable)

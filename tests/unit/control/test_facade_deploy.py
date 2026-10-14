@@ -214,6 +214,28 @@ async def test_the_declared_wire_selects_the_served_protocols(tmp_path):
     assert "AEVAL_FACADE_PROTOCOLS=responses" in start
 
 
+async def test_the_call_ledger_env_is_opt_in(tmp_path):
+    dist = _built_dist(tmp_path)
+
+    without = _FakeExecEnvironment()
+    await deploy_generic_facade(
+        environment=without, facade_dist=dist,
+        gateway_url="http://10.0.0.1:5000", token_file="/run/aeval/trial-token",
+    )
+    start = next(cmd for cmd in without.commands if "facade_main.js" in cmd)
+    # No declaration, no variable: an existing deployment is byte-identical.
+    assert "AEVAL_FACADE_CALL_LOG" not in start
+
+    declared = _FakeExecEnvironment()
+    await deploy_generic_facade(
+        environment=declared, facade_dist=dist,
+        gateway_url="http://10.0.0.1:5000", token_file="/run/aeval/trial-token",
+        call_log_path="/logs/agent/model_calls.jsonl",
+    )
+    start = next(cmd for cmd in declared.commands if "facade_main.js" in cmd)
+    assert "AEVAL_FACADE_CALL_LOG=/logs/agent/model_calls.jsonl" in start
+
+
 async def test_an_unknown_facade_protocol_is_refused_before_any_upload(tmp_path):
     dist = _built_dist(tmp_path)
     env = _FakeExecEnvironment()
@@ -276,6 +298,12 @@ class _FacadeAgent:
         "agent_protocol": "openai_responses",
         "env": {"base_url": "OPENAI_BASE_URL", "api_key": "OPENAI_API_KEY"},
     }
+
+
+class _LedgerFacadeAgent(_FacadeAgent):
+    """The same stack, with the adapter's per-call ledger declared."""
+
+    SANDBOX_MODEL_CALL_LEDGER = "/logs/agent/model_calls.jsonl"
 
 
 class _ChatFacadeAgent:
@@ -390,6 +418,37 @@ async def test_the_facade_flavor_deploys_the_generic_tree(
     # the token still reaches the sandbox through the agent-neutral path —
     # and no facade tarball is uploaded by the recorded fake
     assert [target for _, target in env.uploads] == ["/run/aeval/trial-token"]
+
+
+async def test_the_facade_flavor_passes_only_a_declared_call_ledger(
+    demo_suite, runtime_lock, tmp_path, monkeypatch
+):
+    import aeval.control.bootstrap as module
+
+    dist = _built_dist(tmp_path)
+
+    async def _deploy(agent, calls):
+        recorded: list[dict] = []
+
+        async def _record(**kwargs):
+            recorded.append(kwargs)
+            return "http://127.0.0.1:8787"
+
+        monkeypatch.setattr(module, "deploy_generic_facade", _record)
+        await bootstrap_trial_control(
+            environment=_FakeExecEnvironment(), context=_context(demo_suite, runtime_lock, tmp_path),
+            trial_id="t", paths=_paths(), broker=_BrokerStub(tmp_path),
+            provider="p", model="m", agent=agent, facade_dist=dist,
+        )
+        calls.append(recorded[0])
+
+    declared: list[dict] = []
+    await _deploy(_LedgerFacadeAgent(), declared)
+    assert declared[0]["call_log_path"] == "/logs/agent/model_calls.jsonl"
+
+    undeclared: list[dict] = []
+    await _deploy(_FacadeAgent(), undeclared)
+    assert undeclared[0]["call_log_path"] is None
 
 
 async def test_the_chat_wire_routes_the_facade_to_the_chat_endpoint(

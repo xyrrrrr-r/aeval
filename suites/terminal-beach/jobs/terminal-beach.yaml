@@ -1,0 +1,19 @@
+# terminal-beach：3 任务 × 3 次尝试。串行执行（n_concurrent_trials: 1）：
+# 每个试次都要起一个真实沙箱并把模型流量打回宿主侧的 TLS model broker，
+# 集群的沙箱栈跑在同一台机器上。
+#
+# 本文件只描述**任务臂**（后端、尝试次数、并发）；真正的 agent 由
+# `aeval run --agent deepagent` 注入声明里的 launch spec（见
+# agents/deepagent.yaml）。这样"哪个 agent 跑这套任务"是一次显式的配对，
+# 而不是写死在 job 文件里。
+job_name: terminal-beach
+n_attempts: 3
+n_concurrent_trials: 1
+agents:
+  # 形状校验用的占位 agent；--agent deepagent 会替换掉它。
+  - name: nop
+environment:
+  # 套件适配的是 e2b 后端（sealed microVM）。不显式写 type 会退回本地
+  # docker 后端，而任务声明的 network_mode="allowlist" 在两个后端上的
+  # 执行方式不同——这里钉死套件被验证过的后端。
+  type: e2b

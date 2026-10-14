@@ -11,20 +11,76 @@ schema、CLI 参数、存储格式），每次都会在下方 `Changed`/`Removed
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-10-14
+
+### Added
+
+- **`aeval doctor`：装好到出报告之间的接线，一条只读命令逐项查完**：从"装完
+  插件"到"跑出报告"之间有一串看不见的接线（node 版本、控制包 dist 与依赖、
+  broker spec 的 upstream 四项、token counter 能否定位与可达、listen TLS 与
+  证书 SAN、DSH profile、agents 声明、套件 provenance、后端可达性、宿主是否
+  导出了 `upstream.apiKeyEnv` 指名的变量……），断在哪一环往往只能从下游症状
+  往回猜。现在固定 16 项依次输出，每项一行 `[ok|warn|fail] <id> <detail>`，
+  失败项后跟 `hint:` 可照抄的修复命令；`--json` 出机器可读报告；任一 `fail`
+  以退出码 3 结束。全程只读，不改任何配置。
+- **`aeval quickstart`：8 阶段约 30 条命令收成一条**：`--backend docker`
+  （默认）查 docker daemon、按平台取宿主 IP（macOS 用 `ipconfig getifaddr`，
+  Linux 用 `hostname -I`，不写死）、自签 CA 与 gateway 证书（SAN 含该 IP）、
+  拉起 token counter、生成 broker.json（upstream/identity/limits/tokenCount
+  齐全）、run、把试次证据链进 `runs/trials/`、report、recompute；`--backend
+  e2b` 跳过本机 docker，改为校验 endpoint 与证书链，缺什么就明确报什么，绝不
+  静默降级。默认只打印计划，`--yes` 才执行；重跑幂等（不破坏已有产物），
+  `--dry-run` 绝不写盘。
+- **新增退出码 6：跑完了但一个试次都没算数，不再假装成功**：过去所有试次都被
+  排除时退出码仍是 0，用户以为跑成了，只在报告里看到空结果。现在 `quickstart`
+  读 `aeval_run_summary.json` 的 `valid/total`，`valid == 0` 以 6 退出——成功
+  判据是"有试次算数"，而不是进程退出码。
+- **仓库自带一条真能跑的终端任务套件 `suites/terminal-beach`**：三个任务
+  （`hello-world`、`openssl-selfsigned-cert`、`sqlite-db-truncate`）加 docker
+  任务臂、判分器、镜像构建与 provenance 说明。"装完就能跑"和实验室验收有了
+  共同载体，不必自己从零搭一套。
+- **`deepagents-code` 适配器**：`aeval run --agent deepagent` 能把
+  deepagents-code 真跑起来；模型名以 `provider:model` 形式限定后传给 CLI，
+  否则 CLI 会绕过 broker 直连厂商——那次调用不计费，报告也就不可信。
+- **沙箱内逐调用计量账本折进试次证据**：facade 在沙箱里逐次记录模型调用，试次
+  结束时折进密封证据，声明了账本的 adapter 因此能在报告里给出 **Token** 与
+  **首 token 时延**；没声明账本的 adapter 一切照旧，仍如实标"不可用"，不编 0。
+- **`aeval explain` 的说明页显示每个任务自己的角色**：任务清单过去一律印
+  用例的角色（`[case.role]`），现在印该任务在套件里绑定的角色；族里列了但
+  没有显式绑定的任务按 `home` 算——一眼看出哪些任务是本套件自己的。
+
+### Changed
+
+- **套件声明的 `pass_pow_k` 成为报告默认的 `k`**：套件 `metrics:` 块里声明的
+  `pass_pow_k` 现在随 run 清单密封（`declared_metrics`），报告在没收到 `--k`
+  时以它为默认值，不必每次手敲。默认值只在**无歧义**时生效：至少有一个被聚合
+  的 run 声明了带 `k` 的 `pass_pow_k`，且所有声明了 `k` 的 run 取值一致；声明
+  互相矛盾时不猜——要算 `pass@k` 仍须显式 `--k`。
+
+### Fixed
+
+- **报告里的轨迹证据覆盖不再恒为 `0/N`**：读取端只在 `<store 同级>/trials`
+  找试次目录，而 `quickstart` 把证据发布在 `<workspace>/runs/trials`，两端不
+  一致导致一个都找不到：每个试次都报"试次目录缺失"，Token 与工具调用整块标
+  "不可用"。现在按三种布局的**并集**扫描——`<store.parent>/trials`（历史布局，
+  排在最前，既有工作区的解析结果不变）→ `<store.parent>/runs/trials`
+  （quickstart 写入端）→ `<store.parent>/run/trials`（doctor 提示的布局）；
+  半空的目录不会遮蔽满的目录，同一 `trial_id` 先到先得，映射仍只来自
+  `collection_manifest.json`。真读不到时按原因分开说：目录缺失 / 已发布目录为
+  空 / 链接断链 / 无 `collection_manifest` / 清单 `trial_id` 对不上——不再
+  统一归因成"试次目录缺失"。同一处布局识别也用到 `aeval doctor` 的
+  `evidence-trials` 项，使它在 `runs/trials` 布局下不再对真实状态报假警。
+- **`budget_adherence` 不再被整轮 skip**：有密封转录时按它真实的 `stop_reason`
+  判定，不再因为通用兜底值 `agent_exit_0` 把整轮跳过；基础设施停机仍由描述符
+  说了算。
+- **失败不再只有"失败"两个字**：轨迹面板与 dashboard 现在逐字给出判分器理由、
+  任务 verifier 的失败断言（仅当摘要匹配时才读）与相关步骤，并给出失败试次的
+  卡片——看报告的人不必再自己去翻日志。
+
 ## [0.3.0] - 2026-10-11
 
 ### Changed
 
-- **仓库迁移至 GitHub**：托管地址由 GitCode 的 `open_kunpeng_agentic_infra/aeval`
-  改为 `github.com/xyrrrrr-r/aeval`。README、本文件与 `pyproject.toml` 的
-  `Homepage`/`Repository`/`Issues`/`Changelog` 共 29 处 URL 一并改写，
-  `ops/e2b/install-e2b-hardening.sh` 的默认 `GIT_REMOTE_URL` 同步指向新仓库。
-- **公开历史不含内部资料**：迁移时对全部提交做了清洗——开发过程记录（含其归档前
-  使用的旧目录路径）、两份环境验证报告曾放在根目录的副本，以及一次误提交进版本库
-  的浏览器临时配置目录，都从所有提交中移除；内部实验机主机名与绝对本机路径改写为
-  中性占位。因此本仓库的提交 SHA 与 GitCode 上的历史不再对应，从旧历史
-  cherry-pick 会冲突。另需注意：`tests/unit/test_public_surface.py` 的主机名禁词
-  如今拦的是占位词，真名要防得靠你自己的本地钩子或私有 CI 配置。
 - **同一个控制包只需命名一处（`controlRoot`）**：broker spec 过去要分别写
   `brokerJs`、`controlDist`，再另外用环境变量/声明 kwargs 指一次会话读取器——
   同一个目录写三遍。现在 spec 给 `controlRoot`（含 `dist/broker_main.js` 的包）
@@ -201,7 +257,8 @@ schema、CLI 参数、存储格式），每次都会在下方 `Changed`/`Removed
 - `e2b` 依赖锁定 `>=2.25.0,<2.51.0`：自托管 e2b 集群仅实现 v1
   sandbox API（详见 `pyproject.toml` 内注释）。
 
-[Unreleased]: https://github.com/xyrrrrr-r/aeval/compare/v0.3.0...HEAD
+[Unreleased]: https://github.com/xyrrrrr-r/aeval/compare/v0.4.0...HEAD
+[0.4.0]: https://github.com/xyrrrrr-r/aeval/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/xyrrrrr-r/aeval/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/xyrrrrr-r/aeval/compare/v0.1.1...v0.2.0
 [0.1.1]: https://github.com/xyrrrrr-r/aeval/compare/v0.1.0...v0.1.1

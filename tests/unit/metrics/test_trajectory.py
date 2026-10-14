@@ -11,6 +11,7 @@ from aeval.metrics.trajectory_panel import (
     TrialPanel,
     render_trajectory_html,
 )
+from aeval.verdict.trajectory.failures import FailureReport, FailingTest
 from tests.unit.verdict.test_stats import sample_record, sample_stats
 
 
@@ -159,6 +160,28 @@ def test_report_trajectory_section():
     assert "- 最长调用：bash 10.0s（" in md
     assert "| 类别 | 试次 | Token | 平均时长(s) | 工具调用 | 无观测 |" in md
     assert "| 未分族(未分族) | 2 | 7,460 | 40.0 | 4 | 2 |" in md
+    # 缓存占输入口径：缓存读 / 计费输入（样本 200/7,300）
+    assert "- 缓存占输入：2.7%（缓存读 200 / 计费输入 7,300）" in md
+    # 首 token 时延：样本没有这个字段 → 如实写不可用，不写 0
+    assert "- 首 token 时延：不可用（账本未记录首个输出增量）" in md
+
+
+def test_report_states_first_token_latency_when_the_evidence_has_it():
+    import dataclasses
+
+    from aeval.metrics.report import aggregate_run, render_static_report
+
+    records = [_record("t1", 0, "alpha.one"), _record("t2", 1, "beta.two", verdict="fail")]
+    base = sample_stats("t1", "alpha.one")
+    timed = dataclasses.replace(
+        base,
+        steps=tuple(
+            dataclasses.replace(step, first_token_ms=800 if step.step_id == 2 else None)
+            for step in base.steps
+        ),
+    )
+    md = render_static_report(aggregate_run(["r1"], records, k=1, trajectory=[timed]))
+    assert "- 首 token 时延：1 次调用有记录 · 最快 800ms · 中位 800ms · 最慢 800ms" in md
 
 
 # --- 运行面板（dashboard）轨迹带 ------------------------------------------
@@ -192,8 +215,8 @@ def _panel(window: int | None = None, heading: str = "试次 1/1 · t1"):
 
 def test_panel_renders_five_tracks_insights_and_inspector():
     html = _panel()
-    assert "五轨联动执行视图" in html
-    for track in ("执行图谱", "工具调用", "Token 脉冲", "输入 Token", "上下文压力"):
+    assert "六轨联动执行视图" in html
+    for track in ("执行图谱", "工具调用", "Token 脉冲", "输入 Token", "上下文压力", "首 Token 时延"):
         assert track in html
     assert 'class="trajectory-timeline"' in html
     assert 'id="trajectory-inspector"' in html
@@ -206,6 +229,175 @@ def test_panel_renders_five_tracks_insights_and_inspector():
     assert "失败(fail)" in html
     assert "记忆基底" in html
     assert '<section class="trial"' not in html
+
+
+def _card(html: str, title: str):
+    """抓出标题对应的关注项卡（kind, 汇总行, 卡内逐试次行）。"""
+    import re
+
+    match = re.search(
+        r'<div class="insight ([a-z]+)"><b>' + re.escape(title) + r'</b><span>([^<]*)</span>'
+        r'<div class="insight-rows"[^>]*>(.*?)</div></div>',
+        html,
+        re.S,
+    )
+    assert match, f"没有找到关注项卡：{title}"
+    kind, detail, rows = match.groups()
+    parsed = re.findall(
+        r'<button type="button" class="insight-row"[^>]*><b>([^<]*)</b><span>([^<]*)</span>',
+        rows,
+    )
+    return kind, detail, parsed
+
+
+def _two_trial_panel(**over):
+    """两个试次，峰值与缺失原因都不同——用来验证"按类别收敛、卡内逐试次"。"""
+    first = replace(
+        sample_stats("t1", "alpha.one", verdict="fail"),
+        peak_input_tokens=1400,
+        missing=("无可用时间戳：时长/耗时版块不可用",),
+    )
+    second = replace(
+        sample_stats("t2", "alpha.one", verdict="fail"),
+        peak_input_tokens=900,
+        missing=("步骤无 token 计量：Token/上下文版块不可用",),
+    )
+    return render_trajectory_html(
+        title="任务(alpha.one) 轨迹分析",
+        meta_lines=["run r1 · s@1 · 2/2 个试次有可用密封轨迹"],
+        trials=[
+            TrialPanel(
+                heading="试次 1/3 · t1",
+                meta="r1 · s@1 · 任务(alpha.one)",
+                stats=first,
+                failure=FailureReport(
+                    verdict="fail",
+                    reasons=("official-baseline@v1: upstream verifier reward is 0",),
+                    failing_tests=(FailingTest("test_x", "AssertionError: nope"),),
+                    implicated_steps=(4,),
+                    path_steps=(4,),
+                    step_basis="path",
+                ),
+            ),
+            TrialPanel(
+                heading="试次 2/3 · t2",
+                meta="r1 · s@1 · 任务(alpha.one)",
+                stats=second,
+                failure=FailureReport(
+                    verdict="fail",
+                    reasons=("official-baseline@v1: upstream verifier reward is 0",),
+                    implicated_steps=(),
+                    unavailable=("相关步骤未定位：…",),
+                ),
+            ),
+        ],
+        context_window=over.get("context_window"),
+    )
+
+
+def test_first_token_latency_track_shows_recorded_values_and_unavailable_state():
+    """首 token 时延轨：有记录就画柱并写毫秒；没有记录写"不可用"，不写 0。"""
+    steps = sample_stats("t1", "alpha.one").steps
+    with_data = replace(
+        sample_stats("t1", "alpha.one"),
+        steps=tuple(
+            replace(step, first_token_ms=900 if step.step_id == 2 else None)
+            for step in steps
+        ),
+    )
+    html = render_trajectory_html(
+        title="t", meta_lines=["m"],
+        trials=[TrialPanel(heading="试次 1/1 · t1", meta="r1", stats=with_data)],
+    )
+    assert "首 Token 时延" in html
+    assert 'class="latency-bar"' in html
+    assert "步骤 2 · 首 token 900ms" in html
+    assert "首 token 时延" in html and "未记录" in html  # 检查器口径
+    assert "1 次调用有记录" in html
+
+    # 没有记录：轨道仍然在，但明说不可用
+    bare = render_trajectory_html(
+        title="t", meta_lines=["m"],
+        trials=[TrialPanel(heading="试次 1/1 · t1", meta="r1",
+                           stats=sample_stats("t1", "alpha.one"))],
+    )
+    assert "首 Token 时延" in bare
+    assert "不可用" in bare and "first_token_ms" in bare
+    assert 'class="latency-bar"' not in bare
+
+
+def test_a_step_view_embeds_the_failure_card_for_an_implicated_step():
+    """失败相关步骤的详情里直接带失败原因卡，不必先跳回试次。"""
+    html = _two_trial_panel()
+    assert "renderFailure(inspector, trial)" in html     # 步骤详情里的同一张卡
+    assert "查看该试次失败原因" in html                    # 非相关步骤仍给出跳转按钮
+
+
+def test_token_track_shows_cached_share_of_input():
+    """Token 脉冲轨标出缓存占输入比例；没有缓存计量写"未拆分"，不写 0%。"""
+    html = _panel()
+    assert 'class="token-ratio"' in html
+    assert "缓存占输入 7%（缓存 100 / 输入 1,400）" in html   # 步骤 5：100/1400
+    assert "缓存占输入 —（未拆分）" in html                       # 步骤 2/4/6 没有缓存计量
+    assert "缓存/输入" in html                                    # 检查器里的同一口径
+    assert '<text class="token-ratio"' in html
+
+
+def test_insights_converge_one_card_per_category_with_per_trial_rows():
+    html = _two_trial_panel(context_window=10000)
+
+    # 每个类别恰好一张卡——不再"每试次一张卡"
+    for title in ("试次失败", "峰值上下文", "最长含工具步骤", "数据不可用", "工具无观测信号"):
+        assert html.count(f"<b>{title}</b>") == 1, title
+
+    kind, detail, rows = _card(html, "峰值上下文")
+    assert "各试次峰值 900–1,400 tokens" in detail and "2/2 试次" in detail
+    assert "最高 1,400（试次 1）" in detail and "最高占声明窗口 14%" in detail
+    assert [label for label, _ in rows] == ["试次 1", "试次 2"]
+    assert "1,400 tokens" in rows[0][1] and "900 tokens" in rows[1][1]
+    assert "占声明窗口 14%" in rows[0][1] and "占声明窗口 9%" in rows[1][1]
+
+    _kind, _, longest = _card(html, "最长含工具步骤")
+    assert [label for label, _ in longest] == ["试次 1", "试次 2"]
+
+    _kind, detail, unavailable = _card(html, "数据不可用")
+    assert "2/2 试次" in detail and len(unavailable) == 2
+
+
+def test_insights_failure_card_lists_each_failed_trial_once():
+    html = _two_trial_panel()
+    kind, detail, rows = _card(html, "试次失败")
+    assert kind == "danger"
+    assert "2/2 试次失败" in detail and "1/2 试次已定位相关步骤（共 1 步）" in detail
+    assert [label for label, _ in rows] == ["试次 1", "试次 2"]
+    assert "test_x: AssertionError: nope" in rows[0][1] and "相关步骤 4" in rows[0][1]
+    # 未定位的那次如实写出来，不硬指一步
+    assert "test_x" not in rows[1][1]
+
+
+def test_insight_rows_use_page_local_numbering_and_failure_rows_open_the_trial():
+    """行标签是页内序号（1..N），失败行点开的是试次（失败原因卡），不是某个步骤。"""
+    html = _two_trial_panel()
+    _kind, detail, rows = _card(html, "试次失败")
+    assert [label for label, _ in rows] == ["试次 1", "试次 2"]
+    assert detail.startswith("2/2 试次失败")
+    import re
+
+    block = re.search(r'<div class="insight danger"><b>试次失败</b>.*?</div></div>', html, re.S).group(0)
+    assert 'data-trial="trial-0"' in block and 'data-trial="trial-1"' in block
+    assert 'data-event="' not in block
+
+
+def test_insight_rows_are_clickable_targets():
+    html = _two_trial_panel()
+    import re
+
+    _kind, _detail, _rows = _card(html, "峰值上下文")
+    block = re.search(r'<div class="insight info"><b>峰值上下文</b>.*?</div></div>', html, re.S).group(0)
+    assert block.count('data-event="') >= 2
+    # 数据不可用只有试次级目标（没有步骤可用）
+    block = re.search(r'<div class="insight muted"><b>数据不可用</b>.*?</div></div>', html, re.S).group(0)
+    assert 'data-trial="trial-0"' in block or 'data-trial="trial-1"' in block
 
 
 def test_panel_uses_global_step_axis_for_invalid_time_data():

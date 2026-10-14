@@ -55,6 +55,7 @@ __all__ = [
     "declared_capabilities",
     "session_record_output_of",
     "session_record_output_path_of",
+    "sandbox_model_call_ledger",
     "session_record_slot_well_formed",
     "terminal_descriptor_owner",
     "sandbox_session_record",
@@ -178,6 +179,13 @@ SESSION_ID_FROM_RECORD_ATTR = "session_id_from_record"
 #: file (so the owner can observe its identity before Harbor downloads the
 #: agent logs). Absent means the record is a tree the host never reads live.
 SANDBOX_SESSION_RECORD_ATTR = "SANDBOX_SESSION_RECORD"
+
+# The optional in-sandbox per-call metering ledger an adapter's control stack
+# may write (a facade that proxies every model call can state what the broker
+# metered). Absent on every adapter that does not declare one, and a missing
+# declaration is not an error: the trial simply keeps its declared
+# ``token_usage`` completeness.
+SANDBOX_MODEL_CALL_LEDGER_ATTR = "SANDBOX_MODEL_CALL_LEDGER"
 
 #: Declaration: which component can state the trial's terminal session outcome,
 #: and therefore writes the bundle descriptor. ``sandbox`` is the historical
@@ -526,6 +534,26 @@ def sandbox_session_record(adapter: type) -> str | None:
             f"Agent adapter {describe_adapter(adapter)} declares "
             f"{SANDBOX_SESSION_RECORD_ATTR}={value!r}; it must be an absolute "
             "sandbox path, or absent."
+        )
+    return value
+
+
+def sandbox_model_call_ledger(adapter: type) -> str | None:
+    """The sandbox path of the adapter's per-call metering ledger, if any.
+
+    Declaring it makes the collector read that file out of the live sandbox,
+    seal it into the trial's call log, and fold its metered usage into the
+    canonical transcript. An adapter that declares nothing keeps exactly the
+    pre-ledger behaviour — this is an opt-in capability, not a new requirement.
+    """
+    value = getattr(adapter, SANDBOX_MODEL_CALL_LEDGER_ATTR, None)
+    if value is None:
+        return None
+    if not isinstance(value, str) or not value.startswith("/"):
+        raise SuiteError(
+            f"Agent adapter {describe_adapter(adapter)} declares "
+            f"{SANDBOX_MODEL_CALL_LEDGER_ATTR}={value!r}; it must be an "
+            "absolute sandbox path, or absent."
         )
     return value
 

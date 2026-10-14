@@ -32,6 +32,7 @@ __all__ = [
     "control_flavor",
     "known_control_flavors",
     "CONTROL_FLAVOR_DEPLOY_KEYS",
+    "CONTROL_FLAVOR_DOCTOR_KEYS",
 ]
 
 #: The exact keyword contract every flavor's ``deploy`` accepts: one uniform
@@ -41,6 +42,18 @@ CONTROL_FLAVOR_DEPLOY_KEYS = (
     "control_dist", "control_ca", "facade_dist", "facade_root",
     "control_options",
 )
+
+#: The exact keyword contract every flavor's ``doctor_checks`` accepts: the
+#: operator inputs a read-only wiring check resolves, and nothing else. A
+#: flavor returns the checks it owns (id -> ``(status, detail, hint)``) plus
+#: the runtime windows it knows; the core doctor assembles them, so the core
+#: names neither an adapter package nor a fact that belongs to one.
+CONTROL_FLAVOR_DOCTOR_KEYS = ("spec", "env", "agents_dir")
+
+#: A flavor's read-only wiring hook, or ``None`` when it owns no such facts.
+#: Returns ``aeval.agents.control_doctor``'s facts object; typed loosely here
+#: because the registry imports no adapter, by construction.
+ControlFlavorDoctor = Callable[..., Any]
 
 #: ``control_options`` carries ONLY the calling flavor's own namespace from the
 #: suite's ``driver.control_options`` (the framework resolves the namespace and
@@ -76,6 +89,12 @@ class ControlFlavor:
     speak the broker wire natively (no translation). Validation logic asks
     the registry for this — never a flavor's NAME — so a second translating
     stack registers itself and every check keeps working.
+
+    ``doctor_checks`` is the flavor's read-only wiring hook: the adapter-owned
+    facts a health check cannot derive neutrally (which compiled control
+    package an install carries, which packages its stack imports directly,
+    which peer window a profile must satisfy). ``None`` means the flavor owns
+    no such facts; the neutral checks run regardless.
     """
 
     name: str
@@ -83,6 +102,7 @@ class ControlFlavor:
     requires: tuple[str, ...] = ()
     config_fields: ControlFlavorConfigFields | None = None
     serves_protocols: frozenset[str] = frozenset()
+    doctor_checks: ControlFlavorDoctor | None = None
 
 
 _REGISTRY: dict[str, ControlFlavor] = {}

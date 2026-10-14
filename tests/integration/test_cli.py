@@ -191,6 +191,11 @@ def test_run_delegates_to_harbor_with_env_contract(tmp_path, native_suite_dir, h
     assert manifest["config_file_sha256"] == sha256(raw).hexdigest()
     assert manifest["config_hash"] != manifest["config_file_sha256"]
     assert manifest["sealed"] is False
+    # The suite's `metrics:` declaration is sealed into the manifest so a
+    # report can honour the declared reliability k without the suite dir.
+    assert manifest["declared_metrics"] == [
+        {"id": "reliability", "kind": "pass_pow_k", "k": 5}
+    ]
 
 
 def test_repeated_runs_compare_inputs_not_output_paths(native_suite_dir, tmp_path, harbor_calls):

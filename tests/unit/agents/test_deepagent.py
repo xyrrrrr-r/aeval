@@ -161,11 +161,11 @@ class TestLeaseModelIsToldToTheCli:
         assert _lease_model_name("deepseek/") is None
 
     def test_default_entry_carries_the_model_when_given_one(self) -> None:
-        entry = default_deepagent_registry_entry("deepseek-chat")
+        entry = default_deepagent_registry_entry("openai:deepseek-chat")
         assert entry["distribution"]["local"]["args"] == [
             "--acp",
             "--model",
-            "deepseek-chat",
+            "openai:deepseek-chat",
         ]
         # no lease model -> no invented model name
         assert default_deepagent_registry_entry()["distribution"]["local"]["args"] == [
@@ -176,10 +176,14 @@ class TestLeaseModelIsToldToTheCli:
         agent = _agent(tmp_path, model_name="deepseek/deepseek-chat")
         local = getattr(agent, "_registry_entry", None)
         assert local is not None
+        # The lease's wire name reaches the CLI qualified with the provider
+        # whose client the declared routing points at the facade. A bare
+        # "deepseek-chat" makes dcode resolve the *vendor* provider and die
+        # with MissingCredentialsError (measured on the built task image).
         assert list(local.distribution.local.args) == [
             "--acp",
             "--model",
-            "deepseek-chat",
+            "openai:deepseek-chat",
         ]
 
     def test_explicit_registry_entry_is_not_second_guessed(self, tmp_path: Path) -> None:

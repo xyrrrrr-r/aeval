@@ -61,6 +61,10 @@ class StepPoint:
     tool_names: tuple[str, ...]
     tool_calls: int
     observation_missing: bool       # 有调用但无观测
+    #: 首 token 时延：从该步的模型调用发出到第一个输出增量到达的墙钟毫秒。
+    #: None = 证据（facade 调用账本）没有记录，不是 0。默认值让这个字段
+    #: 保持"加法式"扩展：不带该字段的旧证据/其他 harness 不受影响。
+    first_token_ms: int | None = None
 
 
 @dataclass(frozen=True)
@@ -237,6 +241,12 @@ def collect_stats(
             getattr(metrics, "completion_tokens", None) if metrics else None
         )
         cached = getattr(metrics, "cached_tokens", None) if metrics else None
+        # 首 token 时延由 facade 记在 metrics.extra（轨迹 schema 的扩展位）；
+        # 老账本/未记录该字段时为 None，面板据此写"未记录"而不是 0。
+        extra = (getattr(metrics, "extra", None) or {}) if metrics else {}
+        first_token_ms = extra.get("first_token_ms")
+        if not isinstance(first_token_ms, int) or isinstance(first_token_ms, bool):
+            first_token_ms = None
         calls = list(s.tool_calls or [])
         obs_missing = bool(calls) and not any(
             obs_by_call.get(c.tool_call_id, False) for c in calls
@@ -263,6 +273,7 @@ def collect_stats(
                 prompt_tokens=prompt,
                 completion_tokens=completion,
                 cached_tokens=cached,
+                first_token_ms=first_token_ms,
                 tool_names=tuple(c.function_name for c in calls),
                 tool_calls=len(calls),
                 observation_missing=obs_missing,

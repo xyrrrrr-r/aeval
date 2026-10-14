@@ -1,0 +1,39 @@
+# terminal-beach 预算 —— 一次试次花费上限的**唯一声明**。
+#
+# 两个消费者绝不能漂移：
+#
+#   * 模型 broker（`limits.maxSteps` / `limits.maxTokens`，试次期间强制执行，
+#     并镜像进沙箱控制配置让适配器的 lease 身份对账），由
+#     tools/gen_broker_spec.py 从本文件生成；
+#   * 轨迹判分器（max_steps / max_tokens，用试次真正跑在的那个预算来量
+#     步数与 token 效率）。
+#
+# tests/integration/test_terminal_beach_suite.py 断言判分器的常量等于这里的
+# 值：只改一边的预算变更会在 CI 里失败，而不是悄悄给每个效率分数换尺度。
+broker:
+  # terminal-bench 任务是多步的：看 → 改 → 验 → 再来。
+  maxSteps: 60
+  maxTokens: 2000000
+  # 单次回复上限。8192 会截断长分析轮；16384 让"啰嗦但合法"的分析轮不会
+  # 因为预算假象丢掉一次判定。
+  maxOutputTokens: 16384
+  # 辅助调用（compaction）允许且**计量**：分派由沙箱传输记账并写入
+  # gateway_aux_dispatches.jsonl，mapper 把它并进该试次的 token 总量。
+  # session-title 不设，保持 fail-closed 默认（分派前拒绝，可证明零 token）。
+  auxiliaryPolicy:
+    compaction: allow
+  # 上游线协议。deepAgent 的 codex profile 说 OpenAI Responses
+  # （POST /v1/responses），所以沙箱内 façade 服务 responses 端点，
+  # broker 的上游也必须以同样的线协议对供应商说话——否则 Responses 请求
+  # 会被发到 chat-completions 端点。本项由 gen_broker_spec.py 写进
+  # broker spec 的 `upstream.protocol`（缺省 = chat_completions，历史口径）。
+  upstreamProtocol: responses
+  # 与 responses 线协议配对的上游 base URL：`<baseUrl>/responses`。
+  # DeepSeek 的 Responses API 挂在 https://api.deepseek.com/responses。
+  upstreamBaseUrl: "https://api.deepseek.com"
+grader:
+  max_steps: 60
+  max_tokens: 2000000
+agent:
+  # 单试次 agent 墙钟（任务 task.toml 的 [agent].timeout_sec）。
+  run_timeout_sec: 900

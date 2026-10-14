@@ -33,11 +33,12 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Literal, Sequence
 
-from aeval.contracts import CanonicalTranscript, TrialRecord
+from aeval.contracts import STOP_REASONS, CanonicalTranscript, TrialRecord
 
 __all__ = [
     "SealedArtifactError",
     "SealedTranscriptError",
+    "effective_stop_reason",
     "ToolEvent",
     "TrajectoryEvidence",
     "TrajectoryGrader",
@@ -278,6 +279,50 @@ def _observation_text(observation: Any, call_id: str) -> tuple[str, bool]:
         and getattr(result, "content", None)
     ]
     return "\n".join(str(p) for p in parts), bool(parts)
+
+
+#: Stop reasons that a *generic* trial owner can only state as "I watched
+#: this trial's process exit". ``hooks/plugin.py`` writes ``agent_exit_0``
+#: whenever the adapter's own session record completed, so the phrase
+#: describes the process, not the agent's behaviour. Governance metrics that
+#: judge *how the trial ended* must not read it as "not an agent behaviour".
+_DESCRIPTOR_FALLBACK_STOP_REASONS = frozenset({"agent_exit_0"})
+
+
+def effective_stop_reason(
+    transcript_stop_reason: str, descriptor_stop_reason: str
+) -> str:
+    """Resolve which stop reason the trajectory metrics are judged against.
+
+    The two sources answer different questions and neither is redundant:
+
+    * the **sealed transcript** is the trajectory layer's own evidence — the
+      ACP adapter derives it from the session (``end_turn`` →
+      ``agent_claimed_done``, ``max_tokens``/``max_steps`` →
+      ``budget_exhausted``) and fails closed to ``infra_error`` when it
+      cannot map a reason;
+    * the **trial descriptor** is the operator's observation and stays
+      authoritative for anything the transcript cannot state: an infra end
+      (``timeout_killed`` / ``crashed`` / ``infra_error``) or a terminal
+      process status.
+
+    Only the generic fallback ``agent_exit_0`` is treated as carrying no
+    behavioural claim of its own: it exists so a completed trial has *a*
+    descriptor at all, and reading it as "infrastructure stop, not an agent
+    behaviour" silently skipped ``budget_adherence`` on all nine trials of
+    the terminal-beach run even though every sealed transcript said
+    ``agent_claimed_done``. Evidence that exists gets judged; evidence that
+    does not still resolves to the descriptor's honest skip.
+
+    An unrecognised descriptor reason is returned unchanged — the metrics
+    decide what they can judge from it.
+    """
+    if (
+        descriptor_stop_reason in _DESCRIPTOR_FALLBACK_STOP_REASONS
+        and transcript_stop_reason in STOP_REASONS
+    ):
+        return transcript_stop_reason
+    return descriptor_stop_reason
 
 
 def build_evidence(
@@ -532,7 +577,10 @@ class TrajectoryGrader:
                 reasons=[reason],
                 metrics=None,
             )
-        evidence = build_evidence(transcript, record.stop_reason)
+        evidence = build_evidence(
+            transcript,
+            effective_stop_reason(transcript.stop_reason, record.stop_reason),
+        )
         outcomes = [metric.evaluate(evidence) for metric in self._metrics]
         return fold_outcomes(
             outcomes,
